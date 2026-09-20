@@ -1,0 +1,69 @@
+name: Release
+
+# Manual only: Actions ▸ Release ▸ Run workflow, or tools/release.ps1.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v prefix (must match Cargo.toml)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark it as a pre-release (beta)"
+        required: false
+        default: false
+        type: boolean
+      draft:
+        description: "Leave it as a draft"
+        required: false
+        default: false
+        type: boolean
+      notes:
+        description: "Release notes, markdown. Empty generates them from the commits."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the workspace declares that version
+        run: |
+          declared=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "$declared" != "${{ inputs.version }}" ]; then
+            echo "::error::Cargo.toml declares $declared, not ${{ inputs.version }}"
+            echo "Bump [workspace.package] version, commit, then dispatch again."
+            exit 1
+          fi
+
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          DRAFT: ${{ inputs.draft }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag already exists"
+            exit 1
+          fi
+          flags=(--title "$tag" --target "$GITHUB_SHA")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          [ "$DRAFT" = "true" ] && flags+=(--draft)
+          if [ -n "$NOTES" ]; then
+            gh release create "$tag" "${flags[@]}" --notes "$NOTES"
+          else
+            gh release create "$tag" "${flags[@]}" --generate-notes
+          fi
+          echo "Released $tag"
