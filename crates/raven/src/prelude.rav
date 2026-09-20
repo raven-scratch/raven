@@ -1,0 +1,40 @@
+// std::prelude — the macros raven's surface syntax desugars to.
+//
+// This file is compiled like any other raven module: it is parsed by the same
+// parser, expanded by the same expander, and every item in it can be read,
+// redefined or shadowed by a program. If you want to know what `while` or `for`
+// costs, this is the answer.
+//
+// Three things are *not* here, because they are core forms with documented
+// lowerings rather than substitutions:
+//
+//   * `x += e`                   → `x = x + e`, by the block the cell lives in
+//   * `f"…"` with its holes      → one `operator_join` per piece after the first
+//   * `match` with its arms      → one `control_if_else` per arm
+//
+// A compound assignment is core because its lowering depends on where `x` lives:
+// a Scratch variable changes with `data_changevariableby`, and a VMS cell with a
+// read and a `data_replaceitemoflist`.
+
+/// `while c { … }`
+///
+/// Vanilla Scratch has no `while`, so this is `repeat_until` on the negated
+/// condition: two blocks beyond the condition itself.
+pub macro while_loop($cond: expr<bool>, $body: block) -> stmts {
+    repeat_until !$cond {
+        $body;
+    }
+}
+
+/// `for i in a..b { … }`
+///
+/// `b` is exclusive and is re-read on every iteration, so a `for` over a list
+/// length follows the list. The counter is a block-scoped `let`, so it lives in
+/// `_vms` and is readable after the loop; it is not a Scratch variable.
+pub macro for_range($i: ident, $from: expr<num>, $to: expr<num>, $body: block) -> stmts {
+    let $i: num = $from;
+    repeat_until $i >= $to {
+        $body;
+        $i += 1;
+    }
+}

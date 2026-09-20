@@ -1,0 +1,24 @@
+[package]
+name = "raven"
+description = "raven: a Rust-inspired language with macros that compiles to raven-asm and on to Scratch 3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
+keywords = ["scratch", "sb3", "compiler", "language", "cli"]
+categories = ["command-line-utilities", "compilers"]
+
+[[bin]]
+name = "raven"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+raven-asm = { path = "../raven-asm", version = "0.1.0" }
+raven-scratch = { path = "../raven-scratch", version = "0.1.0" }
+serde_json.workspace = true
