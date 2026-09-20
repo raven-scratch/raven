@@ -1,0 +1,22 @@
+# Reference material kept for study only; never part of the build.
+/ref/
+
+# Rust
+target/
+.cargo-home/
+
+# raven-asm build output
+/dist/
+**/dist/
+
+# Node / VitePress
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
