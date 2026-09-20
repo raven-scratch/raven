@@ -441,7 +441,7 @@ The sprite's x coordinate.
 <h4>raven-asm</h4>
 
 ```rasm
-motion_xposition();
+motion_xposition()
 ```
 
 </div>
@@ -464,7 +464,7 @@ The sprite's y coordinate.
 <h4>raven-asm</h4>
 
 ```rasm
-motion_yposition();
+motion_yposition()
 ```
 
 </div>
@@ -487,7 +487,7 @@ The direction the sprite is pointing.
 <h4>raven-asm</h4>
 
 ```rasm
-motion_direction();
+motion_direction()
 ```
 
 </div>
@@ -985,7 +985,7 @@ The sprite's size as a percentage.
 <h4>raven-asm</h4>
 
 ```rasm
-looks_size();
+looks_size()
 ```
 
 </div>
@@ -1008,7 +1008,7 @@ The sprite's current costume number or name.
 <h4>raven-asm</h4>
 
 ```rasm
-looks_costumenumbername("number_name");
+looks_costumenumbername("number_name")
 ```
 
 </div>
@@ -1035,7 +1035,7 @@ The stage's current backdrop number or name.
 <h4>raven-asm</h4>
 
 ```rasm
-looks_backdropnumbername("number_name");
+looks_backdropnumbername("number_name")
 ```
 
 </div>
@@ -1276,7 +1276,7 @@ The current volume as a percentage.
 <h4>raven-asm</h4>
 
 ```rasm
-sound_volume();
+sound_volume()
 ```
 
 </div>
@@ -1923,7 +1923,7 @@ The value of the counter (extended runtimes).
 <h4>raven-asm</h4>
 
 ```rasm
-control_get_counter();
+control_get_counter()
 ```
 
 </div>
@@ -1998,7 +1998,7 @@ True when the sprite touches another sprite, the mouse pointer or the edge.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_touchingobject("touchingobjectmenu");
+sensing_touchingobject("touchingobjectmenu")
 ```
 
 </div>
@@ -2025,7 +2025,7 @@ True when the sprite touches a colour.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_touchingcolor(color);
+sensing_touchingcolor(color)
 ```
 
 </div>
@@ -2052,7 +2052,7 @@ True when one colour of the sprite touches another colour.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_coloristouchingcolor(color, color2);
+sensing_coloristouchingcolor(color, color2)
 ```
 
 </div>
@@ -2080,7 +2080,7 @@ Distance to another sprite or the mouse pointer.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_distanceto("distancetomenu");
+sensing_distanceto("distancetomenu")
 ```
 
 </div>
@@ -2134,7 +2134,7 @@ The most recent answer.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_answer();
+sensing_answer()
 ```
 
 </div>
@@ -2157,7 +2157,7 @@ True while a key is held down.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_keypressed("key_option");
+sensing_keypressed("key_option")
 ```
 
 </div>
@@ -2184,7 +2184,7 @@ True while the mouse button is held.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_mousedown();
+sensing_mousedown()
 ```
 
 </div>
@@ -2207,7 +2207,7 @@ The mouse pointer's x coordinate.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_mousex();
+sensing_mousex()
 ```
 
 </div>
@@ -2230,7 +2230,7 @@ The mouse pointer's y coordinate.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_mousey();
+sensing_mousey()
 ```
 
 </div>
@@ -2280,7 +2280,7 @@ How loud the microphone input is.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_loudness();
+sensing_loudness()
 ```
 
 </div>
@@ -2303,7 +2303,7 @@ Seconds since the timer was reset.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_timer();
+sensing_timer()
 ```
 
 </div>
@@ -2349,7 +2349,7 @@ Read a property of the stage or of another sprite.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_of("property", "object");
+sensing_of("property", "object")
 ```
 
 </div>
@@ -2377,7 +2377,7 @@ The current date or time component.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_current("currentmenu");
+sensing_current("currentmenu")
 ```
 
 </div>
@@ -2404,7 +2404,7 @@ Days elapsed since 1 January 2000.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_dayssince2000();
+sensing_dayssince2000()
 ```
 
 </div>
@@ -2427,7 +2427,7 @@ The signed-in user's name.
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_username();
+sensing_username()
 ```
 
 </div>
@@ -2451,7 +2451,7 @@ Whether the player is online (extended runtimes).
 <h4>raven-asm</h4>
 
 ```rasm
-sensing_online();
+sensing_online()
 ```
 
 </div>
@@ -2478,7 +2478,7 @@ Add two numbers.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_add(num1, num2);
+operator_add(num1, num2)
 ```
 
 </div>
@@ -2506,7 +2506,7 @@ Subtract the second number from the first.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_subtract(num1, num2);
+operator_subtract(num1, num2)
 ```
 
 </div>
@@ -2534,7 +2534,7 @@ Multiply two numbers.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_multiply(num1, num2);
+operator_multiply(num1, num2)
 ```
 
 </div>
@@ -2562,7 +2562,7 @@ Divide the first number by the second.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_divide(num1, num2);
+operator_divide(num1, num2)
 ```
 
 </div>
@@ -2590,7 +2590,7 @@ A random number in an inclusive range.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_random(from, to);
+operator_random(from, to)
 ```
 
 </div>
@@ -2618,7 +2618,7 @@ True when the first value is smaller.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_lt(operand1, operand2);
+operator_lt(operand1, operand2)
 ```
 
 </div>
@@ -2646,7 +2646,7 @@ True when the values are equal.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_equals(operand1, operand2);
+operator_equals(operand1, operand2)
 ```
 
 </div>
@@ -2674,7 +2674,7 @@ True when the first value is larger.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_gt(operand1, operand2);
+operator_gt(operand1, operand2)
 ```
 
 </div>
@@ -2702,7 +2702,7 @@ True when both conditions are true.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_and(operand1, operand2);
+operator_and(operand1, operand2)
 ```
 
 </div>
@@ -2730,7 +2730,7 @@ True when either condition is true.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_or(operand1, operand2);
+operator_or(operand1, operand2)
 ```
 
 </div>
@@ -2758,7 +2758,7 @@ Invert a condition.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_not(operand);
+operator_not(operand)
 ```
 
 </div>
@@ -2785,7 +2785,7 @@ Join two values into one string.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_join(string1, string2);
+operator_join(string1, string2)
 ```
 
 </div>
@@ -2813,7 +2813,7 @@ One character of a string.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_letter_of(letter, string);
+operator_letter_of(letter, string)
 ```
 
 </div>
@@ -2841,7 +2841,7 @@ The number of characters in a string.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_length(string);
+operator_length(string)
 ```
 
 </div>
@@ -2868,7 +2868,7 @@ True when the first string contains the second.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_contains(string1, string2);
+operator_contains(string1, string2)
 ```
 
 </div>
@@ -2896,7 +2896,7 @@ The remainder of a division.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_mod(num1, num2);
+operator_mod(num1, num2)
 ```
 
 </div>
@@ -2924,7 +2924,7 @@ Round a number to the nearest integer.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_round(num);
+operator_round(num)
 ```
 
 </div>
@@ -2951,7 +2951,7 @@ A mathematical function.
 <h4>raven-asm</h4>
 
 ```rasm
-operator_mathop("operator", num);
+operator_mathop("operator", num)
 ```
 
 </div>
@@ -2983,7 +2983,7 @@ Read a variable's value.
 <h4>raven-asm</h4>
 
 ```rasm
-data_variable(variable);
+data_variable(variable)
 ```
 
 </div>
@@ -3124,7 +3124,7 @@ The entire contents of a list.
 <h4>raven-asm</h4>
 
 ```rasm
-data_listcontents(list);
+data_listcontents(list)
 ```
 
 </div>
@@ -3292,7 +3292,7 @@ Read one item of a list.
 <h4>raven-asm</h4>
 
 ```rasm
-data_itemoflist(index, list);
+data_itemoflist(index, list)
 ```
 
 </div>
@@ -3320,7 +3320,7 @@ The position of the first matching item.
 <h4>raven-asm</h4>
 
 ```rasm
-data_itemnumoflist(item, list);
+data_itemnumoflist(item, list)
 ```
 
 </div>
@@ -3348,7 +3348,7 @@ How many items a list holds.
 <h4>raven-asm</h4>
 
 ```rasm
-data_lengthoflist(list);
+data_lengthoflist(list)
 ```
 
 </div>
@@ -3375,7 +3375,7 @@ True when a list contains a value.
 <h4>raven-asm</h4>
 
 ```rasm
-data_listcontainsitem(list, item);
+data_listcontainsitem(list, item)
 ```
 
 </div>
@@ -3461,7 +3461,7 @@ Read a string or number parameter of the enclosing custom block.
 <h4>raven-asm</h4>
 
 ```rasm
-argument_reporter_string_number(value);
+argument_reporter_string_number(value)
 ```
 
 </div>
@@ -3488,7 +3488,7 @@ Read a boolean parameter of the enclosing custom block.
 <h4>raven-asm</h4>
 
 ```rasm
-argument_reporter_boolean(value);
+argument_reporter_boolean(value)
 ```
 
 </div>
@@ -4044,7 +4044,7 @@ The current tempo in beats per minute.
 <h4>raven-asm</h4>
 
 ```rasm
-music_getTempo();
+music_getTempo()
 ```
 
 </div>

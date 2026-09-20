@@ -1,0 +1,83 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "rasm",
+  "displayName": "raven-asm",
+  "scopeName": "source.rasm",
+  "comment": "TextMate grammar for raven-asm. Used by the VitePress documentation to highlight ```rasm fences, and usable as-is by any editor that speaks TextMate.",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#opcodes" },
+    { "include": "#constants" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.rasm",
+          "begin": "//",
+          "end": "$"
+        },
+        {
+          "name": "comment.block.rasm",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.rasm",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.rasm",
+              "match": "\\\\[\\\\\"nrt0]|\\\\u\\{[0-9a-fA-F]+\\}"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.rasm",
+          "match": "-?\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "storage.type.rasm",
+          "match": "\\b(stage|sprite|use|var|list|broadcast|costume|sound|proc|warp|center)\\b"
+        },
+        {
+          "name": "keyword.control.rasm",
+          "match": "\\b(else|true|false)\\b"
+        }
+      ]
+    },
+    "opcodes": {
+      "comment": "Every raven-asm block name is a Scratch opcode: part_operation, or camelCase for extension blocks.",
+      "patterns": [
+        {
+          "name": "entity.name.function.rasm",
+          "match": "\\b[a-z][a-zA-Z0-9]*_[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.rasm",
+          "match": "\\b_[a-zA-Z]+_\\b"
+        }
+      ]
+    }
+  }
+}

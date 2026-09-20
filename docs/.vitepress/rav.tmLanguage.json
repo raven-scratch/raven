@@ -1,0 +1,148 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "rav",
+  "displayName": "raven",
+  "scopeName": "source.rav",
+  "comment": "TextMate grammar for raven. Used by the VitePress documentation to highlight ```rav fences, and usable as-is by any editor that speaks TextMate.",
+  "patterns": [
+    { "include": "#doc-comments" },
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#control" },
+    { "include": "#types" },
+    { "include": "#paths" },
+    { "include": "#operators" },
+    { "include": "#constants" }
+  ],
+  "repository": {
+    "doc-comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.rav",
+          "begin": "///",
+          "end": "$"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.rav",
+          "begin": "//",
+          "end": "$"
+        },
+        {
+          "name": "comment.block.rav",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.interpolated.rav",
+          "begin": "f\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.rav",
+              "match": "\\\\[\\\\\"nrt0]|\\\\u\\{[0-9a-fA-F]+\\}"
+            },
+            {
+              "name": "meta.interpolation.rav",
+              "begin": "\\{",
+              "end": "\\}",
+              "patterns": [{ "include": "#all" }]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.rav",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.rav",
+              "match": "\\\\[\\\\\"nrt0]|\\\\u\\{[0-9a-fA-F]+\\}"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.rav",
+          "match": "-?\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "storage.type.rav",
+          "match": "\\b(sprite|stage|use|pub|var|let|const|proc|fn|macro|on|warp|costume|sound|broadcast)\\b"
+        }
+      ]
+    },
+    "control": {
+      "patterns": [
+        {
+          "name": "keyword.control.rav",
+          "match": "\\b(if|else|repeat|repeat_until|forever|while|for|in|match|return|true|false)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.rav",
+          "match": "\\b(num|str|bool|list)\\b"
+        }
+      ]
+    },
+    "paths": {
+      "patterns": [
+        {
+          "name": "entity.name.namespace.rav",
+          "match": "\\b[a-z_][a-zA-Z0-9_]*(::[a-z_][a-zA-Z0-9_]*)+"
+        },
+        {
+          "name": "entity.name.function.rav",
+          "match": "\\b[a-z_][a-zA-Z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.rav",
+          "match": "->|=>|::|\\.\\.|&&|\\|\\||==|!=|<=|>=|[=+\\-*/%!<>]"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.rav",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "all": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#paths" },
+        { "include": "#types" },
+        { "include": "#control" },
+        { "include": "#declarations" },
+        { "include": "#constants" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "raven-docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation for raven and raven-asm, two languages that compile to Scratch 3",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "mermaid": "^12.0.0",
+    "scratchblocks": "^3.7.1",
+    "vitepress": "^1.6.3"
+  }
+}

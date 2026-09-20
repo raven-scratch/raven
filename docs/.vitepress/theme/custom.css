@@ -1,0 +1,150 @@
+/*
+ * Mermaid diagrams.
+ *
+ * A ```mermaid fence reaches the browser as `<pre class="mermaid">` and is
+ * replaced by an SVG. Until then the element still carries VitePress's code
+ * block chrome, which reads as a mistake, so the styling is neutralised from the
+ * start rather than after the render.
+ */
+
+.vp-doc pre.mermaid {
+  margin: 20px 0;
+  padding: 0;
+  background-color: transparent;
+  border: 0;
+  overflow-x: auto;
+  text-align: center;
+  line-height: normal;
+}
+
+.vp-doc pre.mermaid svg {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+}
+
+/*
+ * Inline Scratch blocks.
+ *
+ * The block reference writes `<code class="b">`, which scratchblocks replaces
+ * with a single block picture. VitePress's inline-code chip would frame that
+ * picture, so the chip is dropped here for the same reason it is dropped from
+ * the mermaid element above.
+ */
+
+.vp-doc :not(pre) > code.b {
+  padding: 0;
+  background-color: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+/*
+ * A side-by-side comparison: the source a reader writes next to the Scratch
+ * blocks it becomes.
+ *
+ * This is the page's most useful piece of furniture, because the whole point of
+ * the language is that the two columns are the same program. Markdown inside the
+ * two `<div class="cmp-col">` elements is ordinary Markdown, so a column can hold
+ * a ```rav fence or a `<pre class="blocks">` Scratch picture.
+ */
+
+.cmp {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+  margin: 16px 0;
+}
+
+@media (max-width: 720px) {
+  .cmp {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cmp-col > :first-child {
+  margin-top: 0;
+}
+
+.cmp-col > :last-child {
+  margin-bottom: 0;
+}
+
+/* The column heading is a label, not a section: it must not enter the outline. */
+.cmp-col h4 {
+  margin: 0 0 8px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.cmp-col pre.blocks {
+  margin: 0;
+}
+
+/*
+ * The two cards on the home page that ask which language you want.
+ *
+ * VitePress's `features` grid renders the same card for every entry, so this is
+ * the one place the landing page needs markup of its own: a pair of links that
+ * are meant to be the first thing a reader clicks, after the hero.
+ */
+
+.paths {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin: 24px 0 8px;
+}
+
+.path {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: 24px;
+  background-color: var(--vp-c-bg-soft);
+  transition: border-color 0.25s, background-color 0.25s;
+}
+
+.path:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+/* The first paragraph is the card's title, and the last is its call to action. */
+.path p {
+  margin: 0 0 16px;
+  color: var(--vp-c-text-2);
+  font-size: 15px;
+  line-height: 24px;
+}
+
+.path p:first-child {
+  margin-bottom: 8px;
+}
+
+.path p:first-child a {
+  color: var(--vp-c-text-1);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  text-decoration: none;
+}
+
+.path:hover p:first-child a {
+  color: var(--vp-c-brand-1);
+}
+
+.path p:last-child {
+  margin-bottom: 0;
+}
+
+.path p:last-child a {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.path p:last-child a::after {
+  content: " →";
+}
