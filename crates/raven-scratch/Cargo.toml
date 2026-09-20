@@ -1,0 +1,19 @@
+[package]
+name = "raven-scratch"
+description = "The Scratch 3 domain model shared by the raven languages: block catalog, .sb3 container, deterministic ids and asset handling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
+keywords = ["scratch", "sb3", "scratch3"]
+categories = ["compilers"]
+
+[dependencies]
+md-5.workspace = true
+serde.workspace = true
+serde_json.workspace = true
