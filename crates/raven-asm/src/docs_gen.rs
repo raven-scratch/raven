@@ -327,11 +327,14 @@ pub fn signature(block: &catalog::BlockSpec) -> String {
         })
         .collect();
     // Reporters always need their parentheses; command blocks may drop them.
+    // A reporter is an expression, so it is shown without a trailing semicolon —
+    // a reporter cannot stand alone as a statement.
     let needs_parens = !args.is_empty() || block.kind.is_value();
+    let tail = if block.kind.is_value() { "" } else { ";" };
     let mut sig = if needs_parens {
-        format!("{}({});", block.opcode, args.join(", "))
+        format!("{}({}){tail}", block.opcode, args.join(", "))
     } else {
-        format!("{};", block.opcode)
+        format!("{}{tail}", block.opcode)
     };
     match block.body {
         raven_scratch::catalog::Body::None => {}

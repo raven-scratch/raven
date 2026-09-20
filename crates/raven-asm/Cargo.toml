@@ -1,0 +1,25 @@
+[package]
+name = "raven-asm"
+description = "raven-asm: a line-by-line Scratch 3 compiler with a Rust-inspired syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
+keywords = ["scratch", "sb3", "compiler", "language", "cli"]
+categories = ["command-line-utilities", "compilers"]
+
+[[bin]]
+name = "raven-asm"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+raven-scratch = { path = "../raven-scratch", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
