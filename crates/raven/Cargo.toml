@@ -19,6 +19,6 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-raven-asm = { path = "../raven-asm", version = "0.1.0" }
-raven-scratch = { path = "../raven-scratch", version = "0.1.0" }
+raven-asm = { path = "../raven-asm", version = "0.2.0" }
+raven-scratch = { path = "../raven-scratch", version = "0.2.0" }
 serde_json.workspace = true
