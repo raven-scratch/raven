@@ -252,7 +252,11 @@ raven build       # dist/hello.sb3
 
 [`examples/raven/tetris`](examples/raven/tetris) is the worked example: a complete
 game, drawn with the pen by one sprite, whose README explains the same ideas at
-the size of a real program.
+the size of a real program. [`examples/raven/sudoku`](examples/raven/sudoku) is the
+second one, and the one to read for a generator: it builds each puzzle as you ask
+for it, by a construction that makes the result solvable with naked and hidden
+singles alone, so a player never has to guess — and a check that runs the project
+in a real Scratch VM solves what it deals with a solver written outside it.
 
 ## Documentation
 

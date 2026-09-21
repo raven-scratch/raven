@@ -1,0 +1,10 @@
+[project]
+name = "sudoku"
+output = "dist"
+extensions = []
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/board.rav",
+]

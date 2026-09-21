@@ -103,6 +103,20 @@ cargo run -p raven -- build  -m examples/raven/tetris/raven.toml --debug
 node tools/validate-sb3.js examples/raven/tetris/dist/tetris.sb3 --steps 1500
 ```
 
+`examples/raven/sudoku` is the second one, and the one to read for a generator: it
+builds every puzzle in the project, and the construction it uses is what makes a
+puzzle solvable without a guess. Its costumes are generated, so regenerate them
+rather than editing them, and use its own check rather than playing it by hand —
+that check solves the puzzles the project deals with a solver written outside it:
+
+```sh
+node examples/raven/sudoku/tools/assets.mjs       # the costumes
+cargo run -p raven -- check -m examples/raven/sudoku/raven.toml
+cargo run -p raven -- build -m examples/raven/sudoku/raven.toml
+SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
+node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
+```
+
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
 raven-asm, not raven, and it is the example to read when a reversal has to encode

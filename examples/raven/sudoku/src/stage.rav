@@ -1,0 +1,10 @@
+// Sudoku — the stage owns the backdrop and nothing else.
+//
+// The game is one sprite, because the board, the generator and the input all
+// belong to the same thing: a single pen layer that one sprite redraws. The
+// stage holds no state, so there is no `pub` variable and no monitor anywhere
+// in this project.
+
+stage {
+    costume "backdrop" = "assets/backdrop.svg";
+}

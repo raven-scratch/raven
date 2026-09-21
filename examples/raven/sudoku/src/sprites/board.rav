@@ -1,0 +1,723 @@
+// The board: the generator, the game and every pixel of the drawing.
+//
+// One sprite owns the whole game. It stamps its own costumes onto the pen layer
+// and redraws that layer in a single `warp`, so a frame is one clear and about
+// ninety stamps and there is no clone to leak state.
+//
+// The generator is the interesting part, and it is a construction rather than a
+// search. `build_solution` makes a finished grid by shuffling a known-valid
+// pattern — the bands, the stacks and the nine digits are permuted, and each of
+// those keeps a grid valid. `dig` then removes cells one at a time and keeps a
+// removal only when the removed value is still *forced* by the cells that
+// remain: either it is the only digit its cell can hold, or it is the only place
+// its digit can go in one of its row, column and box.
+//
+// That single test is enough to make the whole puzzle solvable by those two
+// rules alone. The removals run in some order, and replaying them backwards is
+// the solve: the last cell removed was forced by the clues that were left at
+// that moment, which is exactly the clue set the player starts with, so the
+// solver can fill it, and then the cell before it, and so on. No guess is ever
+// needed, and no backtracking search is ever run — not while generating and not
+// while solving, because the puzzle is unique by construction: every step of the
+// solve is forced, so there is only one grid it can reach.
+//
+// Nothing here holds a grid in a nested list. A board is 81 numbers in one flat
+// list and a cell's row, column and box are three lookups in tables built once
+// per run, so an index never has to be divided.
+
+sprite "Board" {
+    costume "dot" = "assets/dot.svg";
+    costume "cursor" = "assets/cursor.svg";
+    costume "given1" = "assets/given1.svg";
+    costume "given2" = "assets/given2.svg";
+    costume "given3" = "assets/given3.svg";
+    costume "given4" = "assets/given4.svg";
+    costume "given5" = "assets/given5.svg";
+    costume "given6" = "assets/given6.svg";
+    costume "given7" = "assets/given7.svg";
+    costume "given8" = "assets/given8.svg";
+    costume "given9" = "assets/given9.svg";
+    costume "user1" = "assets/user1.svg";
+    costume "user2" = "assets/user2.svg";
+    costume "user3" = "assets/user3.svg";
+    costume "user4" = "assets/user4.svg";
+    costume "user5" = "assets/user5.svg";
+    costume "user6" = "assets/user6.svg";
+    costume "user7" = "assets/user7.svg";
+    costume "user8" = "assets/user8.svg";
+    costume "user9" = "assets/user9.svg";
+
+    /// One cell, and the grid, in stage units.
+    const CELL: num = 28;
+
+    /// Where the top-left corner of the grid sits.
+    const LEFT: num = -126;
+    const TOP: num = 126;
+
+    /// How many wrong entries a run survives.
+    const TRIES: num = 3;
+
+    // 0 the menu, 1 playing, 2 solved, 3 out of tries, 4 generating.
+    var state: num = 0;
+
+    /// The cell the player is on, 1..81.
+    var cursor: num = 1;
+
+    /// Wrong entries so far.
+    var mistakes: num = 0;
+
+    /// How many cells the puzzle starts with, which is its difficulty.
+    var clues: num = 81;
+
+    /// The finished grid the puzzle was cut from, and the puzzle itself.
+    var solution: list<num> = [];
+    var puzzle: list<num> = [];
+
+    /// What the board shows and whether each cell is a given: 81 of each.
+    var cells: list<num> = [];
+    var locked: list<num> = [];
+
+    /// The clue count each difficulty aims for, indexed by the key that chose
+    /// it: the first item is easy, so `targets[level]` is the key the player
+    /// pressed.
+    ///
+    /// The aim is not a promise. A pass stops when no cell left in it is forced,
+    /// which the randomness of the order decides, so a deal can come out a few
+    /// clues richer than the number here. The generator never removes a cell it
+    /// cannot justify, so it takes what it can get.
+    var targets: list<num> = [50, 44, 40];
+
+    // The tables every cell lookup goes through.
+    //
+    // `rows`, `cols` and `boxes` answer "where is this cell" in one index, and
+    // `peers` holds each cell's twenty companions — its row, its column and its
+    // box, without repeats — twenty in a row, so `peers[(i - 1) * 20 + j]` is a
+    // single list read. `units` holds the nine cells of each of the twenty-seven
+    // units, in the order the three `*_uid` functions name them: rows first,
+    // then columns, then boxes.
+    var rows: list<num> = [];
+    var cols: list<num> = [];
+    var boxes: list<num> = [];
+    var peers: list<num> = [];
+    var units: list<num> = [];
+
+    // Scratch's own scratch space, used by one routine at a time.
+    var order: list<num> = [];
+    var temp3: list<num> = [];
+    var temp9: list<num> = [];
+    var row_order: list<num> = [];
+    var col_order: list<num> = [];
+
+    // ---------------------------------------------------------------------
+    // Index arithmetic
+    // ---------------------------------------------------------------------
+
+    fn row_of(i: num) -> num {
+        floor((i - 1) / 9)
+    }
+
+    fn col_of(i: num) -> num {
+        (i - 1) % 9
+    }
+
+    fn cell_x(c: num) -> num {
+        LEFT + c * CELL + CELL / 2
+    }
+
+    fn cell_y(r: num) -> num {
+        TOP - r * CELL - CELL / 2
+    }
+
+    /// Whether two cells share a row, a column or a box, which is what makes
+    /// them peers.
+    fn same_unit(a: num, b: num) -> bool {
+        rows[a] == rows[b] || cols[a] == cols[b] || boxes[a] == boxes[b]
+    }
+
+    fn row_uid(i: num) -> num {
+        rows[i] + 1
+    }
+
+    fn col_uid(i: num) -> num {
+        cols[i] + 10
+    }
+
+    fn box_uid(i: num) -> num {
+        boxes[i] + 19
+    }
+
+    // ---------------------------------------------------------------------
+    // The tables
+    // ---------------------------------------------------------------------
+
+    /// Build the five lookup tables. This runs once per run of the project, and
+    /// every loop in the generator and in the solver is a read of one of them.
+    proc build_tables() warp {
+        rows.clear();
+        cols.clear();
+        boxes.clear();
+        for i in 0..81 {
+            let r = floor(i / 9);
+            let c = i % 9;
+            rows.push(r);
+            cols.push(c);
+            boxes.push(floor(r / 3) * 3 + floor(c / 3));
+        }
+
+        units.clear();
+        for r in 0..9 {
+            for c in 0..9 {
+                units.push(r * 9 + c + 1);
+            }
+        }
+        for c in 0..9 {
+            for r in 0..9 {
+                units.push(r * 9 + c + 1);
+            }
+        }
+        for b in 0..9 {
+            let br = floor(b / 3);
+            let bc = b % 3;
+            for k in 0..9 {
+                units.push((br * 3 + floor(k / 3)) * 9 + bc * 3 + (k % 3) + 1);
+            }
+        }
+
+        peers.clear();
+        for a in 1..=81 {
+            for b in 1..=81 {
+                if a != b {
+                    if same_unit(a, b) {
+                        peers.push(b);
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // The generator
+    // ---------------------------------------------------------------------
+
+    /// Fill `temp3` with the numbers 1..3 in a random order.
+    proc shuffle3() warp {
+        temp3.clear();
+        temp3.push(1);
+        temp3.push(2);
+        temp3.push(3);
+        let i = 2;
+        repeat_until i > 3 {
+            let j = operators::random(1, i);
+            let held = temp3[i];
+            temp3[i] = temp3[j];
+            temp3[j] = held;
+            i += 1;
+        }
+    }
+
+    /// Fill `temp9` with the digits 1..9 in a random order. The digits are
+    /// permuted as a set, which is what keeps a grid valid.
+    proc shuffle9() warp {
+        temp9.clear();
+        for i in 1..=9 {
+            temp9.push(i);
+        }
+        let i = 2;
+        repeat_until i > 9 {
+            let j = operators::random(1, i);
+            let held = temp9[i];
+            temp9[i] = temp9[j];
+            temp9[j] = held;
+            i += 1;
+        }
+    }
+
+    /// A random ordering of the rows that keeps each band of three together, so
+    /// the grid stays valid.
+    proc pick_rows() warp {
+        row_order.clear();
+        let band = 0;
+        repeat_until band > 2 {
+            shuffle3();
+            let k = 1;
+            repeat_until k > 3 {
+                row_order.push(band * 3 + temp3[k] - 1);
+                k += 1;
+            }
+            band += 1;
+        }
+    }
+
+    /// The same for the columns, keeping each stack together.
+    proc pick_cols() warp {
+        col_order.clear();
+        let stack = 0;
+        repeat_until stack > 2 {
+            shuffle3();
+            let k = 1;
+            repeat_until k > 3 {
+                col_order.push(stack * 3 + temp3[k] - 1);
+                k += 1;
+            }
+            stack += 1;
+        }
+    }
+
+    /// A finished grid, from one that is already valid.
+    ///
+    /// The pattern `(R * 3 + R / 3 + C) % 9` is a solved Sudoku for 0-based `R`
+    /// and `C`. Permuting whole bands of rows, whole stacks of columns and the
+    /// nine digits are the three transformations that keep every grid valid, so
+    /// composing them with a random one of each gives a random finished grid
+    /// without a single wrong placement to take back.
+    proc build_solution() warp {
+        pick_rows();
+        pick_cols();
+        shuffle9();
+        solution.clear();
+        for r in 0..9 {
+            for c in 0..9 {
+                let row = row_order[r + 1];
+                let col = col_order[c + 1];
+                solution.push(temp9[(row * 3 + floor(row / 3) + col) % 9 + 1]);
+            }
+        }
+    }
+
+    /// Whether cell `i` can still take digit `d`: no peer of it holds `d`.
+    proc could_hold(i: num, d: num) -> bool warp {
+        for j in 0..20 {
+            let p = peers[(i - 1) * 20 + j + 1];
+            if puzzle[p] == d {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Whether digit `d` can go nowhere but cell `i` in unit `uid`, which makes
+    /// `i` the only home for it there.
+    proc only_home(uid: num, i: num, d: num) -> bool {
+        let rivals = 0;
+        for k in 1..=9 {
+            let p = units[(uid - 1) * 9 + k];
+            if p != i {
+                if puzzle[p] == 0 {
+                    if could_hold(p, d) {
+                        rivals += 1;
+                    }
+                }
+            }
+        }
+        return rivals == 0;
+    }
+
+    /// Whether cell `i` is *forced* to hold `d` by the cells still in `puzzle`.
+    ///
+    /// This is the whole guarantee of the generator: a removal survives only
+    /// when the value it took away is the only candidate its cell has, or the
+    /// only place its digit can go in one of its three units.
+    ///
+    /// The first test counts the digits *no peer holds*, rather than adding up
+    /// a bit per peer. Two peers can hold the same digit, and a running sum
+    /// counts it twice — which can make a two-candidate cell look like a
+    /// one-candidate cell and let a guess through. A count cannot.
+    proc forced(i: num, d: num) -> bool warp {
+        let open = 0;
+        let x = 1;
+        repeat_until x > 9 || open > 1 {
+            let held = 0;
+            for j in 0..20 {
+                let p = peers[(i - 1) * 20 + j + 1];
+                if puzzle[p] == x {
+                    held = 1;
+                }
+            }
+            if held == 0 {
+                open += 1;
+            }
+            x += 1;
+        }
+        if open == 1 {
+            return true;
+        }
+        if only_home(row_uid(i), i, d) {
+            return true;
+        }
+        if only_home(col_uid(i), i, d) {
+            return true;
+        }
+        return only_home(box_uid(i), i, d);
+    }
+
+    /// A random ordering of the 81 cells, for the order they are dug in.
+    proc shuffle_order() warp {
+        let i = 2;
+        repeat_until i > order.len() {
+            let j = operators::random(1, i);
+            let held = order[i];
+            order[i] = order[j];
+            order[j] = held;
+            i += 1;
+        }
+    }
+
+    /// Cut the puzzle: start from the finished grid and take cells away, keeping
+    /// each removal only while the value it removed is still forced. Stop once
+    /// the puzzle is down to `target` clues.
+    ///
+    /// A pass can stall on the order it happened to walk: a cell that is not
+    /// forced yet may become forced once a later cell goes. So a pass that
+    /// removed anything is followed by another, in a fresh random order, and
+    /// the digging only stops when a whole pass takes nothing away. Every
+    /// removal is still forced at the moment it happens, so the guarantee is
+    /// untouched — a later pass can only make a cell forced that was not before.
+    proc dig(target: num) warp {
+        puzzle.clear();
+        for i in 1..=81 {
+            puzzle.push(solution[i]);
+        }
+
+        clues = 81;
+        let pass = 0;
+        let done = 0;
+        repeat_until done == 1 || clues <= target || pass >= 8 {
+            pass += 1;
+            order.clear();
+            for i in 1..=81 {
+                order.push(i);
+            }
+            shuffle_order();
+
+            let removed = 0;
+            let k = 1;
+            repeat_until k > 81 {
+                if clues > target {
+                    let i = order[k];
+                    if puzzle[i] != 0 {
+                        let held = puzzle[i];
+                        puzzle[i] = 0;
+                        if forced(i, held) {
+                            clues -= 1;
+                            removed += 1;
+                        } else {
+                            puzzle[i] = held;
+                        }
+                    }
+                }
+                k += 1;
+            }
+            if removed == 0 {
+                done = 1;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // The game
+    // ---------------------------------------------------------------------
+
+    /// The menu, which is also what a finished run comes back to.
+    proc menu() warp {
+        state = 0;
+        mistakes = 0;
+        looks::say("SUDOKU   1 easy   2 medium   3 hard");
+        redraw();
+    }
+
+    /// Deal a puzzle at `level` and start playing it.
+    ///
+    /// The state leaves the menu before the work starts, so a second key press
+    /// during a deal cannot begin a second one: two passes over the same lists
+    /// would interleave, and the generator's scratch lists are shared.
+    proc start(level: num) {
+        if state != 0 {
+            return;
+        }
+        state = 4;
+        looks::say("generating a puzzle...");
+        build_solution();
+        dig(targets[level]);
+
+        cells.clear();
+        locked.clear();
+        for i in 1..=81 {
+            cells.push(puzzle[i]);
+            if puzzle[i] != 0 {
+                locked.push(1);
+            } else {
+                locked.push(0);
+            }
+        }
+
+        // The first empty cell is the one the cursor starts on. Scanning
+        // backwards leaves the lowest number behind, because there is no way to
+        // leave a loop early.
+        cursor = 1;
+        let i = 81;
+        repeat_until i < 1 {
+            if cells[i] == 0 {
+                cursor = i;
+            }
+            i -= 1;
+        }
+
+        mistakes = 0;
+        state = 1;
+        sensing::reset_timer();
+        redraw();
+        looks::say(f"{clues} clues, {TRIES} tries");
+    }
+
+    /// Whether every cell is filled. Only a correct entry is ever written, so a
+    /// full board is a solved board.
+    proc solved() -> bool {
+        for i in 1..=81 {
+            if cells[i] == 0 {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    proc win() warp {
+        state = 2;
+        let seconds = floor(sensing::timer());
+        looks::say(f"solved in {seconds}s with {mistakes} wrong - Enter for the menu");
+    }
+
+    proc lose() warp {
+        state = 3;
+        looks::say("out of tries - Enter for the menu");
+    }
+
+    /// Put a digit in the current cell.
+    ///
+    /// A wrong digit is refused rather than written, so the board never holds a
+    /// value the puzzle did not have and a full board is always the answer. It
+    /// costs one of the three tries instead.
+    proc place(d: num) warp {
+        if state != 1 {
+            return;
+        }
+        if locked[cursor] == 1 {
+            return;
+        }
+        if solution[cursor] == d {
+            cells[cursor] = d;
+            redraw();
+            if solved() {
+                win();
+            } else {
+                looks::say(f"{clues} clues, {TRIES - mistakes} tries");
+            }
+        } else {
+            mistakes += 1;
+            if mistakes >= TRIES {
+                lose();
+            } else {
+                looks::say(f"not {d} - {TRIES - mistakes} tries left");
+            }
+        }
+    }
+
+    /// Take back what the player put in the current cell.
+    proc clear_cell() warp {
+        if state != 1 {
+            return;
+        }
+        if locked[cursor] == 0 {
+            cells[cursor] = 0;
+            redraw();
+        }
+    }
+
+    proc move_cursor(dr: num, dc: num) warp {
+        if state != 1 {
+            return;
+        }
+        let r = row_of(cursor) + dr;
+        let c = col_of(cursor) + dc;
+        if r >= 0 && r < 9 && c >= 0 && c < 9 {
+            cursor = r * 9 + c + 1;
+            redraw();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Drawing
+    // ---------------------------------------------------------------------
+
+    proc given_face(d: num) warp {
+        match d {
+            1 => { looks::switch_costume_to(Costume::Given1); },
+            2 => { looks::switch_costume_to(Costume::Given2); },
+            3 => { looks::switch_costume_to(Costume::Given3); },
+            4 => { looks::switch_costume_to(Costume::Given4); },
+            5 => { looks::switch_costume_to(Costume::Given5); },
+            6 => { looks::switch_costume_to(Costume::Given6); },
+            7 => { looks::switch_costume_to(Costume::Given7); },
+            8 => { looks::switch_costume_to(Costume::Given8); },
+            _ => { looks::switch_costume_to(Costume::Given9); }
+        }
+    }
+
+    proc user_face(d: num) warp {
+        match d {
+            1 => { looks::switch_costume_to(Costume::User1); },
+            2 => { looks::switch_costume_to(Costume::User2); },
+            3 => { looks::switch_costume_to(Costume::User3); },
+            4 => { looks::switch_costume_to(Costume::User4); },
+            5 => { looks::switch_costume_to(Costume::User5); },
+            6 => { looks::switch_costume_to(Costume::User6); },
+            7 => { looks::switch_costume_to(Costume::User7); },
+            8 => { looks::switch_costume_to(Costume::User8); },
+            _ => { looks::switch_costume_to(Costume::User9); }
+        }
+    }
+
+    /// The grid itself, drawn with the pen. Every third line is the frame of a
+    /// box, so it is the thick one.
+    proc draw_grid() warp {
+        pen::set_pen_color_to_color("#333333");
+        for k in 0..=9 {
+            if k % 3 == 0 {
+                pen::set_pen_size_to(3);
+            } else {
+                pen::set_pen_size_to(1);
+            }
+            let x = LEFT + k * CELL;
+            motion::go_to_xy(x, TOP);
+            pen::pen_down();
+            motion::go_to_xy(x, TOP - 9 * CELL);
+            pen::pen_up();
+            let y = TOP - k * CELL;
+            motion::go_to_xy(LEFT, y);
+            pen::pen_down();
+            motion::go_to_xy(LEFT + 9 * CELL, y);
+            pen::pen_up();
+        }
+    }
+
+    /// The whole frame: the grid, the highlight, the digits, and then the sprite
+    /// parks on a transparent pixel at the foot of the stage where its speech
+    /// bubble is out of the way.
+    proc redraw() warp {
+        pen::clear();
+        draw_grid();
+
+        if state == 1 {
+            motion::go_to_xy(cell_x(col_of(cursor)), cell_y(row_of(cursor)));
+            looks::switch_costume_to(Costume::Cursor);
+            pen::stamp();
+        }
+
+        for i in 1..=81 {
+            let value = cells[i];
+            if value != 0 {
+                motion::go_to_xy(cell_x(col_of(i)), cell_y(row_of(i)));
+                if locked[i] == 1 {
+                    given_face(value);
+                } else {
+                    user_face(value);
+                }
+                pen::stamp();
+            }
+        }
+
+        motion::go_to_xy(0, -172);
+        looks::switch_costume_to(Costume::Dot);
+    }
+
+    // ---------------------------------------------------------------------
+    // Input
+    // ---------------------------------------------------------------------
+
+    on flag_clicked {
+        build_tables();
+        cells.clear();
+        locked.clear();
+        for i in 1..=81 {
+            cells.push(0);
+            locked.push(0);
+        }
+        menu();
+    }
+
+    on key_pressed(Key::UpArrow) {
+        move_cursor(-1, 0);
+    }
+
+    on key_pressed(Key::DownArrow) {
+        move_cursor(1, 0);
+    }
+
+    on key_pressed(Key::LeftArrow) {
+        move_cursor(0, -1);
+    }
+
+    on key_pressed(Key::RightArrow) {
+        move_cursor(0, 1);
+    }
+
+    /// 1, 2 and 3 choose a difficulty in the menu and place that digit in play,
+    /// so one key has both jobs and the state decides which one it is.
+    on key_pressed(Key::Digit1) {
+        if state == 0 {
+            start(1);
+        } else {
+            place(1);
+        }
+    }
+
+    on key_pressed(Key::Digit2) {
+        if state == 0 {
+            start(2);
+        } else {
+            place(2);
+        }
+    }
+
+    on key_pressed(Key::Digit3) {
+        if state == 0 {
+            start(3);
+        } else {
+            place(3);
+        }
+    }
+
+    on key_pressed(Key::Digit4) {
+        place(4);
+    }
+
+    on key_pressed(Key::Digit5) {
+        place(5);
+    }
+
+    on key_pressed(Key::Digit6) {
+        place(6);
+    }
+
+    on key_pressed(Key::Digit7) {
+        place(7);
+    }
+
+    on key_pressed(Key::Digit8) {
+        place(8);
+    }
+
+    on key_pressed(Key::Digit9) {
+        place(9);
+    }
+
+    /// 0 rubs a cell out, and is not a digit Sudoku uses.
+    on key_pressed(Key::Digit0) {
+        clear_cell();
+    }
+
+    on key_pressed(Key::Enter) {
+        if state == 2 || state == 3 {
+            menu();
+        }
+    }
+}
