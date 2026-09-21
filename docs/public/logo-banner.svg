@@ -18,8 +18,10 @@
 
     The banner carries no mark: `logo.svg`'s white path is the R and the a
     together, and set beside a name it spells the name twice. The name is
-    therefore the whole word, one string, centred on the card at 640 by 256 the
-    way the reference banner centres its own.
+    therefore the whole word, outlined from the same font the mark came from and
+    centred on the card at 640 by 256 the way the reference banner centres its
+    own. It is paths, not a <text> element, so it cannot land anywhere but
+    where it was measured.
   -->
   <defs>
     <clipPath id="round-rect">
@@ -62,10 +64,10 @@
   <path d="M 1152 0 L 1280 0 L 1280 128 Z" fill="#1a2542" clip-path="url(#round-rect)" filter="url(#shadow)"/>
   <path d="M 1216 0 L 1280 0 L 1280 64 Z" fill="#22315c" clip-path="url(#round-rect)" filter="url(#shadow)"/>
 
-  <!-- The name, the whole word, centred on the card. A stroke rather than a
-       heavier `font-weight`, because every viewer resolves a weight to a face of
-       its own. -->
-  <text x="640" y="256" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="227" font-weight="bold"
-        fill="#ffffff" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke"
-        text-anchor="middle" dominant-baseline="central" filter="url(#shadow)">Raven</text>
+  <!-- The name, the whole word, in the logo's own face: Noto Sans SC at
+       weight 700, the same font `logo.svg`'s wordmark was outlined from, so
+       the banner and the mark letter alike. Outlines rather than a <text>
+       element, so no viewer's font takes part. The ink box is centred on the
+       card, 640 by 256, which is where a word with no descender sits. -->
+  <path d="M312.55 337.9V171H370.49Q388.11 171 402.31 175.63Q416.51 180.26 424.87 191.35Q433.22 202.43 433.22 221.56Q433.22 240.02 424.87 251.87Q416.51 263.71 402.31 269.31Q388.11 274.91 370.49 274.91H345.84V337.9ZM345.84 248.54H367.38Q383.59 248.54 392.12 241.7Q400.66 234.86 400.66 221.56Q400.66 208.04 392.12 202.81Q383.59 197.59 367.38 197.59H345.84ZM403.17 337.9 364.37 266.28 387.71 245.52 440.44 337.9Z M494.39 341Q483.22 341 474.84 336.13Q466.45 331.25 461.81 322.75Q457.16 314.25 457.16 303.51Q457.16 283.34 474.46 272.21Q491.75 261.08 529.74 256.92Q529.49 250.75 527.44 245.84Q525.38 240.94 520.74 238.11Q516.11 235.27 508.28 235.27Q499.53 235.27 490.98 238.65Q482.42 242.02 473.58 247.23L461.79 225.23Q469.31 220.6 477.66 216.91Q486.02 213.21 495.26 210.95Q504.5 208.69 514.36 208.69Q530.43 208.69 541.16 214.97Q551.88 221.25 557.34 233.59Q562.8 245.92 562.8 264.24V337.9H535.84L533.48 324.41H532.45Q524.32 331.49 514.8 336.25Q505.28 341 494.39 341ZM505.26 315.11Q512.34 315.11 518.08 311.89Q523.82 308.67 529.74 302.8V277.44Q514.43 279.26 505.37 282.66Q496.31 286.06 492.5 290.66Q488.69 295.26 488.69 301Q488.69 308.42 493.33 311.77Q497.96 315.11 505.26 315.11Z M625 337.9 581.88 211.79H615.32L633.59 274.68Q636.22 283.94 638.75 293.58Q641.29 303.22 643.87 312.87H644.95Q647.57 303.22 650.11 293.58Q652.65 283.94 655.05 274.68L673.55 211.79H705.43L663.34 337.9Z M781.4 341Q763.72 341 749.48 333.13Q735.25 325.25 726.87 310.43Q718.49 295.61 718.49 274.83Q718.49 259.48 723.36 247.29Q728.23 235.1 736.61 226.44Q744.99 217.77 755.52 213.23Q766.05 208.69 777.19 208.69Q794.62 208.69 806.32 216.4Q818.01 224.11 823.97 237.71Q829.93 251.31 829.93 268.88Q829.93 273.49 829.49 277.6Q829.05 281.71 828.42 284.19H750.6Q752.01 294.47 756.79 301.38Q761.56 308.3 768.94 311.88Q776.32 315.47 785.71 315.47Q793.39 315.47 800.22 313.24Q807.05 311.01 813.99 306.76L825.15 327.1Q815.93 333.44 804.52 337.22Q793.11 341 781.4 341ZM750.07 262H801.66Q801.66 249.31 795.83 241.77Q789.99 234.22 777.72 234.22Q771.17 234.22 765.36 237.33Q759.55 240.44 755.49 246.57Q751.43 252.7 750.07 262Z M857.29 337.9V211.79H884.25L886.84 228.43H887.46Q895.64 220.25 905.6 214.47Q915.55 208.69 928.46 208.69Q948.82 208.69 958.13 222.03Q967.45 235.38 967.45 259.24V337.9H934.38V263.35Q934.38 248.67 930.11 242.85Q925.84 237.03 916.49 237.03Q908.79 237.03 903.09 240.6Q897.4 244.18 890.35 251.15V337.9Z" fill="#ffffff" filter="url(#shadow)"/>
 </svg>
