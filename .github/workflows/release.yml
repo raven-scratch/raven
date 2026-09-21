@@ -54,15 +54,22 @@ jobs:
         include:
           # `+crt-static` links the C runtime in, so the .exe is a single file
           # that runs anywhere. macOS has no static CRT to link.
+          #
+          # Building with `--target` as well is what keeps the flag off the
+          # proc macros: without it cargo builds them for the host under the
+          # same RUSTFLAGS and the +crt-static target rejects proc-macro crates.
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             platform: windows-x86_64
             suffix: .exe
             rustflags: -C target-feature=+crt-static
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             platform: linux-x86_64
             suffix: ""
             rustflags: -C target-feature=+crt-static
           - os: macos-latest
+            target: aarch64-apple-darwin
             platform: macos-aarch64
             suffix: ""
             rustflags: ""
@@ -79,13 +86,14 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          cargo build --release -p raven -p raven-asm
+          cargo build --release --target "${{ matrix.target }}" -p raven -p raven-asm
           mkdir -p dist
           version="${{ inputs.version }}"
           platform="${{ matrix.platform }}"
           suffix="${{ matrix.suffix }}"
-          cp "target/release/raven$suffix" "dist/raven-v$version-$platform$suffix"
-          cp "target/release/raven-asm$suffix" "dist/raven-asm-v$version-$platform$suffix"
+          out="target/${{ matrix.target }}/release"
+          cp "$out/raven$suffix" "dist/raven-v$version-$platform$suffix"
+          cp "$out/raven-asm$suffix" "dist/raven-asm-v$version-$platform$suffix"
           ls -l dist
 
       - uses: actions/upload-artifact@v4
