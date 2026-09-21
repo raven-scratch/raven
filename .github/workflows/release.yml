@@ -1,6 +1,8 @@
 name: Release
 
 # Manual only: Actions ▸ Release ▸ Run workflow, or tools/release.ps1.
+# Builds a standalone binary for each platform, tags v<version> and publishes
+# the GitHub release with the binaries attached.
 on:
   workflow_dispatch:
     inputs:
@@ -28,13 +30,11 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Tag and publish
+  check:
+    name: Check the version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Check the workspace declares that version
         run: |
@@ -45,7 +45,69 @@ jobs:
             exit 1
           fi
 
-      - name: Create the tag and the release
+  binaries:
+    name: Build ${{ matrix.platform }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `+crt-static` links the C runtime in, so the .exe is a single file
+          # that runs anywhere. macOS has no static CRT to link.
+          - os: windows-latest
+            platform: windows-x86_64
+            suffix: .exe
+            rustflags: -C target-feature=+crt-static
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            suffix: ""
+            rustflags: -C target-feature=+crt-static
+          - os: macos-latest
+            platform: macos-aarch64
+            suffix: ""
+            rustflags: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the standalone binaries
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          cargo build --release -p raven -p raven-asm
+          mkdir -p dist
+          version="${{ inputs.version }}"
+          platform="${{ matrix.platform }}"
+          suffix="${{ matrix.suffix }}"
+          cp "target/release/raven$suffix" "dist/raven-v$version-$platform$suffix"
+          cp "target/release/raven-asm$suffix" "dist/raven-asm-v$version-$platform$suffix"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: dist/*
+
+  release:
+    name: Tag and publish
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the tag and the release, or add to it
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
@@ -55,15 +117,17 @@ jobs:
         run: |
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::error::release $tag already exists"
-            exit 1
+            # An existing release is a rebuild: replace the binaries in it.
+            echo "release $tag exists; uploading the binaries"
+            gh release upload "$tag" dist/* --clobber
+            exit 0
           fi
           flags=(--title "$tag" --target "$GITHUB_SHA")
           [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
           [ "$DRAFT" = "true" ] && flags+=(--draft)
           if [ -n "$NOTES" ]; then
-            gh release create "$tag" "${flags[@]}" --notes "$NOTES"
+            gh release create "$tag" "${flags[@]}" --notes "$NOTES" dist/*
           else
-            gh release create "$tag" "${flags[@]}" --generate-notes
+            gh release create "$tag" "${flags[@]}" --generate-notes dist/*
           fi
           echo "Released $tag"

@@ -58,16 +58,39 @@ pwsh ./tools/release.ps1 0.2.0 -Prerelease        # a beta
 pwsh ./tools/release.ps1 0.2.0 -Draft -Notes "…"  # a draft, with written notes
 ```
 
-The workflow fails unless `[workspace.package] version` in the root `Cargo.toml`
-already equals the version you pass, and it refuses to touch an existing tag. It
-creates `v<version>` at the dispatched commit and publishes the GitHub release;
-no binaries are attached, so installing from the tag with
-`cargo install --path crates/raven-asm` is the way in.
+The workflow refuses to run unless `[workspace.package] version` in the root
+`Cargo.toml` already equals the version you pass. It builds a standalone binary
+for each platform — `+crt-static`, so the Windows `.exe` needs no runtime
+installed — and attaches them to the release as
+
+```
+raven-v<version>-windows-x86_64.exe        raven-asm-v<version>-windows-x86_64.exe
+raven-v<version>-linux-x86_64              raven-asm-v<version>-linux-x86_64
+raven-v<version>-macos-aarch64             raven-asm-v<version>-macos-aarch64
+```
+
+Either binary can be carried to another machine and run as it is; `raven`
+compiles raven to raven-asm itself and does not need `raven-asm` on the `PATH`.
+Re-running the workflow for a version that already has a release replaces the
+binaries in it instead of failing, which is how to rebuild them for an existing
+tag.
 
 Docs deploy themselves: `.github/workflows/docs.yml` regenerates the block
 reference, builds `docs/` with VitePress and publishes to GitHub Pages on every
 push to `main` that touches `docs/`. The repository's Pages source has to be set
 to **GitHub Actions** once, in Settings ▸ Pages.
+
+## Examples
+
+`examples/raven/tetris` is the worked example: a complete game, with its own
+README explaining the shape of the code. It is not wired into CI or the test
+suite — build it by hand when a change touches the emitted blocks:
+
+```sh
+cargo run -p raven -- check  -m examples/raven/tetris/raven.toml
+cargo run -p raven -- build  -m examples/raven/tetris/raven.toml --debug
+node tools/validate-sb3.js examples/raven/tetris/dist/tetris.sb3 --steps 1500
+```
 
 ## Where things live
 
