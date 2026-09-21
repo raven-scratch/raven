@@ -137,7 +137,11 @@ mod tests {
     fn a_project_name_keeps_a_windows_path_as_one_name_off_windows() {
         // `Path` splitting is the platform's, so this asserts what `file_stem`
         // does on the host rather than a separator raven-re chose.
-        let expected = if cfg!(windows) { "my game" } else { "C:_work_my game" };
+        let expected = if cfg!(windows) {
+            "my game"
+        } else {
+            "C:_work_my game"
+        };
         assert_eq!(project_name(Path::new(r"C:\work\my game.sb3")), expected);
     }
 
