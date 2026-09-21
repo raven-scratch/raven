@@ -6,8 +6,9 @@ lines, and line-clear scoring (100 / 300 / 500 / 800 × level).
 
 ```
 src/stage.rav            the playfield, the rotation table, the bag, the state
-src/sprites/board.rav    the whole game: drawing, input, gravity, rules
-assets/                  a backdrop, nine cell tiles, six sound effects
+src/sprites/board.rav    the game: drawing, input, gravity, rules
+src/sprites/hud.rav      the display: a 3×5 pixel font, stamped with the pen
+assets/                  a backdrop, ten cell tiles, nineteen font tiles, sounds
 ```
 
 ```sh
@@ -17,17 +18,28 @@ raven build --debug   # also dist/asm/ and dist/project.json
 raven expand          # the whole game as raven-asm
 ```
 
-## Controls
+## States and controls
 
-| Key | Action |
-| --- | --- |
-| ← / → | move one column |
-| ↑ | rotate clockwise, with a one-cell nudge off a wall |
-| ↓ | soft drop, one point a row |
-| Space | hard drop, one point a row, then lock |
-| R | new game |
+The game opens on a **menu**, plays, can be **paused**, and ends on a
+**game-over** card. `state` is that whole machine: 0 menu, 1 playing, 2 paused,
+3 over.
 
-`score`, `lines` and `level` are `watch`ed, so their monitors are the HUD.
+| Key | Menu | Playing | Paused | Game over |
+| --- | --- | --- | --- | --- |
+| Space / Enter | start | hard drop | — | play again |
+| ← / → | — | move one column | — | — |
+| ↑ | — | rotate clockwise, one cell of wall kick | — | — |
+| ↓ | — | soft drop, one point a row | — | — |
+| P | — | pause | resume | — |
+| R | — | back to the menu | → | → |
+
+**The display is not a monitor.** Scratch deletes `<text>` from SVGs, so a text
+display has to be shapes: `hud.rav` owns a 3×5 pixel font — one costume per
+digit and one per word — and stamps them with the pen. `score`, `lines` and
+`level` are drawn there, along with the menu, the pause card and the final
+score, so this project declares **no Scratch variables and no variable
+monitors**; the only monitor records left are the hidden ones Scratch gives
+every list.
 
 ## What it is made of
 

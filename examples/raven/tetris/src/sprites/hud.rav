@@ -1,0 +1,118 @@
+// The heads-up display: one sprite that stamps text with the pen.
+//
+// Scratch deletes `<text>` elements from an SVG, so text on the stage has to be
+// shapes. This sprite owns a 3x5 pixel font — one costume per digit, and one per
+// word — and stamps them where they belong. Nothing here is a monitor, so
+// nothing here is a Scratch variable either.
+//
+// The pen layer has one owner per frame: `Board` clears it and stamps the field,
+// then broadcasts `hud`, and this sprite stamps on top. Nothing here clears.
+
+sprite "Hud" {
+    costume "tile" = "assets/hud_tile.svg";
+    costume "d0" = "assets/hud_d0.svg";
+    costume "d1" = "assets/hud_d1.svg";
+    costume "d2" = "assets/hud_d2.svg";
+    costume "d3" = "assets/hud_d3.svg";
+    costume "d4" = "assets/hud_d4.svg";
+    costume "d5" = "assets/hud_d5.svg";
+    costume "d6" = "assets/hud_d6.svg";
+    costume "d7" = "assets/hud_d7.svg";
+    costume "d8" = "assets/hud_d8.svg";
+    costume "d9" = "assets/hud_d9.svg";
+    costume "tetris" = "assets/hud_tetris.svg";
+    costume "score" = "assets/hud_score.svg";
+    costume "lines" = "assets/hud_lines.svg";
+    costume "level" = "assets/hud_level.svg";
+    costume "press_space" = "assets/hud_press_space.svg";
+    costume "game_over" = "assets/hud_game_over.svg";
+    costume "paused" = "assets/hud_paused.svg";
+    costume "restart" = "assets/hud_restart.svg";
+
+    /// One glyph is 12 units wide with 4 of air, so text walks right in 16s.
+    const PITCH: num = 16;
+
+    /// Stamp one of the words: 1 tetris, 2 score, 3 lines, 4 level,
+    /// 5 press space, 6 game over, 7 paused, 8 restart.
+    proc stamp_word(w: num, x: num, y: num) warp {
+        motion::go_to_xy(x, y);
+        match w {
+            1 => { looks::switch_costume_to(Costume::Tetris); },
+            2 => { looks::switch_costume_to(Costume::Score); },
+            3 => { looks::switch_costume_to(Costume::Lines); },
+            4 => { looks::switch_costume_to(Costume::Level); },
+            5 => { looks::switch_costume_to(Costume::PressSpace); },
+            6 => { looks::switch_costume_to(Costume::GameOver); },
+            7 => { looks::switch_costume_to(Costume::Paused); },
+            _ => { looks::switch_costume_to(Costume::Restart); }
+        }
+        pen::stamp();
+    }
+
+    proc stamp_digit(d: num, x: num, y: num) warp {
+        motion::go_to_xy(x, y);
+        match d {
+            0 => { looks::switch_costume_to(Costume::D0); },
+            1 => { looks::switch_costume_to(Costume::D1); },
+            2 => { looks::switch_costume_to(Costume::D2); },
+            3 => { looks::switch_costume_to(Costume::D3); },
+            4 => { looks::switch_costume_to(Costume::D4); },
+            5 => { looks::switch_costume_to(Costume::D5); },
+            6 => { looks::switch_costume_to(Costume::D6); },
+            7 => { looks::switch_costume_to(Costume::D7); },
+            8 => { looks::switch_costume_to(Costume::D8); },
+            _ => { looks::switch_costume_to(Costume::D9); }
+        }
+        pen::stamp();
+    }
+
+    /// A number of up to three digits, left-aligned at `x`. Leading zeros are
+    /// not drawn; a lone zero is.
+    proc stamp_number(n: num, x: num, y: num) warp {
+        let at = x;
+        if n >= 100 {
+            stamp_digit(operators::mathop(MathOp::Floor, n / 100), at, y);
+            at += PITCH;
+        }
+        if n >= 10 {
+            stamp_digit(operators::mathop(MathOp::Floor, n / 10) % 10, at, y);
+            at += PITCH;
+        }
+        stamp_digit(n % 10, at, y);
+    }
+
+    /// The whole display for the state the game is in.
+    proc paint() warp {
+        stamp_word(2, 148, 130);
+        stamp_number(score, 124, 100);
+        stamp_word(3, 148, 40);
+        stamp_number(lines, 132, 10);
+        stamp_word(4, 148, -50);
+        stamp_number(level, 132, -80);
+
+        if state == 0 {
+            stamp_word(1, 0, 60);
+            stamp_word(5, 0, -20);
+        } else {
+            if state == 2 {
+                stamp_word(7, 0, 0);
+            } else {
+                if state == 3 {
+                    stamp_word(6, 0, 70);
+                    stamp_word(2, 0, 10);
+                    stamp_number(score, -24, -20);
+                    stamp_word(8, 0, -70);
+                }
+            }
+        }
+        looks::switch_costume_to(Costume::Tile);
+    }
+
+    on flag_clicked {
+        paint();
+    }
+
+    on broadcast_received("hud") {
+        paint();
+    }
+}

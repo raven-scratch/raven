@@ -550,23 +550,23 @@ impl Compiler {
                 Some(target.name.clone())
             };
 
-            // Monitors are laid out the way the editor lays them out: down the
-            // left edge, one row each, so two of them never sit on top of each
-            // other. An explicit `at X Y` wins.
-            // One monitor record per variable and list. A declaration that does
-            // not say `at X Y` leaves the position null, so the editor places it
-            // exactly as it places a monitor made by hand.
+            // Monitors are laid out down the left edge, one row each, so two of
+            // them never sit on top of each other — the editor's arrangement,
+            // with half the gap it leaves. An explicit `at X Y` wins.
+            let mut monitor_y = MONITOR_TOP;
             for var in vars {
                 target_json
                     .variables
                     .insert(var.id.clone(), vec![json!(var.name), var.init.clone()]);
-                monitors.push(scalar_monitor(var, owner.clone()));
+                monitors.push(scalar_monitor(var, owner.clone(), monitor_y));
+                monitor_y += MONITOR_STEP;
             }
             for list in lists {
                 target_json
                     .lists
                     .insert(list.id.clone(), vec![json!(list.name), list.init.clone()]);
-                monitors.push(list_monitor(list, owner.clone()));
+                monitors.push(list_monitor(list, owner.clone(), monitor_y));
+                monitor_y += LIST_MONITOR_STEP;
             }
 
             // Broadcast messages always live on the stage.
@@ -870,12 +870,26 @@ fn mode_name(mode: MonitorMode) -> &'static str {
     }
 }
 
-/// A variable's monitor record. A declaration that does not say `at X Y` leaves
-/// the position null, which is what the editor means by "place this yourself":
-/// it lays a new monitor out exactly as it would for a variable created by hand.
-fn scalar_monitor(var: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
+/// Where a monitor goes when the declaration does not say, and how far apart
+/// two of them are.
+///
+/// The editor's own cascade cannot be reproduced without a DOM — it measures a
+/// rendered monitor, which a compiler cannot — so a declaration that says
+/// nothing gets the editor's starting corner and a row of its own. A default
+/// readout renders about 30 units tall, so 38 leaves half the ~15-unit gap the
+/// editor's arrangement would.
+const MONITOR_LEFT: f64 = 5.0;
+const MONITOR_TOP: f64 = 5.0;
+const MONITOR_STEP: f64 = 38.0;
+/// A list monitor renders 100 × 200 until it is resized.
+const LIST_MONITOR_STEP: f64 = 205.0;
+
+/// A variable's monitor record. `fallback_y` is where it goes when the
+/// declaration does not say `at X Y`.
+fn scalar_monitor(var: &Sym, sprite_name: Option<String>, fallback_y: f64) -> sb3::Monitor {
     let mut params = BTreeMap::new();
     params.insert("VARIABLE".to_string(), var.name.clone());
+    let y = var.monitor.at.map_or(fallback_y, |(_, y)| y);
     sb3::Monitor {
         id: var.id.clone(),
         mode: mode_name(var.monitor.mode).to_string(),
@@ -885,8 +899,8 @@ fn scalar_monitor(var: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
         value: var.init.clone(),
         width: 0.0,
         height: 0.0,
-        x: var.monitor.at.map(|(x, _)| x),
-        y: var.monitor.at.map(|(_, y)| y),
+        x: Some(var.monitor.at.map_or(MONITOR_LEFT, |(x, _)| x)),
+        y: Some(y),
         visible: var.visible,
         slider_min: Some(var.monitor.slider.map_or(0.0, |(min, _)| min)),
         slider_max: Some(var.monitor.slider.map_or(100.0, |(_, max)| max)),
@@ -895,9 +909,10 @@ fn scalar_monitor(var: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
 }
 
 /// A list's monitor record: always a list, and never a slider.
-fn list_monitor(list: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
+fn list_monitor(list: &Sym, sprite_name: Option<String>, fallback_y: f64) -> sb3::Monitor {
     let mut params = BTreeMap::new();
     params.insert("LIST".to_string(), list.name.clone());
+    let y = list.monitor.at.map_or(fallback_y, |(_, y)| y);
     sb3::Monitor {
         id: list.id.clone(),
         mode: "list".to_string(),
@@ -907,8 +922,8 @@ fn list_monitor(list: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
         value: list.init.clone(),
         width: 0.0,
         height: 0.0,
-        x: list.monitor.at.map(|(x, _)| x),
-        y: list.monitor.at.map(|(_, y)| y),
+        x: Some(list.monitor.at.map_or(MONITOR_LEFT, |(x, _)| x)),
+        y: Some(y),
         visible: list.visible,
         slider_min: None,
         slider_max: None,

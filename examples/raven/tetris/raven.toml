@@ -7,4 +7,5 @@ extensions = []
 stage = "src/stage.rav"
 sprites = [
     "src/sprites/board.rav",
+    "src/sprites/hud.rav",
 ]

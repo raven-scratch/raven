@@ -169,7 +169,7 @@ sprite "Board" {
         px = 3;
         py = 0;
         if !fits(piece, rot, px, py) {
-            state = 2;
+            state = 3;
             sound::play(Sound::Over);
             console::log(f"game over, {score} points, {lines} lines");
         }
@@ -281,6 +281,7 @@ sprite "Board" {
         }
         paint(nextone, 0, 12, 2);
         looks::switch_costume_to(Costume::Tile);
+        events::broadcast("hud");
     }
 
     proc new_game() warp {
@@ -299,9 +300,33 @@ sprite "Board" {
         rot = 0;
         px = 3;
         py = 0;
+        state = 0;
+        redraw();
+        console::log("tetris ready — space to start");
+    }
+
+    /// Leave the menu, or start the next run after one ended.
+    proc start() warp {
+        if state != 0 && state != 3 {
+            return;
+        }
+        if state == 3 {
+            new_game();
+        }
         state = 1;
         redraw();
-        console::log("tetris ready");
+        console::log("go");
+    }
+
+    proc pause() warp {
+        if state == 1 {
+            state = 2;
+        } else {
+            if state == 2 {
+                state = 1;
+            }
+        }
+        redraw();
     }
 
     on flag_clicked {
@@ -341,8 +366,22 @@ sprite "Board" {
         }
     }
 
+    /// Space starts a run from the menu, drops the piece while playing,
+    /// and starts the next run once one has ended.
     on key_pressed(Key::Space) {
-        hard_drop();
+        if state == 1 {
+            hard_drop();
+        } else {
+            start();
+        }
+    }
+
+    on key_pressed(Key::Enter) {
+        start();
+    }
+
+    on key_pressed(Key::P) {
+        pause();
     }
 
     on key_pressed(Key::R) {

@@ -4,16 +4,16 @@
 // that filled it. `shapes` is the whole rotation table — seven pieces, four
 // rotations, four cells each, as offsets inside a 4x4 box — so rotating is an
 // index change rather than arithmetic on a matrix. `bag` is the seven-bag
-// randomiser, and `queue` is spare.
+// randomiser.
 //
-// `score`, `lines`, `level` and `drop` are ordinary `pub var` cells; `watch`
-// puts the first three on the stage as monitors, and `drop` is how long one row
-// of gravity takes.
+// `score`, `lines`, `level` and `drop` are ordinary `pub var` cells. `drop` is
+// how long one row of gravity takes; the other three are drawn on the stage by
+// the `Hud` sprite, so this project declares no monitors at all.
 
 stage {
     costume "field" = "assets/field.svg";
 
-    // 0 ready, 1 playing, 2 over.
+    // 0 menu, 1 playing, 2 paused, 3 game over.
     pub var state: num = 0;
     // The falling piece and the one after it, its rotation and its origin.
     pub var piece: num = 1;
@@ -39,5 +39,7 @@ stage {
     ];
     pub var bag: list<num> = [];
 
-    watch score, lines, level;
+    /// The Hud redraws itself on this: Board clears the pen layer and draws
+    /// the field, then asks for the text.
+    broadcast "hud";
 }

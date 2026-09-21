@@ -2450,11 +2450,10 @@ fn a_proc_is_warp_or_not_by_its_declaration() {
     let _ = json;
 }
 
-/// A monitor the declaration does not place itself is left for the editor to
-/// place — `x` and `y` are `null`, exactly as they are for a variable created in
-/// the editor — and a declaration that says `at X Y` keeps that spot.
+/// A monitor the declaration does not place itself goes down the left edge,
+/// one row each, and a declaration that says `at X Y` keeps that spot.
 #[test]
-fn monitors_are_left_to_the_editor_unless_the_source_places_them() {
+fn monitors_are_stacked_down_the_left_edge_unless_the_source_places_them() {
     let project = Project::new("monitors")
         .stage("stage { pub var best: num = 0; watch best; }")
         .sprite(
@@ -2474,8 +2473,7 @@ fn monitors_are_left_to_the_editor_unless_the_source_places_them() {
     let project_json: serde_json::Value = serde_json::from_str(&text).expect("parse");
     let mut auto = 0;
     for monitor in project_json["monitors"].as_array().expect("monitors") {
-        assert!(monitor["x"].is_null(), "auto-placed: {monitor}");
-        assert!(monitor["y"].is_null(), "auto-placed: {monitor}");
+        assert_eq!(monitor["x"].as_f64(), Some(5.0), "the left edge: {monitor}");
         if monitor["visible"].as_bool() == Some(true) {
             auto += 1;
         }

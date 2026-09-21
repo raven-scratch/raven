@@ -1420,8 +1420,12 @@ fn a_monitor_can_be_placed_and_drawn_by_its_declaration() {
             .unwrap_or_else(|| panic!("monitor for {name}"))
     };
     let free = monitor("free");
-    assert_eq!(free.x, None, "the editor places an unplaced monitor");
-    assert_eq!(free.y, None);
+    assert_eq!(
+        free.x,
+        Some(5.0),
+        "an unplaced monitor goes down the left edge"
+    );
+    assert_eq!(free.y, Some(5.0), "and starts at the top");
     assert_eq!(free.mode, "default");
 
     let placed = monitor("placed");
@@ -1433,7 +1437,8 @@ fn a_monitor_can_be_placed_and_drawn_by_its_declaration() {
     assert_eq!(speed.slider_min, Some(0.0));
     assert_eq!(speed.slider_max, Some(100.0));
     assert_eq!(speed.is_discrete, Some(false));
-    assert_eq!(speed.x, None);
+    assert_eq!(speed.x, Some(5.0));
+    assert_eq!(speed.y, Some(81.0), "the fourth monitor's row");
 
     assert_eq!(monitor("big").mode, "large");
 }
