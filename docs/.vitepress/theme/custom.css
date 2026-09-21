@@ -51,16 +51,28 @@
 
 .cmp {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* `minmax(0, 1fr)` rather than `1fr`: an `auto` minimum lets a long line in
+     one column stretch the track, and the grid with it, past the content
+     column. Pinning the minimum to zero makes the two columns share whatever
+     width the page has. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
+  max-width: 100%;
   margin: 16px 0;
 }
 
 @media (max-width: 720px) {
   .cmp {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* A grid item's automatic minimum size is its content, so the column has to be
+   told to shrink; otherwise one long fence decides the width of both. */
+.cmp-col {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .cmp-col > :first-child {
@@ -81,8 +93,30 @@
   text-transform: uppercase;
 }
 
+/* Nothing inside a column may widen it: a code fence scrolls on its own. */
+.cmp-col pre,
+.cmp-col div[class*="language-"] {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* VitePress bleeds a code block past the page padding on narrow screens by
+   giving it a negative margin. A column has no such padding to give back, so
+   the block stays inside the column instead. */
+.vp-doc .cmp-col div[class*="language-"] {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Half a page of code is still a lot of columns of code: drop a size so fewer
+   lines need the scrollbar at all. */
+.cmp-col [class*="language-"] code {
+  font-size: 13px;
+}
+
 .cmp-col pre.blocks {
   margin: 0;
+  overflow-x: auto;
 }
 
 /*
@@ -147,4 +181,26 @@
 
 .path p:last-child a::after {
   content: " →";
+}
+
+/*
+ * Wide tables.
+ *
+ * A table is the one block VitePress renders at its natural width, so a row of
+ * command lines, paths or lowerings could take the whole page sideways with it.
+ * It is given the content column's width, allowed to scroll, and told to break
+ * its long words: a cell wraps before the page does.
+ */
+
+.vp-doc table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.vp-doc th,
+.vp-doc td {
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
