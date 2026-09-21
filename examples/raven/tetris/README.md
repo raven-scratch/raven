@@ -108,7 +108,7 @@ sound "theme" = "assets/theme.wav";
 
 on flag_clicked {
     forever {
-        sound::play_until_done(Sound::Theme);
+        sound::play_until_done(Sound::THEME);
     }
 }
 ```
@@ -131,7 +131,7 @@ moment are really at the pitch the tune gives it — against the semitone either
 side, which is the point at which a listener says the note is wrong. It also
 checks the theme's peak is *below* the effects', because an effect a player cannot
 pick out over the loop is an effect they do not notice: the tune is rendered at
-30% and the effects at 80%.
+10% and the effects at 80%.
 
 ## Scoring
 

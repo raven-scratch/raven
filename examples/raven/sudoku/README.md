@@ -219,7 +219,7 @@ sound "ambient" = "assets/ambient.wav";
 
 on flag_clicked {
     forever {
-        sound::play_until_done(Sound::Ambient);
+        sound::play_until_done(Sound::AMBIENT);
     }
 }
 ```
@@ -241,7 +241,7 @@ moment are really at the pitch the tune gives it — against the semitone either
 side, which is the point at which a listener says the note is wrong. It also
 checks the loop's peak is *below* the effects', because an effect a player cannot
 pick out over the background is an effect they do not notice: the loop is rendered
-at 30% and the effects at 80%. The check shares the tune data with the generator
+at 10% and the effects at 80%. The check shares the tune data with the generator
 rather than copying it, so it cannot drift.
 
 ## What it is made of

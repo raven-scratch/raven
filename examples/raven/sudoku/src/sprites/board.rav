@@ -629,7 +629,7 @@ sprite "Board" {
         let next = sel + step;
         if next >= 1 && next <= 3 {
             sel = next;
-            sound::play(Sound::Move);
+            sound::play(Sound::MOVE);
             redraw();
         }
     }
@@ -707,7 +707,7 @@ sprite "Board" {
 
     proc lose() warp {
         state = 3;
-        sound::play(Sound::Lose);
+        sound::play(Sound::LOSE);
         redraw();
     }
 
@@ -735,7 +735,7 @@ sprite "Board" {
             let cell = cursor;
             cells[cell] = d;
             queue_waves(cell);
-            sound::play(Sound::Good);
+            sound::play(Sound::GOOD);
             if queue.len() == 0 {
                 redraw();
             } else {
@@ -744,7 +744,7 @@ sprite "Board" {
         } else {
             mistakes += 1;
             tries -= 1;
-            sound::play(Sound::Bad);
+            sound::play(Sound::BAD);
             if mistakes >= TRIES {
                 lose();
             } else {
@@ -771,29 +771,29 @@ sprite "Board" {
 
     proc given_face(d: num) warp {
         match d {
-            1 => { looks::switch_costume_to(Costume::Given1); },
-            2 => { looks::switch_costume_to(Costume::Given2); },
-            3 => { looks::switch_costume_to(Costume::Given3); },
-            4 => { looks::switch_costume_to(Costume::Given4); },
-            5 => { looks::switch_costume_to(Costume::Given5); },
-            6 => { looks::switch_costume_to(Costume::Given6); },
-            7 => { looks::switch_costume_to(Costume::Given7); },
-            8 => { looks::switch_costume_to(Costume::Given8); },
-            _ => { looks::switch_costume_to(Costume::Given9); }
+            1 => { looks::switch_costume_to(Costume::GIVEN_1); },
+            2 => { looks::switch_costume_to(Costume::GIVEN_2); },
+            3 => { looks::switch_costume_to(Costume::GIVEN_3); },
+            4 => { looks::switch_costume_to(Costume::GIVEN_4); },
+            5 => { looks::switch_costume_to(Costume::GIVEN_5); },
+            6 => { looks::switch_costume_to(Costume::GIVEN_6); },
+            7 => { looks::switch_costume_to(Costume::GIVEN_7); },
+            8 => { looks::switch_costume_to(Costume::GIVEN_8); },
+            _ => { looks::switch_costume_to(Costume::GIVEN_9); }
         }
     }
 
     proc user_face(d: num) warp {
         match d {
-            1 => { looks::switch_costume_to(Costume::User1); },
-            2 => { looks::switch_costume_to(Costume::User2); },
-            3 => { looks::switch_costume_to(Costume::User3); },
-            4 => { looks::switch_costume_to(Costume::User4); },
-            5 => { looks::switch_costume_to(Costume::User5); },
-            6 => { looks::switch_costume_to(Costume::User6); },
-            7 => { looks::switch_costume_to(Costume::User7); },
-            8 => { looks::switch_costume_to(Costume::User8); },
-            _ => { looks::switch_costume_to(Costume::User9); }
+            1 => { looks::switch_costume_to(Costume::USER_1); },
+            2 => { looks::switch_costume_to(Costume::USER_2); },
+            3 => { looks::switch_costume_to(Costume::USER_3); },
+            4 => { looks::switch_costume_to(Costume::USER_4); },
+            5 => { looks::switch_costume_to(Costume::USER_5); },
+            6 => { looks::switch_costume_to(Costume::USER_6); },
+            7 => { looks::switch_costume_to(Costume::USER_7); },
+            8 => { looks::switch_costume_to(Costume::USER_8); },
+            _ => { looks::switch_costume_to(Costume::USER_9); }
         }
     }
 
@@ -848,7 +848,7 @@ sprite "Board" {
             for i in 1..=81 {
                 if cells[i] == focus {
                     motion::go_to_xy(cell_x(col_of(i)), cell_y(row_of(i)));
-                    looks::switch_costume_to(Costume::Match);
+                    looks::switch_costume_to(Costume::MATCH);
                     pen::stamp();
                 }
             }
@@ -860,7 +860,7 @@ sprite "Board" {
                 if local > 0 && local < SPAN {
                     let rise = operators::mathop(MathOp::Sin, 180 * local / SPAN);
                     motion::go_to_xy(cell_x(col_of(flash_cells[k])), cell_y(row_of(flash_cells[k])));
-                    looks::switch_costume_to(Costume::Flash);
+                    looks::switch_costume_to(Costume::FLASH);
                     looks::set_effect_to(Effect::Ghost, 100 - 72 * rise);
                     pen::stamp();
                 }
@@ -869,7 +869,7 @@ sprite "Board" {
         }
 
         motion::go_to_xy(cell_x(col_of(cursor)), cell_y(row_of(cursor)));
-        looks::switch_costume_to(Costume::Cursor);
+        looks::switch_costume_to(Costume::CURSOR);
         pen::stamp();
 
         for i in 1..=81 {
@@ -892,7 +892,7 @@ sprite "Board" {
     /// sprites park on the same pixel: nothing of either is ever visible.
     proc broadcast_hud() warp {
         motion::go_to_xy(-235, 175);
-        looks::switch_costume_to(Costume::Dot);
+        looks::switch_costume_to(Costume::DOT);
         events::broadcast("hud");
     }
 
@@ -1006,12 +1006,12 @@ sprite "Board" {
             queue.remove(1);
             if uid == BOARD {
                 setup_board();
-                sound::play(Sound::Win);
+                sound::play(Sound::WIN);
                 wave();
                 win();
             } else {
                 setup_unit(uid);
-                sound::play(Sound::Unit);
+                sound::play(Sound::UNIT);
                 wave();
             }
         }

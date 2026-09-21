@@ -389,6 +389,37 @@ fn call_is_console(path: &ast::Path) -> bool {
 /// A file that declares a target may still declare items beside it — a
 /// `struct`, or a `proc` shared by the target's scripts — and they belong to
 /// that target. Before this, they were parsed and then silently ignored.
+/// Claim a costume or sound name for the target being lowered.
+///
+/// Two names may be different Scratch names and still be written the same way: a
+/// project name becomes a variant with `menu::constant_variant`, and that folds
+/// `my_sound` and `mySound` together. The menu checker answers a variant by
+/// looking for a declaration whose written form matches, so without this the
+/// second name would be quietly served as the first. It is reported at the
+/// declaration instead.
+fn claim_asset(
+    declared: &mut HashMap<String, String>,
+    name: &str,
+    pos: Pos,
+    source: &Rc<Source>,
+) -> Result<()> {
+    let variant = menu::constant_variant(name);
+    if let Some(first) = declared.get(&variant) {
+        if first != name {
+            return Err(Error::new(
+                source
+                    .error(
+                        pos,
+                        format!("`{name}` and `{first}` are the same name to raven"),
+                    )
+                    .note(format!("both are written `{variant}`"))
+                    .note("rename one of them: an identifier cannot tell them apart"),
+            ));
+        }
+    }
+    declared.insert(variant, name.to_string());
+    Ok(())
+}
 fn items_of(unit: &FileUnit) -> Vec<Item> {
     match unit.file.target() {
         Some(target) => unit
@@ -1215,7 +1246,7 @@ impl<'a> Unit<'a> {
         self.macro_cycles = cycles;
     }
 
-    // -- driver -----------------------------------------------------------
+    // -- driver -------------------------------------------------------------
 
     fn run(&mut self) -> Result<rasm::File> {
         let source = self.plan.main.source.clone();
@@ -1239,9 +1270,17 @@ impl<'a> Unit<'a> {
 
         // Costumes and sounds first: a script may mention either by name, and
         // the menu checker resolves names against what the target declares.
+        //
+        // Each name is claimed here rather than at the end, because the menu
+        // checker finds a variant by looking for the declaration whose written
+        // variant matches — so two names that fold to the same variant would be
+        // served silently as whichever was declared first. That is a name the
+        // project did not write, so it is an error rather than a coin toss.
+        let mut declared: HashMap<String, String> = HashMap::new();
         for item in &body {
             match item {
                 Item::Costume(decl) => {
+                    claim_asset(&mut declared, &decl.name, decl.span.pos, &source)?;
                     self.costumes.push(decl.name.clone());
                     out.push(rasm::Item::Costume(rasm::CostumeDecl {
                         name: decl.name.clone(),
@@ -1255,6 +1294,7 @@ impl<'a> Unit<'a> {
                     }));
                 }
                 Item::Sound(decl) => {
+                    claim_asset(&mut declared, &decl.name, decl.span.pos, &source)?;
                     self.sounds.push(decl.name.clone());
                     out.push(rasm::Item::Sound(rasm::SoundDecl {
                         name: decl.name.clone(),
@@ -3662,7 +3702,7 @@ impl<'a> Unit<'a> {
             menu::Domain::Open => Vec::new(),
         };
         for value in names {
-            if menu::variant(value) == variant {
+            if menu::menu_variant(domain, value) == variant {
                 return Ok(value.to_string());
             }
         }
@@ -3724,14 +3764,22 @@ impl<'a> Unit<'a> {
                 );
                 names
             }
-            menu::Domain::Costumes => self.costumes.iter().map(|c| menu::variant(c)).collect(),
+            menu::Domain::Costumes => self
+                .costumes
+                .iter()
+                .map(|c| menu::constant_variant(c))
+                .collect(),
             menu::Domain::Backdrops => self
                 .globals
                 .stage_costumes
                 .iter()
-                .map(|c| menu::variant(c))
+                .map(|c| menu::constant_variant(c))
                 .collect(),
-            menu::Domain::Sounds => self.sounds.iter().map(|c| menu::variant(c)).collect(),
+            menu::Domain::Sounds => self
+                .sounds
+                .iter()
+                .map(|c| menu::constant_variant(c))
+                .collect(),
             menu::Domain::Open => Vec::new(),
         };
         if names.is_empty() {

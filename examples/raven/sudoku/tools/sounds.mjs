@@ -45,13 +45,13 @@ const tempo = 76;
 /// The loop, as data, so `tools/check-audio.mjs` can ask the WAV whether it is
 /// the tune this file says it is.
 ///
-/// `level` is the whole loop's loudness, and it is a third of what the synthesizer
+/// `level` is the whole loop's loudness, and it is a tenth of what the synthesizer
 /// would otherwise peak at: the background plays under the effects, which are at
 /// full and are the ones that have to be heard over it.
 export const AMBIENT = {
   tempo,
   rate: TUNE_RATE,
-  level: 0.3,
+  level: 0.1,
   voices: [
     { wave: "triangle", level: 0.5, notes: ARPEGGIO },
     { wave: "sine", level: 0.6, notes: ROOTS },

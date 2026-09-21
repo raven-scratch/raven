@@ -99,7 +99,7 @@ sprite "Board" {
                 board[row * 10 + c + 1] = piece;
             }
         }
-        sound::play(Sound::Drop);
+        sound::play(Sound::DROP);
         clear_lines();
         spawn();
     }
@@ -135,19 +135,19 @@ sprite "Board" {
         }
         if cleared == 1 {
             score += 100 * level;
-            sound::play(Sound::Clear);
+            sound::play(Sound::CLEAR);
         } else {
             if cleared == 2 {
                 score += 300 * level;
-                sound::play(Sound::Clear);
+                sound::play(Sound::CLEAR);
             } else {
                 if cleared == 3 {
                     score += 500 * level;
-                    sound::play(Sound::Clear);
+                    sound::play(Sound::CLEAR);
                 } else {
                     if cleared >= 4 {
                         score += 800 * level;
-                        sound::play(Sound::Tetris);
+                        sound::play(Sound::TETRIS);
                     }
                 }
             }
@@ -170,7 +170,7 @@ sprite "Board" {
         py = 0;
         if !fits(piece, rot, px, py) {
             state = 3;
-            sound::play(Sound::Over);
+            sound::play(Sound::OVER);
             console::log(f"game over, {score} points, {lines} lines");
         }
     }
@@ -188,7 +188,7 @@ sprite "Board" {
         if state == 1 {
             if fits(piece, rot, px + dx, py) {
                 px += dx;
-                sound::play(Sound::Move);
+                sound::play(Sound::MOVE);
                 redraw();
             }
         }
@@ -203,19 +203,19 @@ sprite "Board" {
             }
             if fits(piece, next, px, py) {
                 rot = next;
-                sound::play(Sound::Rotate);
+                sound::play(Sound::ROTATE);
                 redraw();
             } else {
                 if fits(piece, next, px - 1, py) {
                     px -= 1;
                     rot = next;
-                    sound::play(Sound::Rotate);
+                    sound::play(Sound::ROTATE);
                     redraw();
                 } else {
                     if fits(piece, next, px + 1, py) {
                         px += 1;
                         rot = next;
-                        sound::play(Sound::Rotate);
+                        sound::play(Sound::ROTATE);
                         redraw();
                     }
                 }
@@ -257,7 +257,7 @@ sprite "Board" {
             5 => { looks::switch_costume_to(Costume::Z); },
             6 => { looks::switch_costume_to(Costume::J); },
             7 => { looks::switch_costume_to(Costume::L); },
-            _ => { looks::switch_costume_to(Costume::Empty); }
+            _ => { looks::switch_costume_to(Costume::EMPTY); }
         }
     }
 
@@ -280,7 +280,7 @@ sprite "Board" {
             paint(piece, rot, px, py);
         }
         paint(nextone, 0, 13, 2);
-        looks::switch_costume_to(Costume::Tile);
+        looks::switch_costume_to(Costume::TILE);
         events::broadcast("hud");
     }
 

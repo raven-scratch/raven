@@ -58,7 +58,7 @@ stage {
     /// no locals is safe anywhere.
     on flag_clicked {
         forever {
-            sound::play_until_done(Sound::Theme);
+            sound::play_until_done(Sound::THEME);
         }
     }
 }

@@ -84,10 +84,36 @@ A variant that names a project entity — a costume, a backdrop, a sound, a spri
 is checked against the project, exactly as raven-asm checks the dropdown. A typo
 in a sprite name is a compile error listing the names that do exist.
 
+Those three menus are spelled differently from the fixed ones, and the difference
+is which name is whose. A fixed value is a Scratch identifier — `draggable`,
+`up arrow` — so it is written the way Rust writes an enum variant: PascalCase,
+and the raven name is the readable form of the Scratch one. A costume, a backdrop
+or a sound is named by the *project's author*, and folding that name into
+PascalCase invents a name that appears nowhere: a sound declared as `theme` would
+be called `Sound::Theme`, which is not the declaration, not the file and not the
+asset. So a project name is written the way Rust writes a constant:
+
+| Declared | Variant |
+| --- | --- |
+| `sound "theme"` | `Sound::THEME` |
+| `costume "idle"` | `Costume::IDLE` |
+| `costume "d0"` | `Costume::D_0` |
+| `sound "mySound"` | `Sound::MY_SOUND` |
+| `sound "laser 2"` | `Sound::LASER_2` |
+
+Upper-case letters, digits and `_` are kept; a run of anything that cannot be in
+an identifier becomes one `_`; a lower-case word that runs into an upper-case one
+gets a `_` between them; and a name that would begin with a digit gets a leading
+`_`. A name written in this form has exactly one lower-case spelling that maps
+back to it, which is how the compiler finds the declared name behind a variant.
+Two distinct names can still fold together — `my_sound` and `mySound` — and a
+target that declares both is refused rather than quietly served one of them.
+
 ```rav
 motion::goto(Goto::MousePointer);
-looks::switch_costume_to(Costume::Idle);
-looks::switch_backdrop_to(Backdrop::Sky);
+looks::switch_costume_to(Costume::IDLE);
+sound::play(Sound::BEEP);
+looks::switch_backdrop_to(Backdrop::SKY);
 control::stop(StopOption::OtherScriptsInSprite);
 sensing::of("x position", OfObject::Stage);
 sensing::current(Current::Year);

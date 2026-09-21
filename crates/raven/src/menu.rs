@@ -172,6 +172,80 @@ pub fn variant(value: &str) -> String {
     }
 }
 
+/// The variant name of a name the *project* declares, which is not a fixed menu.
+///
+/// A fixed dropdown value is a Scratch identifier like `draggable`, so PascalCase
+/// reads as the enum variant it is. A project name is the author's, and passing it
+/// through `pascal` folds it into something that cannot be found again: a sound
+/// declared as `theme` would be written `Sound::Theme`, which is a name that
+/// appears nowhere in the project — the declaration, the file and the asset all
+/// say `theme`. A project name is therefore written the way Rust writes a
+/// constant, and the rule is exactly that:
+///
+/// * upper-case letters, digits and `_` are kept as they are;
+/// * a lower-case letter upper-cases itself, and the change from a lower-case
+///   word to an upper-case one is written `_`, so `beep` is `BEEP`, `mySound` is
+///   `MY_SOUND` and `laser 2` is `LASER_2`;
+/// * anything else ends the word, and a run of it is one `_`;
+/// * a name that would begin with a digit gets a `_`, because an identifier may
+///   not.
+///
+/// The mapping is reversible for the names a project can declare: a name written
+/// in this form has exactly one lower-case spelling that maps back to it, which is
+/// what the compiler relies on when it resolves the variant.
+#[must_use]
+pub fn constant_variant(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 1);
+    let mut pending_separator = false;
+    let mut previous_was_lowercase = false;
+    for c in value.chars() {
+        let upper = c.is_ascii_uppercase();
+        let lower = c.is_ascii_lowercase();
+        let starts_a_word = (upper || c.is_ascii_digit())
+            && previous_was_lowercase
+            && !pending_separator
+            && !out.is_empty();
+        if (upper || lower || c.is_ascii_digit())
+            && (pending_separator || starts_a_word)
+            && !out.is_empty()
+        {
+            out.push('_');
+        }
+        if upper || c.is_ascii_digit() {
+            out.push(c);
+        } else if lower {
+            out.push(c.to_ascii_uppercase());
+        } else {
+            // Not in an identifier: the word ends here, and the `_` is written
+            // when the next word starts so a run of them is one.
+            pending_separator = true;
+            previous_was_lowercase = false;
+            continue;
+        }
+        pending_separator = false;
+        previous_was_lowercase = lower;
+    }
+    if out.is_empty() {
+        "_".to_string()
+    } else if out.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("_{out}")
+    } else {
+        out
+    }
+}
+
+/// The variant name a menu uses, given what the menu's values are.
+///
+/// A project name is written as a constant and a fixed value as a variant, which
+/// is the whole of the difference between `Sound::BEEP` and `Key::Space`.
+#[must_use]
+pub fn menu_variant(domain: Domain, value: &str) -> String {
+    match domain {
+        Domain::Costumes | Domain::Backdrops | Domain::Sounds => constant_variant(value),
+        _ => variant(value),
+    }
+}
+
 /// PascalCase a Scratch string: split on anything that is not alphanumeric.
 fn pascal(text: &str) -> String {
     let mut out = String::new();
@@ -278,5 +352,45 @@ mod tests {
             names.dedup();
             assert_eq!(names.len(), before, "`{id}` has colliding variant names");
         }
+    }
+
+    #[test]
+    fn a_project_name_is_written_the_way_rust_writes_a_constant() {
+        assert_eq!(constant_variant("theme"), "THEME");
+        assert_eq!(constant_variant("ambient"), "AMBIENT");
+        assert_eq!(constant_variant("mySound"), "MY_SOUND");
+        assert_eq!(constant_variant("laser 2"), "LASER_2");
+        assert_eq!(constant_variant("beep_beep"), "BEEP_BEEP");
+        assert_eq!(constant_variant("up-arrow"), "UP_ARROW");
+        assert_eq!(constant_variant("2 fast"), "_2_FAST");
+        assert_eq!(constant_variant(""), "_");
+        // A name already in the form is left alone, which is what makes the
+        // written variant findable in the source it came from.
+        assert_eq!(constant_variant("THEME"), "THEME");
+    }
+
+    #[test]
+    fn two_project_names_that_fold_together_are_the_only_collision() {
+        // `my_sound` and `mySound` are different Scratch names and fold to the
+        // same variant, so a target may not declare both. That is the one case
+        // the compiler has to reject rather than spell differently.
+        assert_eq!(constant_variant("my_sound"), "MY_SOUND");
+        assert_eq!(constant_variant("mySound"), "MY_SOUND");
+        // Everything else keeps a variant of its own.
+        let names: Vec<String> = ["theme", "THEME", "up-arrow", "UP_ARROW", "laser 2"]
+            .iter()
+            .map(|n| constant_variant(n))
+            .collect();
+        assert_eq!(names[0], names[1], "the same name, twice");
+        assert_eq!(names[2], names[3], "the same name, twice");
+        assert_ne!(names[0], names[4]);
+        assert_eq!(names[4], "LASER_2");
+    }
+
+    #[test]
+    fn a_menu_uses_the_scheme_its_values_deserve() {
+        assert_eq!(menu_variant(Domain::Sounds, "theme"), "THEME");
+        assert_eq!(menu_variant(Domain::Costumes, "idle"), "IDLE");
+        assert_eq!(menu_variant(Domain::Fixed(&["space"]), "space"), "Space");
     }
 }

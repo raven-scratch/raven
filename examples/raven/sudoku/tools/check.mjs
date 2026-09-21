@@ -247,14 +247,18 @@ async function main() {
   const costumes = hud.sprite.costumes.map((costume) => costume.name);
   const alphabetVariable = hud.lookupVariableByNameAndType('alphabet', 'list');
   const alphabet = alphabetVariable ? alphabetVariable.value.map(String) : [];
-  const glyphName = (character) => {
-    if (character === ' ') return 'fspace';
-    if (character === '-') return 'fdash';
-    if (character === ':') return 'fcolon';
-    if (character === '/') return 'fslash';
-    if (character === '>') return 'fgt';
-    return `f${character}`;
-  };
+  // A costume name is the character's, prefixed, and the four that cannot go in
+  // a file name are spelled out. This mirrors `glyphName` in the generator, which
+  // is what writes the files, so the two lists are checked against each other
+  // rather than against a third spelling nobody maintains.
+  const glyphName = (character) =>
+    ({
+      ' ': 'fspace',
+      '-': 'fdash',
+      ':': 'fcolon',
+      '/': 'fslash',
+      '>': 'fgt',
+    })[character] ?? `f${character}`;
   check(costumes[0] === 'dot', `the HUD's first costume is \`${costumes[0]}\`, not the pixel it parks on`);
   check(
     alphabet.length === costumes.length - 1,

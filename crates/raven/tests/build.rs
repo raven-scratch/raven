@@ -2330,7 +2330,7 @@ fn a_keyword_module_name_still_calls() {
             sound "beep" = "assets/beep.wav";
 
             on flag_clicked {
-                sound::play(Sound::Beep);
+                sound::play(Sound::BEEP);
             }
         }"#,
     );
