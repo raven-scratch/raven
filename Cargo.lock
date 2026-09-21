@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "raven"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "raven-asm",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "raven-asm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "raven-scratch",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "raven-scratch"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "md-5",
  "serde",
