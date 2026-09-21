@@ -83,6 +83,15 @@ There is no fourth kind. A `proc` may declare a result type — that is a cell i
 value is hoisted one statement so you can see the read. See
 [macros](/raven/macros) for the expansion rules and
 [design laws](/raven/design#value-returning-procedures) for the cost.
+
+The three are not interchangeable, and the difference is *where the body lives*.
+An `fn` has no body at run time: every call site is textually replaced, so it is
+free and works inside an expression — and that is exactly why it cannot contain a
+statement, and so cannot loop, branch or recurse. A `proc` is a real Scratch
+custom block: its body exists **once** in the project and every caller shares it,
+which is what makes a large routine worth writing as one. A value-returning
+`proc` is not free — the call is hoisted so its result cell can be read — and that
+is the visible price of sharing a body instead of copying it.
 ## The compilation pipeline
 
 ```mermaid

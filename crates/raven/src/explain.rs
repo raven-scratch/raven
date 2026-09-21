@@ -94,7 +94,12 @@ fn rules() -> String {
          # `use` comes before every other item, and importing a module brings all of its\n\
          # public items into scope.\n\
          # Every convenience is a rewrite `raven expand` prints. If it cannot be printed, it\n\
-         # is not in the language.\n",
+         # is not in the language.\n\
+         # Three things can be called. `fn` is a compile-time substitution: no statements,\n\
+         # inlined at every call site, free at run time. `macro` is the same with expression,\n\
+         # name and block parameters. `proc` is a real Scratch custom block whose body exists\n\
+         # once and is shared by every caller, may hold any statement, and costs a call plus a\n\
+         # cell read when it declares `-> ty`.\n",
         crate = identity::CRATE,
         version = env!("CARGO_PKG_VERSION"),
         docs = identity::DOCS,
