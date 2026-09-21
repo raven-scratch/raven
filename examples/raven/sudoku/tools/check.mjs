@@ -227,6 +227,15 @@ async function main() {
     );
   }
 
+  // A project has to declare every extension its blocks need, or Scratch opens it
+  // with those blocks missing: `pen` for everything drawn, `music` for the tune
+  // and the effects. raven derives the list from the blocks it emitted, and this
+  // is what says so.
+  const declared = JSON.parse(vm.toJSON()).extensions || [];
+  for (const name of ['pen', 'music']) {
+    check(declared.includes(name), `the project does not declare the ${name} extension`);
+  }
+
   // The HUD finds a character's costume by counting from the first glyph, so the
   // costume order and the `alphabet` list have to be the same list written
   // twice. Nothing else in the project would notice if they drifted: the text

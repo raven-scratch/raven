@@ -179,4 +179,36 @@ sprite "Hud" {
     on broadcast_received("hud") {
         paint();
     }
+
+    /// The background music, as note numbers — middle C is 60 — so the tune is
+    /// data rather than an asset. Sixteen notes over Am, F, C and G: the root an
+    /// octave down, then the triad above it.
+    ///
+    /// The Music extension is the whole instrument. A note block waits for the
+    /// length of the note, which is what makes a loop a melody rather than a
+    /// chord, and no sound file is shipped for any of it.
+    ///
+    /// The tune lives on this sprite rather than on the stage on purpose. A
+    /// script's block-scoped cells live in a list named `_stack1`, `_stack2` and
+    /// so on, and a stage's lists are project-wide while a sprite's are its own —
+    /// so a stage script that keeps a `let` and a sprite script that keeps one
+    /// both want a list called `_stack1`, and the second is refused as shadowing
+    /// the first. Keeping the music, and every other script with a local, off the
+    /// stage is what keeps that apart.
+    var melody: list<num> = [
+        57, 69, 76, 72, 53, 65, 72, 69, 60, 72, 79, 76, 55, 67, 74, 71
+    ];
+
+    /// The beat. The Music extension keeps the tempo on the stage rather than on
+    /// the target that set it, so it is set once and shared.
+    const TEMPO: num = 150;
+
+    on flag_clicked {
+        music::set_tempo(TEMPO);
+        forever {
+            for note in melody {
+                music::play_note_for_beats(note, 0.25);
+            }
+        }
+    }
 }

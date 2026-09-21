@@ -185,6 +185,41 @@ SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
 `ROUNDS` sets how many puzzles are dealt per difficulty (three by default), which
 is the knob to turn when the generator changes.
 
+## Music and sound
+
+All of it is the `music` extension, and none of it is a file.
+
+The background music is a list of sixteen note numbers — middle C is 60 — walked
+by a `forever` loop at the stage's tempo, sixteen slow notes over C, Am, D and G.
+A note block waits for the length of the note, which is what makes a loop a melody
+rather than a chord.
+
+The effects are a few notes each, and there is one for each thing that happens: a
+blip when a cell takes its digit, a low buzz when one is refused, a rising
+arpeggio when a line or a box finishes, a fanfare when the board does, a fall when
+the tries run out, and a tick as the menu's marker moves.
+
+An effect cannot play on the handler that asked for it. A note block waits for the
+length of the note, and Scratch drops a key press that arrives while a thread from
+the same key hat is still running — the same reason the waves are broadcast. So
+the effect's code goes in a cell, one broadcast hands it to a thread of its own,
+and a second effect restarts that thread: a run of them is the last one rather
+than all of them at once. The wave thread asks for its own effects at the same
+point, so a finished line plays its arpeggio and then sweeps.
+
+The tempo is the one thing the tune and the effects share, and it is set once. The
+Music extension keeps it on the *stage* rather than on the target that set it, so
+a second `set_tempo` anywhere would move the first one too.
+
+The music lives on the Hud sprite rather than on the stage because of how a
+script's locals are stored. A script's block-scoped cells — every `let`, every
+`for` counter — go in a list named `_stack1`, `_stack2` and so on, numbered per
+file. A stage's lists are project-wide and a sprite's are its own, so a stage
+script that keeps a `let` and a sprite script that keeps one both ask for a list
+called `_stack1`, and the compiler refuses the second as shadowing the first —
+which is exactly what the Board did the moment the stage grew a `for` loop. The
+music is on a sprite so the stage has no script stack to collide with.
+
 ## What it is made of
 
 There is no grid of grids. A board is **81 numbers in one flat list**, and three

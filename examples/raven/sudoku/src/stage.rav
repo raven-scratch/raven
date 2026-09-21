@@ -38,4 +38,8 @@ stage {
     /// on the thread that handled the key. Broadcasting hands it to a thread of
     /// its own and lets the key handler end.
     broadcast "wave";
+
+    /// The board asks for an effect on this: the code for it is in the board's
+    /// own `sfx_kind`, because a broadcast carries no argument.
+    broadcast "sfx";
 }

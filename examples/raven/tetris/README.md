@@ -80,6 +80,51 @@ re-evaluates every iteration by repeating the hoisted call at the end of the
 body. Everything that does more than a block's worth of work is `warp`: the
 redraw, the line clear, the spawn, the hard drop.
 
+## Music and sound
+
+The sound effects are the `sound` extension playing the WAV files under
+`assets/`: a move, a rotate, a drop, a clear, a tetris and the game-over sting,
+each played by the block that does the thing — `sound::play(Sound::Clear)` is a
+started sample, so it returns immediately and never holds up the key that asked
+for it.
+
+The background music is the `music` extension and no file at all. A tune is
+sixteen note numbers — middle C is 60 — so it is a list, and a `forever` loop
+walks it at the stage's tempo:
+
+```rav
+var melody: list<num> = [
+    57, 69, 76, 72, 53, 65, 72, 69, 60, 72, 79, 76, 55, 67, 74, 71
+];
+
+on flag_clicked {
+    music::set_tempo(TEMPO);
+    forever {
+        for note in melody {
+            music::play_note_for_beats(note, 0.25);
+        }
+    }
+}
+```
+
+Sixteen notes over Am, F, C and G — the root an octave down, then the triad above
+it. A note block waits for the length of the note, which is what makes a loop a
+melody rather than a chord.
+
+The tempo is the one thing the two share, and it is set once: the Music extension
+keeps it on the *stage*, not on the target that set it, so a second `set_tempo`
+anywhere would move the first one too.
+
+The music lives on the Hud sprite rather than on the stage because of how a
+script's locals are stored. A script's block-scoped cells — every `let`, every
+`for` counter — go in a list named `_stack1`, `_stack2` and so on, numbered per
+file. A stage's lists are project-wide and a sprite's are its own, so a stage
+script that keeps a `let` and a sprite script that keeps one both ask for a list
+called `_stack1`, and the compiler refuses the second as shadowing the first. This
+project happens not to trip it — its sprites need no script stack at all — but
+`examples/raven/sudoku` did the moment its stage grew a `for` loop, so the music
+is on a sprite in both.
+
 ## Scoring
 
 | Lines | Score |

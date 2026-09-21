@@ -197,3 +197,8 @@ generated from the binding table, and the docs are checked against the code.
 * `control_while`, `control_for_each`, the counter blocks and `sensing_online`
   are extended (TurboWarp-only): reachable, warned about, refused under
   `--strict`.
+* A `let` or a `for` in a *stage* script emits a stack list named `_stack1`, and
+  so does one in any sprite — but a stage's lists are project-wide and a sprite's
+  are its own, so the second is refused with "`_stack1` is already a global list".
+  A stage script that needs a block-scoped cell has to be moved to a sprite until
+  the naming is fixed; the diagnostic already says it is a bug in raven.
