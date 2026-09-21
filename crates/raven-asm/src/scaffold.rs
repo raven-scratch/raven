@@ -306,7 +306,8 @@ mod tests {
     fn the_logo_costume_is_the_real_logo() {
         let costume = logo_costume_svg();
         assert!(costume.starts_with("<svg"));
-        assert!(costume.ends_with("</svg>\n"));
+        // Cosmetic, and `core.autocrlf` is not this test's business.
+        assert!(costume.trim_end().ends_with("</svg>"));
         // Resized for the stage...
         assert!(costume.contains("width=\"128\" height=\"128\""));
         assert!(!costume.contains("width=\"512\""));
