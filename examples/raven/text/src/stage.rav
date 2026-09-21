@@ -1,0 +1,10 @@
+// The stage: one dark backdrop, because everything on it is ink.
+//
+// A text engine has nothing that a monitor can show — the buffer is a list of
+// characters, and a Scratch variable could not hold one anyway — so the stage
+// declares no variables at all. Everything the demo draws is a stamp on the pen
+// layer, and the pen layer is the whole display.
+
+stage {
+    costume "backdrop" = "assets/backdrop.svg";
+}

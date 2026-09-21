@@ -377,7 +377,7 @@ pub static BINDINGS: &[Row] = &[
         "operator_letter_of",
         val("operators", "letter_of", Value::Str),
     ),
-    row("operator_length", val("operators", "length", Value::Str)),
+    row("operator_length", val("operators", "length", Value::Num)),
     row(
         "operator_contains",
         val("operators", "contains", Value::Bool),

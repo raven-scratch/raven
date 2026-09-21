@@ -102,7 +102,10 @@ async function main () {
     const originalError = console.error;
     const originalWarn = console.warn;
     console.error = (...args) => {
-        errors.push(args.map(String).join(' '));
+        const line = args.map(String).join(' ');
+        // Node writes its own deprecation warnings here. They are not the
+        // project's, and counting them would fail every run on Node 24.
+        if (!line.includes('DeprecationWarning')) errors.push(line);
         originalError(...args);
     };
     console.warn = () => {};

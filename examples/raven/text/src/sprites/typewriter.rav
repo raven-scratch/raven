@@ -1,0 +1,176 @@
+// The demo: type, and watch it appear.
+//
+// Every key that can be typed is a `when key pressed` hat, which is the only way
+// Scratch reports a key: `sensing_keypressed` needs one of the fixed names in its
+// menu, so a key cannot be held in a list and polled. The arrows are borrowed —
+// left erases, right walks the alignment, down walks the colour theme — and up
+// is shift, held down rather than toggled, because a `forever` script can read
+// it every frame.
+//
+// Scratch's key menu has no punctuation on it at all, so the buffer opens with a
+// line that uses the rest of the font: every character the table has is
+// typeable, and everything here is typeable by hand.
+
+use lib::text;
+
+sprite "Typewriter" {
+    // font:costumes
+    costume "g32" = "assets/font/32.svg";
+    costume "g101" = "assets/font/101.svg";
+    costume "g116" = "assets/font/116.svg";
+    costume "g97" = "assets/font/97.svg";
+    costume "g111" = "assets/font/111.svg";
+    costume "g105" = "assets/font/105.svg";
+    costume "g110" = "assets/font/110.svg";
+    costume "g115" = "assets/font/115.svg";
+    costume "g104" = "assets/font/104.svg";
+    costume "g114" = "assets/font/114.svg";
+    costume "g100" = "assets/font/100.svg";
+    costume "g108" = "assets/font/108.svg";
+    costume "g117" = "assets/font/117.svg";
+    costume "g99" = "assets/font/99.svg";
+    costume "g109" = "assets/font/109.svg";
+    costume "g102" = "assets/font/102.svg";
+    costume "g119" = "assets/font/119.svg";
+    costume "g121" = "assets/font/121.svg";
+    costume "g112" = "assets/font/112.svg";
+    costume "g118" = "assets/font/118.svg";
+    costume "g98" = "assets/font/98.svg";
+    costume "g103" = "assets/font/103.svg";
+    costume "g107" = "assets/font/107.svg";
+    costume "g106" = "assets/font/106.svg";
+    costume "g113" = "assets/font/113.svg";
+    costume "g120" = "assets/font/120.svg";
+    costume "g122" = "assets/font/122.svg";
+    costume "g65" = "assets/font/65.svg";
+    costume "g66" = "assets/font/66.svg";
+    costume "g67" = "assets/font/67.svg";
+    costume "g68" = "assets/font/68.svg";
+    costume "g69" = "assets/font/69.svg";
+    costume "g70" = "assets/font/70.svg";
+    costume "g71" = "assets/font/71.svg";
+    costume "g72" = "assets/font/72.svg";
+    costume "g73" = "assets/font/73.svg";
+    costume "g74" = "assets/font/74.svg";
+    costume "g75" = "assets/font/75.svg";
+    costume "g76" = "assets/font/76.svg";
+    costume "g77" = "assets/font/77.svg";
+    costume "g78" = "assets/font/78.svg";
+    costume "g79" = "assets/font/79.svg";
+    costume "g80" = "assets/font/80.svg";
+    costume "g81" = "assets/font/81.svg";
+    costume "g82" = "assets/font/82.svg";
+    costume "g83" = "assets/font/83.svg";
+    costume "g84" = "assets/font/84.svg";
+    costume "g85" = "assets/font/85.svg";
+    costume "g86" = "assets/font/86.svg";
+    costume "g87" = "assets/font/87.svg";
+    costume "g88" = "assets/font/88.svg";
+    costume "g89" = "assets/font/89.svg";
+    costume "g90" = "assets/font/90.svg";
+    costume "g48" = "assets/font/48.svg";
+    costume "g49" = "assets/font/49.svg";
+    costume "g50" = "assets/font/50.svg";
+    costume "g51" = "assets/font/51.svg";
+    costume "g52" = "assets/font/52.svg";
+    costume "g53" = "assets/font/53.svg";
+    costume "g54" = "assets/font/54.svg";
+    costume "g55" = "assets/font/55.svg";
+    costume "g56" = "assets/font/56.svg";
+    costume "g57" = "assets/font/57.svg";
+    costume "g46" = "assets/font/46.svg";
+    costume "g44" = "assets/font/44.svg";
+    costume "g39" = "assets/font/39.svg";
+    costume "g34" = "assets/font/34.svg";
+    costume "g45" = "assets/font/45.svg";
+    costume "g58" = "assets/font/58.svg";
+    costume "g59" = "assets/font/59.svg";
+    costume "g33" = "assets/font/33.svg";
+    costume "g47" = "assets/font/47.svg";
+    costume "g40" = "assets/font/40.svg";
+    costume "g41" = "assets/font/41.svg";
+    costume "g43" = "assets/font/43.svg";
+    costume "g61" = "assets/font/61.svg";
+    costume "g60" = "assets/font/60.svg";
+    costume "g62" = "assets/font/62.svg";
+    costume "g91" = "assets/font/91.svg";
+    costume "g93" = "assets/font/93.svg";
+    costume "g123" = "assets/font/123.svg";
+    costume "g125" = "assets/font/125.svg";
+    costume "g35" = "assets/font/35.svg";
+    costume "g36" = "assets/font/36.svg";
+    costume "g37" = "assets/font/37.svg";
+    costume "g38" = "assets/font/38.svg";
+    costume "g42" = "assets/font/42.svg";
+    costume "g64" = "assets/font/64.svg";
+    costume "g92" = "assets/font/92.svg";
+    costume "g94" = "assets/font/94.svg";
+    costume "g95" = "assets/font/95.svg";
+    costume "g96" = "assets/font/96.svg";
+    costume "g124" = "assets/font/124.svg";
+    costume "g126" = "assets/font/126.svg";
+    costume "g63" = "assets/font/63.svg";
+    // font:end
+
+    on flag_clicked {
+        looks::hide();
+        reset();
+        bar = "LEFT CLEAR   UP SHIFT   RIGHT ALIGN   DOWN COLOR";
+        write(
+            "The raven text engine draws a proportional 5x8 font with the pen, one stamp per glyph: whole sentences wrap themselves to the column, and each character keeps its own colour. "
+        );
+        write(
+            "0123456789 !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+        );
+        refresh();
+        forever {
+            shift = 0;
+            if sensing::key_pressed(Key::UpArrow) {
+                shift = 1;
+            }
+        }
+    }
+
+    on key_pressed(Key::LeftArrow) { backspace(); }
+    on key_pressed(Key::RightArrow) { cycle_align(); }
+    on key_pressed(Key::DownArrow) { cycle_theme(); }
+
+    on key_pressed(Key::Space) { type_char(" "); }
+    on key_pressed(Key::Digit0) { type_char("0"); }
+    on key_pressed(Key::Digit1) { type_char("1"); }
+    on key_pressed(Key::Digit2) { type_char("2"); }
+    on key_pressed(Key::Digit3) { type_char("3"); }
+    on key_pressed(Key::Digit4) { type_char("4"); }
+    on key_pressed(Key::Digit5) { type_char("5"); }
+    on key_pressed(Key::Digit6) { type_char("6"); }
+    on key_pressed(Key::Digit7) { type_char("7"); }
+    on key_pressed(Key::Digit8) { type_char("8"); }
+    on key_pressed(Key::Digit9) { type_char("9"); }
+
+    on key_pressed(Key::A) { type_char("a"); }
+    on key_pressed(Key::B) { type_char("b"); }
+    on key_pressed(Key::C) { type_char("c"); }
+    on key_pressed(Key::D) { type_char("d"); }
+    on key_pressed(Key::E) { type_char("e"); }
+    on key_pressed(Key::F) { type_char("f"); }
+    on key_pressed(Key::G) { type_char("g"); }
+    on key_pressed(Key::H) { type_char("h"); }
+    on key_pressed(Key::I) { type_char("i"); }
+    on key_pressed(Key::J) { type_char("j"); }
+    on key_pressed(Key::K) { type_char("k"); }
+    on key_pressed(Key::L) { type_char("l"); }
+    on key_pressed(Key::M) { type_char("m"); }
+    on key_pressed(Key::N) { type_char("n"); }
+    on key_pressed(Key::O) { type_char("o"); }
+    on key_pressed(Key::P) { type_char("p"); }
+    on key_pressed(Key::Q) { type_char("q"); }
+    on key_pressed(Key::R) { type_char("r"); }
+    on key_pressed(Key::S) { type_char("s"); }
+    on key_pressed(Key::T) { type_char("t"); }
+    on key_pressed(Key::U) { type_char("u"); }
+    on key_pressed(Key::V) { type_char("v"); }
+    on key_pressed(Key::W) { type_char("w"); }
+    on key_pressed(Key::X) { type_char("x"); }
+    on key_pressed(Key::Y) { type_char("y"); }
+    on key_pressed(Key::Z) { type_char("z"); }
+}

@@ -92,6 +92,16 @@ cargo run -p raven -- build  -m examples/raven/tetris/raven.toml --debug
 node tools/validate-sb3.js examples/raven/tetris/dist/tetris.sb3 --steps 1500
 ```
 
+`examples/raven/text` is the second one: a text engine — a generated pixel font,
+word wrap, alignment and per-character colour — with the stage arithmetic in its
+README. Its glyphs are generated, so regenerate them rather than editing them:
+
+```sh
+node examples/raven/text/tools/font.mjs          # the assets and the two tables
+cargo run -p raven -- check -m examples/raven/text/raven.toml
+node tools/validate-sb3.js examples/raven/text/dist/text.sb3 --steps 400
+```
+
 ## Where things live
 
 | Need | File |

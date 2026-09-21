@@ -1,0 +1,370 @@
+// The text engine: fonts, wrapping, alignment, colour, live redraw.
+//
+// A character is a costume, so one glyph is one `stamp`, and everything else is
+// arithmetic on a list of characters. Four things make it an engine rather than
+// a `say` block:
+//
+//   * the font is data — `lib::font` holds the characters, their ink widths and
+//     the stamp that draws one — so a face is a size and a weight, not a second
+//     table, and any character the table does not have draws `?`;
+//   * the layout is a pair of index lists into the buffer, so wrapping a line is
+//     moving an index rather than building strings, and a single word longer
+//     than the column breaks where it must;
+//   * the whole frame is rebuilt on every change, in one `warp` pass, so the
+//     text is never half-drawn;
+//   * every character carries its own tint, and a line is placed by the
+//     alignment of the moment.
+//
+// The stage is 480x360 and the column is 216 font units wide, so at 200% a line
+// holds 36 of the widest characters and the space above the status bar holds 15
+// lines. See the README for the arithmetic.
+
+use lib::font;
+
+// -- metrics ----------------------------------------------------------------
+
+/// The cell, in font units: eight rows tall, with the baseline on row 6 — so a
+/// capital has six rows to rise through and a descender two to fall into. A
+/// costume is exactly this tall, which is what keeps every glyph on the same
+/// baseline without the engine asking the costume where its ink is.
+pub const CELL_H: num = 8;
+
+/// Air between two glyphs, in font units.
+pub const TRACK: num = 1;
+
+/// Line pitch: the cell plus one unit of leading.
+pub const PITCH: num = 9;
+
+/// The wrap column, in font units. Centred on x = 0, so its left edge is 108
+/// units out — 216 pixels at 200%, and 24 from the edge of the stage.
+pub const COLUMN: num = 216;
+
+/// Stage y of the first line's cell top, and of the status bar's.
+pub const TOP: num = 160;
+pub const BAR_Y: num = -150;
+
+/// The status bar's own size, in percent, and its tint.
+pub const BAR_SIZE: num = 100;
+pub const BAR_TINT: num = 140;
+
+// -- state ------------------------------------------------------------------
+
+/// What has been typed, one character per item, and the colour effect of each.
+pub var text: list<str> = [];
+pub var tint: list<num> = [];
+
+/// The lines: `starts[i]` and `ends[i]` are the first and last index of `text`
+/// on line `i`. An empty line is `starts[i] > ends[i]`.
+pub var starts: list<num> = [];
+pub var ends: list<num> = [];
+
+/// 100 is one font unit per pixel; 200 is the size the demo types at.
+pub var size: num = 200;
+/// 0 is the drawn width, 1 stamps every glyph twice for weight.
+pub var weight: num = 0;
+/// 0 left, 1 centre, 2 right.
+pub var align: num = 1;
+/// 0 one colour, 1 a rainbow, 2 one hue per class, 3 the vowels picked out.
+pub var theme: num = 0;
+/// Whether the shift key is down, which the caller keeps up to date.
+pub var shift: num = 0;
+/// One line under the text, in the bar's own face. Empty draws nothing.
+pub var bar: str = "";
+
+/// The alphabet, for shift and for a lower-case character the font is missing.
+pub var lower: list<str> = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"
+];
+pub var upper: list<str> = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"
+];
+
+// -- the font ---------------------------------------------------------------
+
+/// The table index of a character, the upper case of it, or 0 for a character
+/// the font does not have — which `glyph` draws as `?`.
+pub proc glyph_of(c: str) -> num {
+    let i = glyph_chars.index_of(c);
+    if i > 0 {
+        return i;
+    }
+    let j = lower.index_of(c);
+    if j > 0 {
+        return glyph_chars.index_of(upper[j]);
+    }
+    return 0;
+}
+
+/// The ink width of what will actually be drawn: a character the font does not
+/// have is a `?` on the stage, so it advances like one too.
+pub proc width_of(c: str) -> num {
+    let i = glyph_of(c);
+    if i == 0 {
+        return glyph_wide[glyph_chars.index_of("?")];
+    }
+    return glyph_wide[i];
+}
+
+/// A glyph's advance: its ink plus the tracking after it.
+pub proc advance(c: str) -> num {
+    return width_of(c) + TRACK;
+}
+
+/// Stage x of a font-unit offset from the column's left edge.
+pub proc column_x(at: num, unit: num) -> num {
+    return (at - COLUMN / 2) * unit;
+}
+
+// -- formatting -------------------------------------------------------------
+
+/// The colour effect a character is drawn in. The themes exist so the demo has
+/// something to switch between.
+pub proc tint_of(c: str, at: num) -> num {
+    if theme == 1 {
+        return (at * 9) % 200;
+    }
+    if theme == 2 {
+        if operators::contains("0123456789", c) {
+            return 45;
+        }
+        if operators::contains(".,;:!?'\"-_()[]", c) {
+            return 145;
+        }
+        return 0;
+    }
+    if theme == 3 {
+        if operators::contains("aeiouAEIOU", c) {
+            return 15;
+        }
+        return 165;
+    }
+    return 0;
+}
+
+// -- the buffer -------------------------------------------------------------
+
+/// Append a character without redrawing.
+pub proc push_char(c: str) {
+    text.push(c);
+    tint.push(tint_of(c, text.len()));
+}
+
+/// Append a string without redrawing. Wrapping is decided by `refresh`.
+pub proc write(s: str) {
+    let n = operators::length(s);
+    for i in 1..(n + 1) {
+        push_char(operators::letter_of(i, s));
+    }
+}
+
+/// Type one character, in the case the shift key asks for.
+pub proc type_char(c: str) {
+    let out = c;
+    if shift == 1 {
+        let j = lower.index_of(c);
+        if j > 0 {
+            out = upper[j];
+        }
+    }
+    push_char(out);
+    refresh();
+}
+
+/// Remove the last character.
+pub proc backspace() {
+    if text.len() > 0 {
+        text.pop();
+        tint.pop();
+        refresh();
+    }
+}
+
+/// Walk the alignment around, and redraw.
+pub proc cycle_align() {
+    align = (align + 1) % 3;
+    refresh();
+}
+
+/// Walk the theme around, and recolour everything already typed.
+pub proc cycle_theme() {
+    theme = (theme + 1) % 4;
+    retint();
+}
+
+/// Re-apply the theme to the whole buffer.
+pub proc retint() {
+    for i in 1..(text.len() + 1) {
+        tint[i] = tint_of(text[i], i);
+    }
+    paint();
+}
+
+// -- layout -----------------------------------------------------------------
+
+/// Rebuild the line breaks.
+///
+/// The scan keeps the width of the line so far and the index of the last space
+/// on it. When the next character would pass the column the line ends at that
+/// space, and the word after it starts the next line; a word with no space in it
+/// is simply cut, which is what any editor does with a word wider than the page.
+pub proc reflow() {
+    starts.clear();
+    ends.clear();
+    let first = 1;
+    let at = 1;
+    let space = 0;
+    let w = 0;
+    let n = text.len();
+    while at <= n {
+        let c = text[at];
+        let cw = advance(c);
+        if w + cw > COLUMN && w > 0 {
+            if space > first {
+                starts.push(first);
+                ends.push(space - 1);
+                first = space + 1;
+            } else {
+                starts.push(first);
+                ends.push(at - 1);
+                first = at;
+            }
+            at = first;
+            w = 0;
+            space = 0;
+        } else {
+            if c == " " {
+                space = at;
+            }
+            w += cw;
+            at += 1;
+        }
+    }
+    starts.push(first);
+    ends.push(n);
+}
+
+/// The width of one line, in font units.
+pub proc line_width(first: num, last: num) -> num {
+    let w = 0;
+    for i in first..(last + 1) {
+        w += advance(text[i]);
+    }
+    return w;
+}
+
+/// Where a line starts, in font units from the column's left edge.
+pub proc indent(w: num) -> num {
+    if align == 0 {
+        return 0;
+    }
+    if align == 2 {
+        return COLUMN - w;
+    }
+    return (COLUMN - w) / 2;
+}
+
+// -- drawing ----------------------------------------------------------------
+
+/// Stamp one glyph, centred on (cx, cy). A bold glyph is the same glyph stamped
+/// once more, one unit across: the tracking is one unit, so the second stamp
+/// thickens the letter instead of moving the next one.
+pub proc put(i: num, cx: num, cy: num, unit: num, bold: num) {
+    glyph(i, cx, cy);
+    if bold == 1 {
+        glyph(i, cx + unit, cy);
+    }
+}
+
+/// One line of the buffer. `left` is in font units from the column's edge, `y`
+/// is the stage y of the cell's top.
+pub proc draw_line(first: num, last: num, left: num, y: num, unit: num) {
+    let at = left;
+    let now = -1;
+    for i in first..(last + 1) {
+        let c = text[i];
+        let t = tint[i];
+        if t != now {
+            now = t;
+            looks::set_effect_to(Effect::Color, t);
+        }
+        let gi = glyph_of(c);
+        let w = width_of(c);
+        put(gi, column_x(at + w / 2, unit), y - CELL_H / 2 * unit, unit, weight);
+        at += w + TRACK;
+    }
+}
+
+/// The caret: a bar at the end of the last line, in ink of its own, because the
+/// pen is not what draws the text.
+pub proc caret(unit: num) {
+    let li = starts.len();
+    let w = line_width(starts[li], ends[li]);
+    let x = column_x(indent(w) + w, unit);
+    let y = TOP - (li - 1) * PITCH * unit;
+    pen::set_pen_size_to(2);
+    pen::set_pen_color_param_to(ColorParam::Saturation, 0);
+    pen::set_pen_color_param_to(ColorParam::Brightness, 85);
+    motion::go_to_xy(x, y);
+    pen::pen_down();
+    motion::go_to_xy(x, y - CELL_H * unit);
+    pen::pen_up();
+}
+
+/// The status bar: one centred line, bold, at its own size.
+pub proc bar_draw() {
+    if bar == "" {
+        return;
+    }
+    let unit = BAR_SIZE / 100;
+    let n = operators::length(bar);
+    let w = 0;
+    for i in 1..(n + 1) {
+        w += advance(operators::letter_of(i, bar));
+    }
+    let at = (COLUMN - w) / 2;
+    looks::set_size_to(BAR_SIZE);
+    looks::clear_graphic_effects();
+    looks::set_effect_to(Effect::Color, BAR_TINT);
+    for i in 1..(n + 1) {
+        let c = operators::letter_of(i, bar);
+        let cw = width_of(c);
+        put(glyph_of(c), column_x(at + cw / 2, unit), BAR_Y - CELL_H / 2 * unit, unit, 1);
+        at += cw + TRACK;
+    }
+}
+
+/// One frame: erase, draw every line, then the caret and the bar. The whole
+/// frame is one `warp` pass, so a redraw never lands half-drawn on the stage.
+pub proc paint() warp {
+    pen::clear();
+    looks::clear_graphic_effects();
+    looks::set_size_to(size);
+    let unit = size / 100;
+    for li in 1..(starts.len() + 1) {
+        let first = starts[li];
+        let last = ends[li];
+        let w = line_width(first, last);
+        draw_line(first, last, indent(w), TOP - (li - 1) * PITCH * unit, unit);
+    }
+    caret(unit);
+    bar_draw();
+}
+
+/// Re-wrap and redraw. Everything that changes the buffer ends here.
+pub proc refresh() {
+    reflow();
+    paint();
+}
+
+/// Empty the buffer and put the engine back to its defaults.
+pub proc reset() {
+    text.clear();
+    tint.clear();
+    size = 200;
+    weight = 0;
+    align = 1;
+    theme = 0;
+    refresh();
+}
