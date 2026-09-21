@@ -2,22 +2,24 @@
   <title>raven</title>
   <!--
     The banner is the logo, widened: the same rounded card, the same stair of
-    diagonal bands in the same navy ramp, and the same R, with the name set
-    beside the mark instead of left out.
+    diagonal bands in the same navy ramp, and the name set across the middle of
+    the card.
 
     `logo.svg` draws the stair inside a 512-unit box as seven bands, each one
     step of 64 to the right of the last. The banner keeps that step, because the
-    step is what makes the stair read as one object: 1280 is twenty steps of 64,
-    so a band starts on every multiple of 64 and there are twenty of them. The
-    ramp is the logo's own sequence, repeated — #0e1424 #1a2542 #26386b #3a5488
-    #1a2542 #22315c #07090f — and every band carries the logo's drop shadow, so
-    the stair keeps the depth it has in the mark.
+    step is what makes the stair read as one object: a band starts on every
+    multiple of 64. The card is 1152 wide, eighteen steps, and the stair runs
+    seven steps past its left edge — to -448 — so the wedge below the first
+    diagonal is banded like everything else instead of falling back on the card
+    colour. That is twenty-seven bands, every one of them a step of 64 from the
+    one before. The ramp is the logo's own sequence, repeated — #0e1424 #1a2542
+    #26386b #3a5488 #1a2542 #22315c #07090f — and every band carries the logo's
+    drop shadow, so the stair keeps the depth it has in the mark.
 
-    The R is the path from `logo.svg`, unchanged. That path occupies
-    132.09..384.78 by 167.03..337.66, so it is 252.69 wide and 170.63 tall, and
-    the group below scales it by 0.9963 — which brings it back to its own height,
-    170 — and moves it so its box sits at x 182, y 171. That centres it on the
-    card's middle line, 256, and leaves 118 units of card to its left.
+    The banner carries no mark: `logo.svg`'s white path is the R and the a
+    together, and set beside a name it spells the name twice. The name is
+    therefore the whole word, one string, centred on the card at 640 by 256 the
+    way the reference banner centres its own.
   -->
   <defs>
     <clipPath id="round-rect">
@@ -28,8 +30,17 @@
     </filter>
   </defs>
 
-  <!-- The card, then the stair over it, the ramp running dark to light. -->
+  <!-- The card, then the stair over it, the ramp running dark to light. The
+       stair covers the card whole, so the card is only the logo background
+       waiting underneath it. -->
   <rect x="64" y="64" width="1152" height="384" rx="96" ry="96" fill="#07090f"/>
+  <path d="M -448 0 L 1280 0 L 1280 512 L 64 512 L -448 0 Z" fill="#0e1424" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -384 0 L 1280 0 L 1280 512 L 128 512 L -384 0 Z" fill="#1a2542" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -320 0 L 1280 0 L 1280 512 L 192 512 L -320 0 Z" fill="#26386b" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -256 0 L 1280 0 L 1280 512 L 256 512 L -256 0 Z" fill="#3a5488" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -192 0 L 1280 0 L 1280 512 L 320 512 L -192 0 Z" fill="#1a2542" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -128 0 L 1280 0 L 1280 512 L 384 512 L -128 0 Z" fill="#22315c" clip-path="url(#round-rect)" filter="url(#shadow)"/>
+  <path d="M -64 0 L 1280 0 L 1280 512 L 448 512 L -64 0 Z" fill="#07090f" clip-path="url(#round-rect)" filter="url(#shadow)"/>
   <path d="M 0 0 L 1280 0 L 1280 512 L 512 512 L 0 0 Z" fill="#0e1424" clip-path="url(#round-rect)" filter="url(#shadow)"/>
   <path d="M 64 0 L 1280 0 L 1280 512 L 576 512 L 64 0 Z" fill="#1a2542" clip-path="url(#round-rect)" filter="url(#shadow)"/>
   <path d="M 128 0 L 1280 0 L 1280 512 L 640 512 L 128 0 Z" fill="#26386b" clip-path="url(#round-rect)" filter="url(#shadow)"/>
@@ -51,15 +62,10 @@
   <path d="M 1152 0 L 1280 0 L 1280 128 Z" fill="#1a2542" clip-path="url(#round-rect)" filter="url(#shadow)"/>
   <path d="M 1216 0 L 1280 0 L 1280 64 Z" fill="#22315c" clip-path="url(#round-rect)" filter="url(#shadow)"/>
 
-  <!-- The R, the path from `logo.svg` and nothing else. -->
-  <g transform="translate(50.4 4.27) scale(0.9963)" filter="url(#shadow)">
-    <path d="M132.09 334.54V167.03H190.24Q207.93 167.03 222.18 171.68Q236.44 176.33 244.82 187.45Q253.21 198.57 253.21 217.78Q253.21 236.31 244.82 248.2Q236.44 260.09 222.18 265.7Q207.93 271.32 190.24 271.32H165.51V334.54ZM165.51 244.86H187.13Q203.39 244.86 211.96 237.99Q220.53 231.13 220.53 217.78Q220.53 204.2 211.96 198.96Q203.39 193.72 187.13 193.72H165.51ZM223.04 334.54 184.1 262.66 207.53 241.82 260.45 334.54Z M316.12 337.66Q304.91 337.66 296.49 332.77Q288.07 327.87 283.41 319.34Q278.75 310.81 278.75 300.03Q278.75 279.78 296.11 268.61Q313.46 257.44 351.6 253.27Q351.34 247.08 349.28 242.15Q347.22 237.23 342.57 234.38Q337.91 231.54 330.06 231.54Q321.28 231.54 312.69 234.93Q304.1 238.32 295.23 243.54L283.4 221.47Q290.94 216.81 299.33 213.11Q307.71 209.4 316.99 207.13Q326.26 204.86 336.16 204.86Q352.29 204.86 363.05 211.16Q373.81 217.47 379.3 229.85Q384.78 242.23 384.78 260.61V334.54H357.71L355.35 321.01H354.32Q346.16 328.11 336.6 332.89Q327.04 337.66 316.12 337.66ZM327.03 311.68Q334.13 311.68 339.89 308.44Q345.66 305.2 351.6 299.31V273.86Q336.23 275.69 327.14 279.1Q318.05 282.52 314.22 287.13Q310.4 291.75 310.4 297.51Q310.4 304.96 315.05 308.32Q319.7 311.68 327.03 311.68Z" fill="#ffffff"/>
-  </g>
-
-  <!-- The name, in the space right of the mark. The stroke fattens the stems the
-       way the mark is drawn, and a stroke rather than a heavier `font-weight`
-       because every viewer resolves a weight to a face of its own. -->
-  <text x="786" y="256" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="227" font-weight="bold"
+  <!-- The name, the whole word, centred on the card. A stroke rather than a
+       heavier `font-weight`, because every viewer resolves a weight to a face of
+       its own. -->
+  <text x="640" y="256" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="227" font-weight="bold"
         fill="#ffffff" stroke="#ffffff" stroke-width="4" stroke-linejoin="round" paint-order="stroke"
-        text-anchor="middle" dominant-baseline="central" filter="url(#shadow)">raven</text>
+        text-anchor="middle" dominant-baseline="central" filter="url(#shadow)">Raven</text>
 </svg>
