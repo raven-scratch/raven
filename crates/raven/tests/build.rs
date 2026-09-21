@@ -2175,6 +2175,117 @@ fn watching_something_undeclared_is_an_error() {
     );
 }
 
+/// A list literal is a list of items, not one string. Scratch keeps a list's
+/// value as an array, so the declaration has to become one.
+#[test]
+fn a_list_literal_becomes_one_item_per_value() {
+    let project = Project::new("list-literal").sprite(
+        "A",
+        r#"sprite "A" {
+            var xs: list<num> = [1, 2, 3];
+            var words: list<str> = ["a", "b"];
+
+            on flag_clicked { looks::say(f"{xs.len()}"); }
+        }"#,
+    );
+    project.write();
+    let mut options = project.options();
+    options.debug = true;
+    driver::build(&options).expect("the fixture builds");
+    let text = std::fs::read_to_string(project.dir.join("dist/project.json"))
+        .expect("--debug writes project.json");
+    let built: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    let lists = built["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|t| t["name"] == "A")
+        .expect("the sprite")["lists"]
+        .as_object()
+        .expect("lists")
+        .clone();
+    let items_of = |name: &str| {
+        lists
+            .values()
+            .find(|v| v[0] == name)
+            .unwrap_or_else(|| panic!("no list called {name}"))[1]
+            .clone()
+    };
+    assert_eq!(items_of("xs"), serde_json::json!([1, 2, 3]), "three items");
+    assert_eq!(
+        items_of("words"),
+        serde_json::json!(["a", "b"]),
+        "two string items"
+    );
+}
+
+/// A WAV with a canonical header and no samples, which is all the asset loader
+/// needs to accept the file and read its format.
+fn silence_wav() -> Vec<u8> {
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&36u32.to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&22050u32.to_le_bytes());
+    wav.extend_from_slice(&44100u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&0u32.to_le_bytes());
+    wav
+}
+
+/// `sound` is a declaration keyword *and* the name of a module, so
+/// `sound::play(…)` has to parse as a call rather than as a declaration.
+#[test]
+fn a_keyword_module_name_still_calls() {
+    let project = Project::new("sound-call").sprite(
+        "A",
+        r#"sprite "A" {
+            sound "beep" = "assets/beep.wav";
+
+            on flag_clicked {
+                sound::play(Sound::Beep);
+            }
+        }"#,
+    );
+    project.write();
+    std::fs::write(project.dir.join("assets/beep.wav"), silence_wav()).expect("write the wav");
+    let asm = project.expand();
+    assert!(asm.contains("sound_play(\"beep\")"), "{asm}");
+}
+
+/// A condition that needs statements of its own — a value-returning `proc` call
+/// — has to run again for every test of the loop, not once before it.
+#[test]
+fn a_loop_condition_calling_a_proc_is_re_evaluated() {
+    let project = Project::new("loop-condition").sprite(
+        "A",
+        r#"sprite "A" {
+            var n: num = 0;
+
+            proc ready() -> bool {
+                return n > 3;
+            }
+
+            on flag_clicked {
+                repeat_until ready() {
+                    n += 1;
+                }
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert_eq!(
+        asm.matches("ready;").count(),
+        2,
+        "the call must appear before the loop and at the end of its body:\n{asm}"
+    );
+}
+
 /// A target whose only arena cells belong to procs still has to grow the
 /// arena before the first script reaches for one — the size is not known until
 /// every body has been lowered.

@@ -1056,7 +1056,15 @@ impl Parser<'_> {
 
     fn call_or_assign(&mut self) -> Result<Stmt> {
         let start = self.span();
-        let mut segments = vec![self.expect_ident("a statement")?];
+        let mut segments = vec![match self.peek().clone() {
+            // `sound::play(…)`: a module whose name is also a declaration
+            // keyword, told apart from the declaration by the `::`.
+            Tok::Kw(kw) if self.at_punct_n(1, P::ColonColon) => {
+                let token = self.bump();
+                Ident::new(kw.text(), token.span)
+            }
+            _ => self.expect_ident("a statement")?,
+        }];
         while self.at_punct(P::ColonColon) {
             self.bump();
             segments.push(self.expect_segment()?);
@@ -1514,6 +1522,27 @@ impl Parser<'_> {
             }
             Tok::Ident(_) => {
                 let mut segments = vec![self.expect_ident("an expression")?];
+                while self.at_punct(P::ColonColon) {
+                    self.bump();
+                    segments.push(self.expect_segment()?);
+                }
+                let path = Path { span, segments };
+                if self.at_punct(P::LParen) {
+                    let args = self.args()?;
+                    Ok(Expr::Call(CallExpr {
+                        callee: path,
+                        args,
+                        span,
+                    }))
+                } else {
+                    Ok(Expr::Name(path))
+                }
+            }
+            // `sound::volume()`: the module name is a declaration keyword, and
+            // the `::` is what says a path is meant.
+            Tok::Kw(kw) if self.at_punct_n(1, P::ColonColon) => {
+                let token = self.bump();
+                let mut segments = vec![Ident::new(kw.text(), token.span)];
                 while self.at_punct(P::ColonColon) {
                     self.bump();
                     segments.push(self.expect_segment()?);

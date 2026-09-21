@@ -129,8 +129,11 @@ pub fn compile(program: &Program) -> Result<Output> {
 struct VarInfo {
     name: String,
     ty: Ty,
-    /// The starting value, already in raven-asm form.
+    /// The starting value of a scalar, already in raven-asm form.
     init: rasm::Literal,
+    /// The starting items of a list, one per item: Scratch keeps a list's value
+    /// as an array, not as one string.
+    items: Vec<rasm::Literal>,
     /// A list, as opposed to a scalar variable.
     is_list: bool,
     /// `true` when a list was declared `[]` rather than with items.
@@ -147,12 +150,11 @@ impl VarInfo {
         if !self.is_list {
             return None;
         }
-        // A list declared `[]` starts empty; one with items starts with the
-        // single string Scratch keeps them in.
+        // A list declared `[]` starts empty; one with items starts with them.
         let init = if self.declared_empty {
             Vec::new()
         } else {
-            vec![self.init.clone()]
+            self.items.clone()
         };
         Some(rasm::Item::List(rasm::ListDecl {
             global: self.global,
@@ -429,31 +431,19 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
             name: var.name.name.clone(),
             ty: var.ty,
             init: rasm::Literal::Str(String::new()),
+            items: Vec::new(),
             is_list: false,
             declared_empty: false,
             global,
             cell: 0,
         });
     }
+    let mut items = Vec::new();
     let init = match (&var.init, is_list) {
         (ast::Initializer::Value(literal), false) => to_literal(literal),
-        (ast::Initializer::Items(items), true) => {
-            let texts: Vec<String> = items
-                .iter()
-                .map(|item| match to_literal(item) {
-                    rasm::Literal::Number(text) => text,
-                    rasm::Literal::Str(text) => text,
-                    rasm::Literal::Bool(value) => value.to_string(),
-                })
-                .collect();
-            // Scratch keeps a list's starting items in one string; the separator
-            // is a space unless every item is a single character.
-            let joined = if texts.iter().all(|t| t.chars().count() == 1) {
-                texts.concat()
-            } else {
-                texts.join(" ")
-            };
-            rasm::Literal::Str(joined)
+        (ast::Initializer::Items(list_items), true) => {
+            items = list_items.iter().map(to_literal).collect();
+            rasm::Literal::Str(String::new())
         }
         (ast::Initializer::Fields(_), _) => {
             return Err(Error::msg(format!(
@@ -478,6 +468,7 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
         name: var.name.name.clone(),
         ty: var.ty,
         init,
+        items,
         is_list,
         declared_empty: is_list && var.init_items_empty(),
         global,
@@ -2338,6 +2329,12 @@ impl<'a> Unit<'a> {
                 Ok(head)
             }
             Stmt::Loop(loop_stmt) => {
+                // A condition that needed statements of its own — a
+                // value-returning `proc` call, a map `get` — is evaluated by
+                // running them. They must run again for every test, or the loop
+                // would test the first answer forever, so the hoisted statements
+                // are repeated at the end of the body.
+                let mut retest: Vec<rasm::Stmt> = Vec::new();
                 let (opcode, args, mut head) = match &loop_stmt.kind {
                     ast::LoopKind::Repeat(times) => {
                         let times = self.expr(times, source, params)?;
@@ -2351,17 +2348,18 @@ impl<'a> Unit<'a> {
                     ast::LoopKind::RepeatUntil(cond) => {
                         let cond = self.expr(cond, source, params)?;
                         expect(&cond, Ty::Bool, "a `repeat_until` condition", source)?;
-                        (
-                            "control_repeat_until",
-                            vec![cond.expr],
-                            std::mem::take(&mut self.pre),
-                        )
+                        let head = std::mem::take(&mut self.pre);
+                        if !head.is_empty() {
+                            retest = head.clone();
+                        }
+                        ("control_repeat_until", vec![cond.expr], head)
                     }
                     ast::LoopKind::Forever => {
                         ("control_forever", Vec::new(), std::mem::take(&mut self.pre))
                     }
                 };
-                let body = self.block_stmts(&loop_stmt.body, source, params)?;
+                let mut body = self.block_stmts(&loop_stmt.body, source, params)?;
+                body.extend(retest);
                 head.push(mk_block(opcode, args, body));
                 Ok(head)
             }
