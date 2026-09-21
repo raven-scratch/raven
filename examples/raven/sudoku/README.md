@@ -26,12 +26,12 @@ write on top; the HUD never clears anything.
 | Left, Right | Move the board's cursor. Every move stops at the edge rather than wrapping. |
 | `Enter` | Start the difficulty the menu is on, or leave a result card for the menu. |
 | `1`–`9` | Put that digit in the current cell. |
-| `0` | Rub the current cell out. Sudoku never uses a zero, so the key is free. |
 
-A cell that the puzzle started with cannot be changed or cleared. A wrong digit is
-**refused** rather than written, and costs one of three tries; three of them end
-the run. Because only a correct entry is ever written, a full board is always the
-right board, and there is nothing to check at the end.
+A cell that the puzzle started with cannot be changed, and there is no key for
+rubbing a cell out — there would be nothing for it to do. A digit is **refused**
+rather than written unless it is the cell's answer, so the board never holds a
+value the puzzle did not have and a full board is always the right board. A wrong
+digit costs one of three tries, and three of them end the run.
 
 The board highlights every cell that holds the same digit as the cell the cursor
 is on. With the cursor on a 7, every other 7 reads as one group, which is most of
@@ -43,14 +43,23 @@ so it travels across the group instead of blinking on. The strength is computed
 rather than drawn — the tile is one flat blue and the sprite's *ghost* effect is
 the ramp, a half sine, which is what puts the fast part of the transition in the
 middle: the tint eases away from nothing, crosses blue quickly, and eases back
-out. The board's own wave carries the win card in behind it.
+out.
+
+One placement can finish two things at once — the cell that completes a row and
+its box is the usual case, and the last cell of a puzzle finishes the board as
+well. They go on a queue rather than each starting its own animation, because a
+broadcast restarts the thread that receives it and the second wave would cut the
+first one off. The queue is drained in order — row, column, box, and the board
+last, with the win card following the board's wave — so every one of them is
+played. Two waves that arrive together are why the queue exists; `check.mjs`
+fills a cell's row and box around it, presses it, and watches both waves appear in
+that order.
 
 A wave waits between steps to animate, and Scratch drops a key press that arrives
 while a thread from the same key hat is still running. So nothing slow is allowed
-on a key handler: the wave is handed to its own thread by a broadcast, and the
-handler that took the key is finished before the animation starts. The one place
-a wave is ever missed is two groups finished faster than one wave takes, which is
-under a second and not something hands can do.
+on a key handler: the queue is filled there and one broadcast hands it to a thread
+of its own, and the handler that took the key is finished before the animation
+starts.
 
 The three difficulties are clue counts: easy aims for 50, medium for 44, hard for
 40. The number is an aim, not a promise — a pass stops when nothing left in it is
@@ -70,20 +79,33 @@ the removal cannot cost the guarantee.
 
 ## The screen
 
-The stage is 480 by 360, and the two halves are worked out from that rather than
+The stage is 480 by 360, and both halves are worked out from that rather than
 guessed. The board is 9 cells of 26, which is 234, and it runs from x = -228 to
 x = 6: 12 units of margin at the left edge, and the grid centred vertically in the
 63 units of margin above and below it. What is left on the right — from x = 18 to
 the edge — is the HUD's column, and the play readout is centred on x = 129, which
-is the middle of it. A twelve-character line is 172 wide, so it fits the column
-with room to spare and never reaches the board.
+is the middle of it.
 
 The HUD writes at one size: a glyph costume is 8 by 12 and the sprite runs at
-200%, so a character draws 16 by 24 and advances 19. A long line is 342 wide and
-still fits the full stage when one is centred on it. The menu, the wait for a
-puzzle and the two cards a run ends on are centred on the stage, because the board
-is not drawn on any of them — the pen layer is cleared and left empty for the text.
-Nothing in the game uses a speech bubble.
+200%, so a character is 16 wide and 24 tall and advances 19. A line of `n`
+characters is therefore `(n - 1) * 19 + 16` wide, which is the number each of these
+was checked against:
+
+| Text | Characters | Width | Where it lands |
+| --- | --- | --- | --- |
+| `ARROWS MOVE`, the widest column line | 11 | 206 | 26 to 232 — 8 inside the edge, 20 clear of the board |
+| `ENTER FOR THE MENU`, the widest centred line | 18 | 339 | ±169.5, which is 70 inside the stage |
+| `TIME 123 SECONDS` | 16 | 301 | ±150.5 |
+
+Vertically a line is 24 tall, so two lines need 24 between them to miss, and the
+readout uses 36 between a label and its value and 32 to 70 between everything else:
+`CLUES` at 110 and 74, `TRIES` at 22 and -14, then the hints at -80 and -112. That
+leaves 58 units above and 56 below. The menu and the cards are spaced the same way,
+with nothing closer than 32.
+
+The menu, the wait for a puzzle and the two cards a run ends on are centred on the
+stage, because the board is not drawn on any of them — the pen layer is cleared and
+left empty for the text. Nothing in the game uses a speech bubble.
 
 Every character is drawn as a stroke — lines and quadratic curves in an SVG path,
 with round caps and joins — rather than as a grid of pixels, so a letter is a

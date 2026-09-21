@@ -116,10 +116,10 @@ sprite "Hud" {
     }
 
     /// A label with its value under it, both centred in the column. The value
-    /// sits 34 below the label, which clears a 20-unit glyph twice over.
+    /// sits 36 below the label, which clears a 24-unit glyph by 12.
     proc stamp_row(label: str, value: num, row: num) warp {
         stamp_text(label, COLUMN, row);
-        stamp_text(str(value), COLUMN, row - 34);
+        stamp_text(str(value), COLUMN, row - 36);
     }
 
     /// The menu: the title, the three difficulties with a marker on the chosen
@@ -137,12 +137,20 @@ sprite "Hud" {
     }
 
     /// The readout during play: what is left to do, in the right column.
+    ///
+    /// The column runs from x = 18 to the stage edge at 240, so it is 222 wide
+    /// and its middle is 129. A glyph is 16 wide and advances 19, so the widest
+    /// line here — `ARROWS MOVE`, eleven characters — is 209: it spans 34 to 224,
+    /// which is 16 units inside the edge and 28 clear of the board.
+    ///
+    /// Five lines of 24 in a 360-tall stage, with 12 between a label and its
+    /// value and 28 between the two pairs: 110, 74, 22, -14 for the counts and
+    /// -80, -112 for the hints, leaving 56 units at the bottom.
     proc readout() warp {
-        stamp_row("CLUES", clues, 96);
-        stamp_row("TRIES", tries, 34);
-        stamp_text("ARROWS MOVE", COLUMN, -50);
-        stamp_text("1 TO 9 FILL", COLUMN, -74);
-        stamp_text("0 CLEARS", COLUMN, -98);
+        stamp_row("CLUES", clues, 110);
+        stamp_row("TRIES", tries, 22);
+        stamp_text("ARROWS MOVE", COLUMN, -80);
+        stamp_text("1 TO 9 FILL", COLUMN, -112);
     }
 
     /// The two cards a run ends on. The board has been cleared, so these are

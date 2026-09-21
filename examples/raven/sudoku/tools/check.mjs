@@ -451,29 +451,65 @@ async function main() {
     const empty = [];
     for (let i = 0; i < 81; i += 1) if (puzzle[i] === 0) empty.push(i);
 
-    // Fill the first row and watch what a finished line does. The wave steps a
-    // clock and redraws for about half a second, so the arena keeps moving while
-    // the board is otherwise idle; a tint that simply switched on would leave it
-    // completely still, and nothing else about the game would notice.
-    for (let c = 0; c < 9; c += 1) {
-      if (puzzle[c] === 0) {
-        await goTo(c);
-        let wrote = false;
-        for (let attempt = 0; attempt < 6 && !wrote; attempt += 1) {
-          press(String(solution[c]));
-          wrote = await until(() => (list('cells') || [])[c] !== 0, 1500);
-        }
+    /** Fill a cell with its answer, pressing until the board takes it. */
+    const fillCell = async (cell) => {
+      await goTo(cell);
+      let wrote = false;
+      for (let attempt = 0; attempt < 8 && !wrote; attempt += 1) {
+        press(String(solution[cell]));
+        wrote = await until(() => (list('cells') || [])[cell] !== 0, 1500);
       }
+      return wrote;
+    };
+
+    // One entry in the wave queue finishes the cell's row, its column and its
+    // box, and the two that complete at once are the case worth checking: the
+    // queue has to carry both, and the row has to be played before the box.
+    //
+    // Any empty cell will do, because everything around it is filled first —
+    // every other cell of its row and its box, which is fourteen of them — so
+    // the last press finishes both at once whatever the puzzle looks like.
+    const target = empty[0];
+    const around = new Set([...UNITS[row(target)]]);
+    for (const c of UNITS[18 + box(target)]) around.add(c);
+    around.delete(target);
+    for (const c of [...around].sort((a, b) => a - b)) {
+      if ((list('cells') || [])[c] === 0) await fillCell(c);
     }
-    const samples = [];
-    for (let i = 0; i < 5; i += 1) {
-      samples.push(vms().join(','));
-      await sleep(110);
+    await until(() => (list('queue') || []).length === 0, 5000);
+
+    await fillCell(target);
+    const rowUid = row(target) + 1;
+    const boxUid = 18 + box(target) + 1;
+    // Each wave sets the group it is animating, and that group stays set for the
+    // whole animation — unlike its entry in the queue, which goes the moment its
+    // wave starts. So the cells are what prove which waves were played, and the
+    // order they first appear in is what proves the order they were played in.
+    const key = (cells) => [...cells].sort((a, b) => a - b).join(',');
+    const rowKey = key(UNITS[row(target)].map((c) => c + 1));
+    const boxKey = key(UNITS[18 + box(target)].map((c) => c + 1));
+    const first = { row: -1, box: -1 };
+    const watched = [];
+    for (let i = 0; i < 500; i += 1) {
+      const snapshot = (list('queue') || []).map(Number);
+      watched.push(snapshot);
+      const uids = (list('flash_cells') || []).map(Number);
+      if (uids.length > 0) {
+        const asKey = key(uids);
+        if (asKey === rowKey && first.row < 0) first.row = i;
+        if (asKey === boxKey && first.box < 0) first.box = i;
+      }
+      await sleep(6);
     }
-    check(
-      new Set(samples).size >= 3,
-      'a finished line did not animate: the wave never stepped a clock',
-    );
+    for (const snapshot of watched) {
+      const r = snapshot.indexOf(rowUid);
+      const b = snapshot.indexOf(boxUid);
+      if (r >= 0 && b >= 0) check(r < b, 'the box waved before the row it finished with');
+    }
+    check(first.row >= 0, 'the row that finished never had its wave');
+    check(first.box >= 0, 'the box that finished at the same time never had its wave');
+    check(first.row < first.box, 'the box waved before the row it finished with');
+    check((list('queue') || []).length === 0, 'the wave queue never drained');
 
     let missed = 0;
     const notes = [];

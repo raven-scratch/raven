@@ -80,9 +80,10 @@ sprite "Board" {
     var flash_order: list<num> = [];
     var flash_step: num = -1;
 
-    /// Set while the wave being asked for is the board's, so the thread that
-    /// runs it knows to put the win card up when it is done.
-    var finish: num = 0;
+    /// The waves waiting to be played, and `BOARD` as the entry that means the
+    /// whole board rather than one of the twenty-seven units.
+    var queue: list<num> = [];
+    const BOARD: num = 100;
 
     /// Which of the twenty-seven units have already had their wave, so a cell
     /// that is cleared and filled again does not set one off twice.
@@ -521,11 +522,7 @@ sprite "Board" {
 
     /// Set the group off: every cell of unit `uid`, with a start delay that
     /// walks the unit, so the tint crosses it rather than blinking as a block.
-    ///
-    /// The setup happens here and the animation is broadcast, so the caller — a
-    /// key handler — is done immediately. A key hat that is still running
-    /// swallows the next press of that key, so nothing slow may happen on it.
-    proc wave_unit(uid: num) warp {
+    proc setup_unit(uid: num) warp {
         flash_cells.clear();
         flash_order.clear();
         for k in 1..=9 {
@@ -541,23 +538,16 @@ sprite "Board" {
                 }
             }
         }
-        finish = 0;
-        events::broadcast("wave");
     }
 
-    /// Set the whole board off, sweeping down it a row at a time, and have the
-    /// win card follow it. This one goes through the same thread as every other
-    /// wave, which is what keeps the card behind the wave rather than on top of
-    /// it.
-    proc wave_board() warp {
+    /// The whole board, sweeping down it a row at a time.
+    proc setup_board() warp {
         flash_cells.clear();
         flash_order.clear();
         for i in 1..=81 {
             flash_cells.push(i);
             flash_order.push(row_of(i));
         }
-        finish = 1;
-        events::broadcast("wave");
     }
 
     /// Whether every cell of unit `uid` holds a value.
@@ -570,34 +560,37 @@ sprite "Board" {
         return true;
     }
 
-    /// Wave for any of the three units the cell just filled has completed.
+    /// Queue a wave for every unit the cell just filled, and for the board if
+    /// that cell finished it.
     ///
-    /// All three are marked, so a cell that is cleared and filled again does not
-    /// set a wave off twice, but only the first one found is swept: two waves for
-    /// one placement would be one effect shown twice.
-    proc celebrate(cell: num) warp {
-        let pick = 0;
+    /// They go on a list rather than each starting its own animation, because a
+    /// placement can finish two things at once — the cell that completes a row
+    /// and its box is the usual case — and a broadcast would restart the thread
+    /// part-way through the first. One list, drained in order, plays them one
+    /// after another: the row, then the column, then the box, and the board last
+    /// so its wave brings the win card in behind it. `BOARD` is the entry that
+    /// means the whole board; the units are numbered 1 to 27.
+    ///
+    /// Each unit is marked as it is queued, so a cell that is somehow written
+    /// twice does not set the same wave off again.
+    proc queue_waves(cell: num) warp {
         let uid = row_of(cell) + 1;
         if unit_done(uid) && marked[uid] == 0 {
             marked[uid] = 1;
-            pick = uid;
+            queue.push(uid);
         }
         uid = col_of(cell) + 10;
         if unit_done(uid) && marked[uid] == 0 {
             marked[uid] = 1;
-            if pick == 0 {
-                pick = uid;
-            }
+            queue.push(uid);
         }
         uid = boxes[cell] + 19;
         if unit_done(uid) && marked[uid] == 0 {
             marked[uid] = 1;
-            if pick == 0 {
-                pick = uid;
-            }
+            queue.push(uid);
         }
-        if pick != 0 {
-            wave_unit(pick);
+        if solved() {
+            queue.push(BOARD);
         }
     }
 
@@ -670,6 +663,7 @@ sprite "Board" {
         flash_step = -1;
         flash_cells.clear();
         flash_order.clear();
+        queue.clear();
         marked.clear();
         for uid in 1..=27 {
             marked.push(0);
@@ -704,12 +698,15 @@ sprite "Board" {
     ///
     /// A wrong digit is refused rather than written, so the board never holds a
     /// value the puzzle did not have and a full board is always the answer. It
-    /// costs one of the three tries instead.
+    /// costs one of the three tries instead. There is nothing to rub out: a cell
+    /// only ever takes its own answer, so a key for clearing one would have
+    /// nothing to do.
     ///
-    /// Nothing slow happens here. The wave that a good entry may start is handed
-    /// to a thread of its own, because a key hat that is still running swallows
-    /// the next press of that key — so the win card is the wave's job, not this
-    /// one's, and this returns before the board has finished celebrating.
+    /// Nothing slow happens here. The waves a good entry may have earned are
+    /// queued and one broadcast hands them to their own thread, because a key hat
+    /// that is still running swallows the next press of that key — so the win
+    /// card is the wave thread's job, and this returns before the board has
+    /// finished celebrating.
     proc place(d: num) warp {
         if state != 1 {
             return;
@@ -720,11 +717,11 @@ sprite "Board" {
         if solution[cursor] == d {
             let cell = cursor;
             cells[cell] = d;
-            if solved() {
-                wave_board();
-            } else {
+            queue_waves(cell);
+            if queue.len() == 0 {
                 redraw();
-                celebrate(cell);
+            } else {
+                events::broadcast("wave");
             }
         } else {
             mistakes += 1;
@@ -734,17 +731,6 @@ sprite "Board" {
             } else {
                 redraw();
             }
-        }
-    }
-
-    /// Take back what the player put in the current cell.
-    proc clear_cell() warp {
-        if state != 1 {
-            return;
-        }
-        if locked[cursor] == 0 {
-            cells[cursor] = 0;
-            redraw();
         }
     }
 
@@ -975,11 +961,6 @@ sprite "Board" {
         place(9);
     }
 
-    /// 0 rubs a cell out, and is not a digit Sudoku uses.
-    on key_pressed(Key::Digit0) {
-        clear_cell();
-    }
-
     /// Enter starts the difficulty the menu is on, and returns to the menu from
     /// either card.
     on key_pressed(Key::Enter) {
@@ -992,16 +973,26 @@ sprite "Board" {
         }
     }
 
-    /// A finished line or box asks for its wave, and the board's own wave asks
-    /// for the card as well. Running it here rather than in the key handler is
-    /// the point: the animation waits, and a key hat that is still running
-    /// swallows the next press of that key. The runtime restarts this thread
-    /// when a second wave is asked for, so a wave is never run twice at once.
+    /// A finished line, a finished box or a finished board asks for its wave, in
+    /// that order, and the win card comes after the last of them. Running them
+    /// here rather than in the key handler is the point: the animation waits, and
+    /// a key hat that is still running swallows the next press of that key.
+    ///
+    /// The thread is restarted if a second wave is asked for while this one is
+    /// still going, and that is safe: an entry is taken off the list before it is
+    /// played, so the restarted thread picks up the ones that are left.
     on broadcast_received("wave") {
-        wave();
-        if finish == 1 {
-            finish = 0;
-            win();
+        repeat_until queue.len() == 0 {
+            let uid = queue[1];
+            queue.remove(1);
+            if uid == BOARD {
+                setup_board();
+                wave();
+                win();
+            } else {
+                setup_unit(uid);
+                wave();
+            }
         }
     }
 }
