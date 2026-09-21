@@ -23,7 +23,7 @@ sprite "Board" {
     sound "tetris" = "assets/tetris.wav";
     sound "over" = "assets/over.wav";
 
-    /// Where a cell sits. The field is 10 columns by 20 rows of 16 pixels.
+    // Where a cell sits. The field is 10 columns by 20 rows of 16 pixels.
     fn cell_x(col: num) -> num {
         col * 16 - 72
     }
@@ -32,7 +32,7 @@ sprite "Board" {
         152 - row * 16
     }
 
-    /// The offset inside the 4x4 box of cell `k` of `p` in rotation `r`.
+    // The offset inside the 4x4 box of cell `k` of `p` in rotation `r`.
     fn offset(p: num, r: num, k: num) -> num {
         shapes[(p - 1) * 16 + r * 4 + k + 1]
     }
@@ -45,9 +45,9 @@ sprite "Board" {
         o % 4
     }
 
-    /// Whether the piece would fit at this position: inside the walls, above
-    /// the floor, and over empty cells. Above the top row is allowed, so a
-    /// piece can spawn with cells off the field.
+    // Whether the piece would fit at this position: inside the walls, above
+    // the floor, and over empty cells. Above the top row is allowed, so a
+    // piece can spawn with cells off the field.
     proc fits(p: num, r: num, x: num, y: num) -> bool warp {
         let ok = 1;
         for k in 0..4 {
@@ -66,7 +66,7 @@ sprite "Board" {
         return ok == 1;
     }
 
-    /// The seven-bag: every piece once before any piece twice.
+    // The seven-bag: every piece once before any piece twice.
     proc refill_bag() warp {
         bag.clear();
         for i in 1..8 {
@@ -89,8 +89,8 @@ sprite "Board" {
         return held;
     }
 
-    /// Put the piece into the field, clear what that completed, and bring in the
-    /// next one. A piece that does not fit at the spawn is the end of the run.
+    // Put the piece into the field, clear what that completed, and bring in the
+    // next one. A piece that does not fit at the spawn is the end of the run.
     proc lock() warp {
         for k in 0..4 {
             let c = px + col_of(offset(piece, rot, k));
@@ -104,9 +104,9 @@ sprite "Board" {
         spawn();
     }
 
-    /// Delete every full row, pulling the rows above it down, and score the
-    /// clear. The scan stays on a row after a shift, because that row has a new
-    /// occupant.
+    // Delete every full row, pulling the rows above it down, and score the
+    // clear. The scan stays on a row after a shift, because that row has a new
+    // occupant.
     proc clear_lines() warp {
         let cleared = 0;
         let row = 19;
@@ -175,7 +175,7 @@ sprite "Board" {
         }
     }
 
-    /// One row of gravity: fall, or land.
+    // One row of gravity: fall, or land.
     proc step_down() warp {
         if fits(piece, rot, px, py + 1) {
             py += 1;
@@ -194,7 +194,7 @@ sprite "Board" {
         }
     }
 
-    /// Rotate, with a one-cell nudge to either side when the wall is in the way.
+    // Rotate, with a one-cell nudge to either side when the wall is in the way.
     proc turn() warp {
         if state == 1 {
             let next = rot + 1;
@@ -223,7 +223,7 @@ sprite "Board" {
         }
     }
 
-    /// Space: fall until it lands, then lock. One point a row, as usual.
+    // Space: fall until it lands, then lock. One point a row, as usual.
     proc hard_drop() warp {
         if state == 1 {
             repeat_until !fits(piece, rot, px, py + 1) {
@@ -247,7 +247,7 @@ sprite "Board" {
         }
     }
 
-    /// A value is a costume: `match` picks it, one `if` per arm.
+    // A value is a costume: `match` picks it, one `if` per arm.
     proc paint_piece(p: num) warp {
         match p {
             1 => { looks::switch_costume_to(Costume::I); },
@@ -269,8 +269,8 @@ sprite "Board" {
         pen::stamp();
     }
 
-    /// The whole field, the falling piece and the next-piece preview, in one
-    /// frame, then back to the invisible tile.
+    // The whole field, the falling piece and the next-piece preview, in one
+    // frame, then back to the invisible tile.
     proc redraw() warp {
         pen::clear();
         for i in 0..200 {

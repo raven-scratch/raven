@@ -26,9 +26,7 @@ pub fn parse(source: &Source) -> Result<File> {
     let mut parser = Parser {
         src: source,
         toks: lexed.tokens,
-        docs: lexed.docs,
         at: 0,
-        doc_cursor: 0,
     };
     parser.file()
 }
@@ -36,9 +34,7 @@ pub fn parse(source: &Source) -> Result<File> {
 struct Parser<'a> {
     src: &'a Source,
     toks: Vec<Token>,
-    docs: Vec<lexer::Comment>,
     at: usize,
-    doc_cursor: usize,
 }
 
 impl Parser<'_> {
@@ -184,41 +180,6 @@ impl Parser<'_> {
             .into()
     }
 
-    // -- documentation comments ------------------------------------------
-
-    /// The `///` block immediately above `line`, joined into one string.
-    fn doc_for(&mut self, line: u32) -> Option<String> {
-        let mut run: Vec<(u32, String)> = Vec::new();
-        while self.doc_cursor < self.docs.len() {
-            let comment = &self.docs[self.doc_cursor];
-            if comment.span.pos.line >= line {
-                break;
-            }
-            if comment.doc {
-                run.push((comment.span.pos.line, comment.text.clone()));
-            } else {
-                run.clear();
-            }
-            self.doc_cursor += 1;
-        }
-        let mut out: Vec<String> = Vec::new();
-        let mut expect = line.saturating_sub(1);
-        for (at, text) in run.into_iter().rev() {
-            if at == expect {
-                out.push(text.trim().to_string());
-                expect = expect.saturating_sub(1);
-            } else {
-                break;
-            }
-        }
-        out.reverse();
-        if out.is_empty() {
-            None
-        } else {
-            Some(out.join("\n"))
-        }
-    }
-
     // -- file -------------------------------------------------------------
 
     fn file(&mut self) -> Result<File> {
@@ -284,13 +245,12 @@ impl Parser<'_> {
     }
 
     fn item(&mut self) -> Result<Item> {
-        let doc = self.doc_for(self.span().pos.line);
         let public = self.eat_kw(Kw::Pub);
         if self.at_kw(Kw::Stage) || self.at_kw(Kw::Sprite) {
             if public {
                 return Err(self.err(self.span(), "`pub` does not apply to a target"));
             }
-            return Ok(Item::Target(self.target(doc)?));
+            return Ok(Item::Target(self.target()?));
         }
         if self.at_kw(Kw::Use) {
             return Err(self.err(
@@ -300,14 +260,14 @@ impl Parser<'_> {
         }
         let span = self.span();
         let item = match self.peek().clone() {
-            Tok::Kw(Kw::Var) => Item::Var(self.var_decl(public, doc)?),
-            Tok::Kw(Kw::Const) => Item::Const(self.const_decl(public, doc)?),
-            Tok::Kw(Kw::Struct) => Item::Struct(self.struct_decl(public, doc)?),
+            Tok::Kw(Kw::Var) => Item::Var(self.var_decl(public)?),
+            Tok::Kw(Kw::Const) => Item::Const(self.const_decl(public)?),
+            Tok::Kw(Kw::Struct) => Item::Struct(self.struct_decl(public)?),
             Tok::Kw(Kw::Watch) => {
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a `watch`"));
                 }
-                Item::Watch(self.watch_decl(doc)?)
+                Item::Watch(self.watch_decl()?)
             }
             Tok::Kw(Kw::Broadcast) => {
                 if public {
@@ -327,14 +287,14 @@ impl Parser<'_> {
                 }
                 Item::Sound(self.sound_decl()?)
             }
-            Tok::Kw(Kw::Proc) => Item::Proc(self.proc_decl(public, doc)?),
-            Tok::Kw(Kw::Fn) => Item::Fn(self.fn_decl(public, doc)?),
-            Tok::Kw(Kw::Macro) => Item::Macro(self.macro_decl(public, doc)?),
+            Tok::Kw(Kw::Proc) => Item::Proc(self.proc_decl(public)?),
+            Tok::Kw(Kw::Fn) => Item::Fn(self.fn_decl(public)?),
+            Tok::Kw(Kw::Macro) => Item::Macro(self.macro_decl(public)?),
             Tok::Kw(Kw::On) => {
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a script"));
                 }
-                Item::Script(self.script(doc)?)
+                Item::Script(self.script()?)
             }
             other => {
                 let mut error = self.err(
@@ -353,7 +313,7 @@ impl Parser<'_> {
         Ok(item)
     }
 
-    fn target(&mut self, doc: Option<String>) -> Result<TargetDecl> {
+    fn target(&mut self) -> Result<TargetDecl> {
         let start = self.span();
         let (kind, name) = if self.eat_kw(Kw::Stage) {
             (TargetKind::Stage, "Stage".to_string())
@@ -367,7 +327,7 @@ impl Parser<'_> {
             kind,
             name,
             items,
-            doc,
+
             span: Span::new(start.pos, 6),
         })
     }
@@ -422,7 +382,7 @@ impl Parser<'_> {
     }
 
     /// `watch score, best;`
-    fn watch_decl(&mut self, doc: Option<String>) -> Result<WatchDecl> {
+    fn watch_decl(&mut self) -> Result<WatchDecl> {
         let start = self.expect_kw(Kw::Watch)?.span;
         let mut names = Vec::new();
         loop {
@@ -434,7 +394,7 @@ impl Parser<'_> {
         let end = self.expect(P::Semi)?;
         Ok(WatchDecl {
             names,
-            doc,
+
             span: Span::new(
                 start.pos,
                 end.span.pos.col.saturating_sub(start.pos.col) + 1,
@@ -443,7 +403,7 @@ impl Parser<'_> {
     }
 
     /// `struct Point { x: num, y: num }`
-    fn struct_decl(&mut self, public: bool, doc: Option<String>) -> Result<StructDecl> {
+    fn struct_decl(&mut self, public: bool) -> Result<StructDecl> {
         let start = self.expect_kw(Kw::Struct)?.span;
         let name = self.expect_ident("a struct name")?;
         self.expect(P::LBrace)?;
@@ -481,7 +441,7 @@ impl Parser<'_> {
             public,
             name,
             fields,
-            doc,
+
             span: Span::new(
                 start.pos,
                 end.span.pos.col.saturating_sub(start.pos.col) + 1,
@@ -507,7 +467,7 @@ impl Parser<'_> {
         }
     }
 
-    fn var_decl(&mut self, public: bool, doc: Option<String>) -> Result<VarDecl> {
+    fn var_decl(&mut self, public: bool) -> Result<VarDecl> {
         let start = self.expect_kw(Kw::Var)?.span;
         // `var $i: num = 0;` inside a macro names a variable the caller owns:
         // the `$` marks it as a substitution rather than a hygienic temporary.
@@ -535,7 +495,7 @@ impl Parser<'_> {
             name,
             ty,
             init,
-            doc,
+
             span: Span::new(
                 start.pos,
                 semi.span.pos.col.saturating_sub(start.pos.col) + 1,
@@ -543,7 +503,7 @@ impl Parser<'_> {
         })
     }
 
-    fn const_decl(&mut self, public: bool, doc: Option<String>) -> Result<ConstDecl> {
+    fn const_decl(&mut self, public: bool) -> Result<ConstDecl> {
         let start = self.expect_kw(Kw::Const)?.span;
         let name = self.expect_ident("a constant name")?;
         if !self.at_punct(P::Colon) {
@@ -561,7 +521,7 @@ impl Parser<'_> {
             name,
             ty,
             value,
-            doc,
+
             span: Span::new(
                 start.pos,
                 semi.span.pos.col.saturating_sub(start.pos.col) + 1,
@@ -614,7 +574,7 @@ impl Parser<'_> {
         })
     }
 
-    fn proc_decl(&mut self, public: bool, doc: Option<String>) -> Result<ProcDecl> {
+    fn proc_decl(&mut self, public: bool) -> Result<ProcDecl> {
         let start = self.expect_kw(Kw::Proc)?.span;
         let name = self.expect_ident("a procedure name")?;
         self.expect(P::LParen)?;
@@ -654,12 +614,12 @@ impl Parser<'_> {
             ret,
             warp,
             body,
-            doc,
+
             span: start,
         })
     }
 
-    fn fn_decl(&mut self, public: bool, doc: Option<String>) -> Result<FnDecl> {
+    fn fn_decl(&mut self, public: bool) -> Result<FnDecl> {
         let start = self.expect_kw(Kw::Fn)?.span;
         let name = self.expect_ident("a function name")?;
         self.expect(P::LParen)?;
@@ -701,12 +661,12 @@ impl Parser<'_> {
             params,
             ret,
             body,
-            doc,
+
             span: start,
         })
     }
 
-    fn macro_decl(&mut self, public: bool, doc: Option<String>) -> Result<MacroDecl> {
+    fn macro_decl(&mut self, public: bool) -> Result<MacroDecl> {
         let start = self.expect_kw(Kw::Macro)?.span;
         let name = self.expect_ident("a macro name")?;
         self.expect(P::LParen)?;
@@ -766,7 +726,7 @@ impl Parser<'_> {
             params,
             result,
             body,
-            doc,
+
             span: start,
         })
     }
@@ -796,7 +756,7 @@ impl Parser<'_> {
         })
     }
 
-    fn script(&mut self, doc: Option<String>) -> Result<ScriptDecl> {
+    fn script(&mut self) -> Result<ScriptDecl> {
         let start = self.expect_kw(Kw::On)?.span;
         let name = self.expect_ident("a hat name")?;
         let mut args = Vec::new();
@@ -819,7 +779,7 @@ impl Parser<'_> {
                 args,
             },
             body,
-            doc,
+
             span: start,
         })
     }
@@ -904,7 +864,7 @@ impl Parser<'_> {
         if self.at_kw(Kw::Var) {
             // A `var` statement is a macro temporary; the checker rejects it
             // anywhere else, because Scratch variables belong to a target.
-            let decl = self.var_decl(false, None)?;
+            let decl = self.var_decl(false)?;
             return Ok(Stmt::Var(decl));
         }
         if let Tok::Param(name) = self.peek().clone() {
@@ -1583,9 +1543,7 @@ impl Parser<'_> {
         let mut sub = Parser {
             src: self.src,
             toks: tokens.to_vec(),
-            docs: Vec::new(),
             at: 0,
-            doc_cursor: 0,
         };
         if sub.toks.is_empty() {
             return Err(self.err(self.span(), "empty `{}` in an interpolated string"));

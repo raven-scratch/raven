@@ -13,15 +13,15 @@
 stage {
     costume "field" = "assets/field.svg";
 
-    /// 0 ready, 1 playing, 2 over.
+    // 0 ready, 1 playing, 2 over.
     pub var state: num = 0;
-    /// The falling piece and the one after it, its rotation and its origin.
+    // The falling piece and the one after it, its rotation and its origin.
     pub var piece: num = 1;
     pub var nextone: num = 1;
     pub var rot: num = 0;
     pub var px: num = 3;
     pub var py: num = 0;
-    /// Score, cleared lines, level, and seconds per gravity step.
+    // Score, cleared lines, level, and seconds per gravity step.
     pub var score: num = 0;
     pub var lines: num = 0;
     pub var level: num = 1;

@@ -1,6 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="480" height="360" viewBox="0 0 480 360">
-  <rect x="0" y="0" width="480" height="360" fill="#0d1117"/>
-  <rect x="158" y="18" width="164" height="324" fill="#141a24" stroke="#2c3a4d" stroke-width="3"/>
-  <rect x="344" y="44" width="88" height="80" fill="#141a24" stroke="#2c3a4d" stroke-width="3"/>
-  <rect x="344" y="268" width="88" height="74" fill="#141a24" stroke="#2c3a4d" stroke-width="3"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A1119"/>
+      <stop offset="1" stop-color="#04060B"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="360" fill="url(#bg)"/>
+  <rect x="157" y="17" width="166" height="326" fill="none" stroke="#22D3EE" stroke-opacity="0.08" stroke-width="1"/>
+  <rect x="158" y="18" width="164" height="324" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
+  <g fill="#22D3EE" fill-opacity="0.22">
+    <rect x="159" y="19" width="20" height="2"/><rect x="159" y="19" width="2" height="20"/>
+    <rect x="301" y="19" width="20" height="2"/><rect x="319" y="19" width="2" height="20"/>
+    <rect x="159" y="339" width="20" height="2"/><rect x="159" y="319" width="2" height="20"/>
+    <rect x="301" y="339" width="20" height="2"/><rect x="319" y="319" width="2" height="20"/>
+  </g>
+  <rect x="344" y="44" width="88" height="80" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
+  <rect x="346" y="46" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
+  <rect x="344" y="268" width="88" height="74" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
+  <rect x="346" y="270" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
 </svg>

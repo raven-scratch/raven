@@ -205,10 +205,10 @@ fn module() -> String {
 //
 // `pub` is what makes an item visible to a file that `use`s this one.
 
-/// What the project says.
+// What the project says.
 pub const GREETING: str = "Hello, world!";
 
-/// Say `message`, pause, and say it again.
+// Say `message`, pause, and say it again.
 pub proc greet(message: str) {
     looks::say_for_secs(message, 1);
     control::wait(0.5);

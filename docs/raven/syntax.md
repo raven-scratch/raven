@@ -11,8 +11,9 @@ keywords whose lowerings are written down in
 
 ## Lexical rules
 
-* **Comments** — `// to end of line`, `/* block comments */` (they do not nest),
-  and `/// doc comments`, kept as the item's documentation.
+* **Comments** — `// to end of line` and `/* block comments */` (they do not
+  nest). There are no doc comments: `///` is a line comment like any other, and
+  nothing a comment says reaches the compiler.
 * **Identifiers** — `[A-Za-z_][A-Za-z0-9_]*`.
 * **Paths** — identifiers joined by `::`, for example `std::motion` or
   `Key::Space`. The segment *after* `::` may be a keyword, because nothing there

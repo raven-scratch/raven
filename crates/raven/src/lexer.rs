@@ -265,21 +265,10 @@ impl Token {
     }
 }
 
-/// A comment, kept only for the formatter and for `///` documentation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Comment {
-    pub text: String,
-    pub span: Span,
-    /// `///`, as opposed to `//` or `/* */`.
-    pub doc: bool,
-}
-
 /// Everything one file lexed to.
 #[derive(Clone, Debug)]
 pub struct Lexed {
     pub tokens: Vec<Token>,
-    /// `///` comments, in source order, each with the item it precedes.
-    pub docs: Vec<Comment>,
 }
 
 /// Scan `source` into tokens.
@@ -295,7 +284,6 @@ struct Lexer<'a> {
     line: u32,
     col: u32,
     out: Vec<Token>,
-    docs: Vec<Comment>,
 }
 
 impl<'a> Lexer<'a> {
@@ -307,7 +295,6 @@ impl<'a> Lexer<'a> {
             line: 1,
             col: 1,
             out: Vec::new(),
-            docs: Vec::new(),
         }
     }
 
@@ -323,7 +310,6 @@ impl<'a> Lexer<'a> {
                 self.out.push(Token::new(Tok::Eof, span));
                 return Ok(Lexed {
                     tokens: std::mem::take(&mut self.out),
-                    docs: std::mem::take(&mut self.docs),
                 });
             };
             let token = match c {
@@ -380,26 +366,14 @@ impl<'a> Lexer<'a> {
                     self.bump();
                 }
                 Some('/') if self.peek_at(1) == Some('/') => {
-                    let start = self.span_here(1);
-                    let doc = self.peek_at(2) == Some('/') && self.peek_at(3) != Some('/');
-                    while self.peek_at(2) == Some('/') && self.peek_at(3) != Some('/') {
-                        self.bump();
-                    }
-                    self.bump();
-                    self.bump();
-                    let mut text = String::new();
+                    // `//` to the end of the line. `///` is the same comment:
+                    // there are no doc comments in raven.
                     while let Some(c) = self.peek() {
                         if c == '\n' {
                             break;
                         }
-                        text.push(c);
                         self.bump();
                     }
-                    self.docs.push(Comment {
-                        text: text.trim_end().to_string(),
-                        span: Span::new(start.pos, self.col.saturating_sub(start.pos.col).max(1)),
-                        doc,
-                    });
                 }
                 Some('/') if self.peek_at(1) == Some('*') => {
                     let start = self.span_here(2);
@@ -842,14 +816,12 @@ mod tests {
     }
 
     #[test]
-    fn comments_are_trivia_and_doc_comments_are_kept() {
+    fn comments_are_trivia() {
+        // `///` is a line comment like any other; there are no doc comments.
         let source = Source::new("t.rav", "/// doc\n// plain\n/* block */ x");
         let lexed = lex(&source).expect("lexes");
         assert_eq!(lexed.tokens[0].tok, Tok::Ident("x".into()));
-        assert_eq!(lexed.docs.len(), 2);
-        assert!(lexed.docs[0].doc);
-        assert_eq!(lexed.docs[0].text.trim(), "doc");
-        assert!(!lexed.docs[1].doc);
+        assert_eq!(lexed.tokens.len(), 2, "the identifier and nothing else");
     }
 
     #[test]

@@ -39,12 +39,12 @@ result       = type | "stmts"
 ```
 
 ```rav
-/// Join two pieces of text.
+// Join two pieces of text.
 pub macro concat($a: expr<str>, $b: expr<str>) -> str {
     operators::join($a, $b)
 }
 
-/// Run a body a fixed number of times.
+// Run a body a fixed number of times.
 pub macro count_up($times: expr<num>, $body: block) -> stmts {
     let counter = 0;
     repeat $times {

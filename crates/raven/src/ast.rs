@@ -177,22 +177,6 @@ impl Item {
         }
     }
 
-    #[must_use]
-    pub fn doc(&self) -> Option<&str> {
-        match self {
-            Item::Target(item) => item.doc.as_deref(),
-            Item::Var(item) => item.doc.as_deref(),
-            Item::Const(item) => item.doc.as_deref(),
-            Item::Struct(item) => item.doc.as_deref(),
-            Item::Watch(_) => None,
-            Item::Proc(item) => item.doc.as_deref(),
-            Item::Fn(item) => item.doc.as_deref(),
-            Item::Macro(item) => item.doc.as_deref(),
-            Item::Script(item) => item.doc.as_deref(),
-            Item::Broadcast(_) | Item::Costume(_) | Item::Sound(_) => None,
-        }
-    }
-
     /// The name the item introduces, when it introduces one.
     #[must_use]
     pub fn name(&self) -> Option<&Ident> {
@@ -235,7 +219,6 @@ pub struct TargetDecl {
     /// The stage is always `Stage`; a sprite carries the name it was given.
     pub name: String,
     pub items: Vec<Item>,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -252,7 +235,6 @@ pub struct VarDecl {
     pub name: Ident,
     pub ty: Ty,
     pub init: Initializer,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -286,7 +268,6 @@ pub struct StructDecl {
     pub public: bool,
     pub name: Ident,
     pub fields: Vec<StructField>,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -300,7 +281,6 @@ pub struct StructDecl {
 #[derive(Clone, Debug)]
 pub struct WatchDecl {
     pub names: Vec<Ident>,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -318,7 +298,6 @@ pub struct ConstDecl {
     pub name: Ident,
     pub ty: Ty,
     pub value: Literal,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -398,7 +377,6 @@ pub struct ProcDecl {
     pub ret: Option<Ty>,
     pub warp: bool,
     pub body: Block,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -421,7 +399,6 @@ pub struct FnDecl {
     pub params: Vec<TypedParam>,
     pub ret: Ty,
     pub body: Expr,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -440,7 +417,6 @@ pub struct MacroDecl {
     pub params: Vec<MacroParam>,
     pub result: MacroResult,
     pub body: MacroBody,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -509,7 +485,6 @@ pub enum MacroResult {
 pub struct ScriptDecl {
     pub hat: Hat,
     pub body: Block,
-    pub doc: Option<String>,
     pub span: Span,
 }
 
