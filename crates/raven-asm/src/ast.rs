@@ -100,6 +100,35 @@ impl Item {
     }
 }
 
+/// How a monitor is drawn, which is the `mode` of its record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MonitorMode {
+    /// The ordinary readout.
+    #[default]
+    Default,
+    /// The large readout: one number, no label.
+    Large,
+    /// A draggable slider.
+    Slider,
+}
+
+/// Everything a declaration can say about its monitor.
+///
+/// The editor reads these straight out of `project.json`: `x`/`y` are stage
+/// pixels and a `null` position asks the editor to place the monitor itself,
+/// exactly as it does for a variable created in the editor.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MonitorSpec {
+    /// `at X Y`, when the declaration places its own monitor.
+    pub at: Option<(f64, f64)>,
+    /// `default`, `large` or `slider`.
+    pub mode: MonitorMode,
+    /// `slider MIN MAX`.
+    pub slider: Option<(f64, f64)>,
+    /// `continuous`, which makes a slider's step 0.01 instead of 1.
+    pub continuous: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct VarDecl {
     /// `global var x = 0;` — the variable belongs to the stage, so every sprite
@@ -108,8 +137,8 @@ pub struct VarDecl {
     /// `visible var x = 0;` — the editor's monitor for it starts shown, which
     /// is how a value that is not a Scratch variable gets on the stage.
     pub visible: bool,
-    /// `at X Y` — where the monitor sits, instead of the automatic column.
-    pub at: Option<(f64, f64)>,
+    /// Where the monitor goes and how it is drawn.
+    pub monitor: MonitorSpec,
     pub name: String,
     pub init: Literal,
     pub pos: Pos,
@@ -121,8 +150,8 @@ pub struct ListDecl {
     pub global: bool,
     /// `visible list x = [];` — see [`VarDecl::visible`].
     pub visible: bool,
-    /// `at X Y` — see [`VarDecl::at`].
-    pub at: Option<(f64, f64)>,
+    /// A list monitor is always a list; `at` still says where it sits.
+    pub monitor: MonitorSpec,
     pub name: String,
     pub init: Vec<Literal>,
     pub pos: Pos,

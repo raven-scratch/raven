@@ -1384,3 +1384,121 @@ fn initial_values_and_monitors_keep_their_json_types() {
     assert_eq!(monitor("flag").value, false);
     assert_eq!(monitor("xs").value, serde_json::json!([1, "a", true]));
 }
+
+/// A monitor the declaration does not place itself is left for the editor, and
+/// `slider`/`large` say how it is drawn.
+#[test]
+fn a_monitor_can_be_placed_and_drawn_by_its_declaration() {
+    let project = TempProject::new("monitors");
+    project
+        .write(
+            "raven-asm.toml",
+            "[project]\nname = \"n\"\n\n[targets]\nstage = \"src/stage.rasm\"\n",
+        )
+        .write(
+            "src/stage.rasm",
+            r#"stage {
+    costume "backdrop" = "assets/a.svg";
+    visible var free = 0;
+    visible var placed = 0; at 5 30
+    visible var speed = 0; slider 0 100 continuous
+    visible var big = 0; large
+}
+"#,
+        )
+        .write(
+            "assets/a.svg",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"></svg>",
+        );
+
+    let out = project.build().expect("builds");
+    let monitor = |name: &str| {
+        out.project
+            .monitors
+            .iter()
+            .find(|m| m.params.values().any(|v| v == name))
+            .unwrap_or_else(|| panic!("monitor for {name}"))
+    };
+    let free = monitor("free");
+    assert_eq!(free.x, None, "the editor places an unplaced monitor");
+    assert_eq!(free.y, None);
+    assert_eq!(free.mode, "default");
+
+    let placed = monitor("placed");
+    assert_eq!(placed.x, Some(5.0));
+    assert_eq!(placed.y, Some(30.0));
+
+    let speed = monitor("speed");
+    assert_eq!(speed.mode, "slider");
+    assert_eq!(speed.slider_min, Some(0.0));
+    assert_eq!(speed.slider_max, Some(100.0));
+    assert_eq!(speed.is_discrete, Some(false));
+    assert_eq!(speed.x, None);
+
+    assert_eq!(monitor("big").mode, "large");
+}
+
+/// Top-level scripts are arranged the way the editor's own "Clean up Blocks"
+/// arranges them: one column at x = 0, each script below the last.
+#[test]
+fn top_level_scripts_are_cleaned_into_one_column() {
+    let project = TempProject::new("cleanup");
+    project
+        .write(
+            "raven-asm.toml",
+            "[project]\nname = \"n\"\n\n[targets]\nstage = \"src/stage.rasm\"\n",
+        )
+        .write(
+            "src/stage.rasm",
+            r#"stage {
+    costume "backdrop" = "assets/a.svg";
+    broadcast "go";
+
+    event_whenflagclicked {
+        looks_say("one");
+        looks_say("two");
+    }
+    event_whenbroadcastreceived("go") {
+        looks_say("three");
+    }
+    event_whenkeypressed("space") {
+        looks_say("four");
+    }
+}
+"#,
+        )
+        .write(
+            "assets/a.svg",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"></svg>",
+        );
+
+    let out = project.build().expect("builds");
+    let mut tops: Vec<(f64, f64)> = out
+        .project
+        .targets
+        .iter()
+        .flat_map(|t| t.blocks.values())
+        .filter(|block| block["topLevel"] == Value::Bool(true))
+        .map(|block| {
+            (
+                block["x"].as_f64().expect("an x"),
+                block["y"].as_f64().expect("a y"),
+            )
+        })
+        .collect();
+    assert_eq!(tops.len(), 3, "three scripts: {tops:?}");
+    for (x, _) in &tops {
+        assert_eq!(*x, 0.0, "one column at the left: {tops:?}");
+    }
+    tops.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(
+        tops[0].1, 0.0,
+        "the first script starts at the top: {tops:?}"
+    );
+    for pair in tops.windows(2) {
+        assert!(
+            pair[1].1 - pair[0].1 >= 48.0,
+            "scripts never share a spot: {tops:?}"
+        );
+    }
+}

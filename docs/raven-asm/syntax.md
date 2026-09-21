@@ -40,8 +40,9 @@ belongs to that target.
 ```text
 costume     = "costume" STRING "=" STRING [ "center" NUMBER NUMBER ] ";"
 sound       = "sound" STRING "=" STRING ";"
-variable    = [ "global" ] [ "visible" ] "var" IDENT "=" literal ";" [ "at" NUMBER NUMBER ]
-list        = [ "global" ] [ "visible" ] "list" IDENT "=" "[" [ literal { "," literal } ] "]" ";" [ "at" NUMBER NUMBER ]
+variable    = [ "global" ] [ "visible" ] "var" IDENT "=" literal ";" [ monitor ]
+list        = [ "global" ] [ "visible" ] "list" IDENT "=" "[" [ literal { "," literal } ] "]" ";" [ monitor ]
+monitor     = { "at" NUMBER NUMBER | "large" | "slider" NUMBER NUMBER | "continuous" | "default" }
 broadcast   = "broadcast" STRING ";"
 procedure   = "proc" IDENT "(" [ params ] ")" [ "warp" ] block
 params      = param { "," param }

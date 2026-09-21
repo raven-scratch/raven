@@ -1,20 +1,35 @@
 # Variables, lists and broadcasts
 
-A declaration is `var name = value;` or `list name = [value, ...];`. Two
-modifiers and one clause change where its **monitor** goes:
+A declaration is `var name = value;` or `list name = [value, ...];`. What the
+editor shows for it is described by the same words the editor's own menu uses,
+written after the declaration's semicolon:
 
 ```rasm
 visible var score = 0;          // the monitor starts visible, on the stage
 visible list trail = [];        // the same, for a list
 var speed = 10; at 5 30         // the monitor is placed at (5, 30)
-global visible var best = 0;    // owned by the stage, and shown
+visible var big = 0; large      // the large readout: one number, no label
+visible var power = 0; slider 0 10          // a slider, stepping by 1
+visible var fine = 0; slider 0 1 continuous // a slider, stepping by 0.01
 ```
 
 `visible` comes before `var` or `list`, and after `global` when both are
-written; it makes the monitor *start* shown rather than hidden. `at X Y` is read
-**after** the declaration's semicolon, and takes two numbers with no semicolon of
-its own. Without `at`, a monitor that is shown takes the next row of the automatic
-column down the left edge — the same 45-pixel layout the editor makes.
+written; it makes the monitor *start* shown rather than hidden. Everything after
+the semicolon describes that monitor:
+
+| Clause | What it sets |
+| --- | --- |
+| `at X Y` | Where the monitor sits, in stage pixels. |
+| `large` | The large readout, `mode: "large"`. |
+| `slider MIN MAX` | A slider between two bounds, `mode: "slider"`. |
+| `continuous` | A slider that steps by 0.01 instead of 1. |
+| `default` | The ordinary readout, when a later clause would override it. |
+
+A declaration that says none of them leaves the position **unset**, and the
+editor places the monitor itself — exactly as it places one for a variable made
+in the editor. That is the only reason a project's monitor records ever hold a
+`null` position, and it is what keeps a row of watched values evenly spaced
+instead of wherever a compiler guessed.
 
 ## Scope: who owns the variable
 

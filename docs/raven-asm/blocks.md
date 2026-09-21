@@ -160,10 +160,14 @@ mutation, and a `procedures_call` block per call site. See
 
 Scratch keeps a *monitor record* for every variable and list: it is what the
 checkbox next to a variable controls. raven-asm writes one record per declared
-variable and list. It lays them out itself — one column down the left edge, 45
-pixels apart, starting at (5, 5) — unless the declaration says `at X Y`, and the
-record's `visible` flag starts `false` unless the declaration says `visible`. See
-[Variables](/raven-asm/variables#monitors).
+variable and list, with the `mode`, slider bounds and `visible` flag the
+declaration asked for, and **no position** unless the declaration says
+`at X Y` — a null position is how the editor is told to place the monitor
+itself, which it does exactly as it would for a variable made by hand. See
+[Variables](/raven-asm/variables#monitors). Top-level scripts, in turn, are laid
+out the way the editor's own **Clean up Blocks** lays them out: one column at
+`x = 0`, each script below the last with the renderer's `MIN_BLOCK_HEIGHT`
+between them.
 
 They are hidden by default so a project does not open covered in readouts. To
 show one, use the block — which is also how Scratch does it:

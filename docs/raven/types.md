@@ -192,11 +192,12 @@ hold `0` before any script runs.
 
 ## Monitors
 
-A watched value gets a visible monitor, and monitors are laid out for you: one
-column down the left edge, a row apart, so two of them never land on the same
-spot. Scratch's editor arranges them the same way, and the layout is a list, so
-it is deterministic — the same source puts score at 5,5 and best at 5,50
-every time.
+A watched value gets a monitor, and where it goes is the editor's decision
+unless the code makes it: a cell that is watched declares a real Scratch
+variable with `visible` set, and the editor places a monitor it is not given a
+position for exactly as it places one for a variable made by hand. Nothing about
+the layout is a compiler's guess, and `at X Y` (on a `var` or `list` in
+raven-asm) pins one down when a project wants an exact spot.
 
 ## Lists
 

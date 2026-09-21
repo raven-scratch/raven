@@ -280,14 +280,8 @@ struct Sym {
     /// Whether the editor's monitor for it starts shown.
     visible: bool,
     /// `at X Y` on the declaration, when it says where to put the monitor.
-    at: Option<(f64, f64)>,
+    monitor: MonitorSpec,
 }
-
-/// Where a monitor goes when the declaration does not say: down the left edge,
-/// one row at a time — the editor's own arrangement.
-const MONITOR_LEFT: f64 = 5.0;
-const MONITOR_TOP: f64 = 5.0;
-const MONITOR_STEP: f64 = 45.0;
 
 #[derive(Clone, Debug)]
 struct ProcInfo {
@@ -450,7 +444,7 @@ impl Compiler {
                 id: self.ids.fresh(&format!("broadcast:{name}")),
                 init: Value::Null,
                 visible: false,
-                at: None,
+                monitor: MonitorSpec::default(),
             })
             .collect();
         let broadcast_index: HashMap<String, String> = broadcasts
@@ -490,7 +484,6 @@ impl Compiler {
         // ---- 4. Emit.
         let project_root = self.root.clone();
         let mut sb3_targets: Vec<sb3::Target> = Vec::new();
-        let mut monitor_cursor = MONITOR_TOP;
         let mut monitors: Vec<sb3::Monitor> = Vec::new();
         let mut extensions: HashSet<String> =
             self.manifest.project.extensions.iter().cloned().collect();
@@ -538,6 +531,7 @@ impl Compiler {
                 sb3::Target::new_sprite(&target.name, sb3_targets.len() as i64)
             };
             target_json.blocks = std::mem::take(&mut emitter.blocks);
+            tidy_layout(&mut target_json.blocks);
             target_json.costumes = std::mem::take(&mut emitter.costumes);
             target_json.sounds = std::mem::take(&mut emitter.sounds);
 
@@ -559,31 +553,20 @@ impl Compiler {
             // Monitors are laid out the way the editor lays them out: down the
             // left edge, one row each, so two of them never sit on top of each
             // other. An explicit `at X Y` wins.
+            // One monitor record per variable and list. A declaration that does
+            // not say `at X Y` leaves the position null, so the editor places it
+            // exactly as it places a monitor made by hand.
             for var in vars {
                 target_json
                     .variables
                     .insert(var.id.clone(), vec![json!(var.name), var.init.clone()]);
-                monitors.push(scalar_monitor(
-                    var,
-                    owner.clone(),
-                    var.visible,
-                    var.at,
-                    (MONITOR_LEFT, monitor_cursor),
-                ));
-                monitor_cursor += MONITOR_STEP;
+                monitors.push(scalar_monitor(var, owner.clone()));
             }
             for list in lists {
                 target_json
                     .lists
                     .insert(list.id.clone(), vec![json!(list.name), list.init.clone()]);
-                monitors.push(list_monitor(
-                    list,
-                    owner.clone(),
-                    list.visible,
-                    list.at,
-                    (MONITOR_LEFT, monitor_cursor),
-                ));
-                monitor_cursor += MONITOR_STEP;
+                monitors.push(list_monitor(list, owner.clone()));
             }
 
             // Broadcast messages always live on the stage.
@@ -714,14 +697,14 @@ impl Compiler {
                         id: self.ids.fresh(&format!("global:var:{name}")),
                         init: v.init.json(),
                         visible: v.visible,
-                        at: v.at,
+                        monitor: v.monitor,
                     }),
                     Item::List(l) => lists.push(Sym {
                         name: l.name.clone(),
                         id: self.ids.fresh(&format!("global:list:{name}")),
                         init: Value::Array(l.init.iter().map(Literal::json).collect()),
                         visible: l.visible,
-                        at: l.at,
+                        monitor: l.monitor,
                     }),
                     _ => unreachable!("filtered above"),
                 }
@@ -795,7 +778,7 @@ impl Compiler {
                         id: self.ids.fresh(&format!("var:{}:{}", target.name, v.name)),
                         init: v.init.json(),
                         visible: v.visible,
-                        at: v.at,
+                        monitor: v.monitor,
                     });
                 }
                 Item::List(l) => {
@@ -821,7 +804,7 @@ impl Compiler {
                         id: self.ids.fresh(&format!("list:{}:{}", target.name, l.name)),
                         init: Value::Array(l.init.iter().map(Literal::json).collect()),
                         visible: l.visible,
-                        at: l.at,
+                        monitor: l.monitor,
                     });
                 }
                 Item::Costume(c) => {
@@ -878,40 +861,41 @@ impl Compiler {
     }
 }
 
-fn scalar_monitor(
-    var: &Sym,
-    sprite_name: Option<String>,
-    visible: bool,
-    at: Option<(f64, f64)>,
-    fallback: (f64, f64),
-) -> sb3::Monitor {
+/// The `mode` string the editor expects.
+fn mode_name(mode: MonitorMode) -> &'static str {
+    match mode {
+        MonitorMode::Default => "default",
+        MonitorMode::Large => "large",
+        MonitorMode::Slider => "slider",
+    }
+}
+
+/// A variable's monitor record. A declaration that does not say `at X Y` leaves
+/// the position null, which is what the editor means by "place this yourself":
+/// it lays a new monitor out exactly as it would for a variable created by hand.
+fn scalar_monitor(var: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
     let mut params = BTreeMap::new();
     params.insert("VARIABLE".to_string(), var.name.clone());
     sb3::Monitor {
         id: var.id.clone(),
-        mode: "default".to_string(),
+        mode: mode_name(var.monitor.mode).to_string(),
         opcode: "data_variable".to_string(),
         params,
         sprite_name,
         value: var.init.clone(),
         width: 0.0,
         height: 0.0,
-        x: Some(at.unwrap_or(fallback).0),
-        y: Some(at.unwrap_or(fallback).1),
-        visible,
-        slider_min: Some(0.0),
-        slider_max: Some(100.0),
-        is_discrete: Some(true),
+        x: var.monitor.at.map(|(x, _)| x),
+        y: var.monitor.at.map(|(_, y)| y),
+        visible: var.visible,
+        slider_min: Some(var.monitor.slider.map_or(0.0, |(min, _)| min)),
+        slider_max: Some(var.monitor.slider.map_or(100.0, |(_, max)| max)),
+        is_discrete: Some(!var.monitor.continuous),
     }
 }
 
-fn list_monitor(
-    list: &Sym,
-    sprite_name: Option<String>,
-    visible: bool,
-    at: Option<(f64, f64)>,
-    fallback: (f64, f64),
-) -> sb3::Monitor {
+/// A list's monitor record: always a list, and never a slider.
+fn list_monitor(list: &Sym, sprite_name: Option<String>) -> sb3::Monitor {
     let mut params = BTreeMap::new();
     params.insert("LIST".to_string(), list.name.clone());
     sb3::Monitor {
@@ -923,9 +907,9 @@ fn list_monitor(
         value: list.init.clone(),
         width: 0.0,
         height: 0.0,
-        x: Some(at.unwrap_or(fallback).0),
-        y: Some(at.unwrap_or(fallback).1),
-        visible,
+        x: list.monitor.at.map(|(x, _)| x),
+        y: list.monitor.at.map(|(_, y)| y),
+        visible: list.visible,
         slider_min: None,
         slider_max: None,
         is_discrete: None,
@@ -2212,6 +2196,46 @@ fn make_block(
 
 fn btree_to_map(input: BTreeMap<String, Value>) -> Map<String, Value> {
     input.into_iter().collect()
+}
+
+/// Arrange the top-level scripts the way the editor's own "Clean up Blocks"
+/// does: one column at x = 0, each script below the last, `MIN_BLOCK_HEIGHT`
+/// (48 = 12 × GRID_UNIT, the renderer's constant) of air between the bottom of
+/// one stack and the top of the next, in the order the scripts were emitted.
+///
+/// The editor measures a stack by rendering it; a compiler cannot, so a row is
+/// counted at 40 units. That is what a row renders as, and the gap the editor
+/// uses is larger than the error either way, so no two scripts can overlap even
+/// when a row is taller than the estimate.
+fn tidy_layout(blocks: &mut BTreeMap<String, Value>) {
+    const ROW: f64 = 40.0;
+    const SCRIPT_GAP: f64 = 48.0;
+
+    let mut tops: Vec<(f64, f64, String)> = blocks
+        .iter()
+        .filter(|(_, block)| block["topLevel"] == Value::Bool(true))
+        .filter_map(|(id, block)| Some((block["y"].as_f64()?, block["x"].as_f64()?, id.clone())))
+        .collect();
+    // The order the emitter chose is the order the source has.
+    tops.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+
+    let mut cursor = 0.0;
+    for (_, _, id) in tops {
+        let mut rows = 0.0;
+        let mut at = Some(id.clone());
+        while let Some(current) = at {
+            let Some(block) = blocks.get(&current) else {
+                break;
+            };
+            rows += 1.0;
+            at = block["next"].as_str().map(str::to_string);
+        }
+        if let Some(block) = blocks.get_mut(&id).and_then(Value::as_object_mut) {
+            block.insert("x".to_string(), json!(0.0));
+            block.insert("y".to_string(), json!(cursor));
+        }
+        cursor += rows * ROW + SCRIPT_GAP;
+    }
 }
 
 fn map_to_btree(input: Map<String, Value>) -> BTreeMap<String, Value> {

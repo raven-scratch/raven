@@ -220,19 +220,40 @@ impl<'a> Parser<'a> {
 
     // ------------------------------------------------------------------ items
 
-    /// `at X Y`, when a declaration wants to say where its monitor goes.
+    /// The trailing clause that says how a declaration's monitor is drawn.
     ///
-    /// `at X Y`, when a declaration wants to say where its monitor goes. It is
-    /// read after the declaration's semicolon, so a declaration keeps its plain
-    /// shape: `visible var score = 0; at 5 30`.
-    fn monitor_at(&mut self) -> Result<Option<(f64, f64)>> {
-        if !self.is_ident("at") {
-            return Ok(None);
+    /// Read after the declaration's semicolon, so a declaration keeps its plain
+    /// shape and a monitor is described in the same words the editor's own menu
+    /// uses: `visible var score = 0; at 5 30 slider 0 100 continuous`. Without
+    /// `at` the editor places the monitor itself, which is what it does for a
+    /// variable created in the editor.
+    fn monitor_spec(&mut self) -> Result<MonitorSpec> {
+        let mut spec = MonitorSpec::default();
+        loop {
+            if self.is_ident("at") {
+                self.advance();
+                let x = self.number("an x position")?;
+                let y = self.number("a y position")?;
+                spec.at = Some((x, y));
+            } else if self.is_ident("large") {
+                self.advance();
+                spec.mode = MonitorMode::Large;
+            } else if self.is_ident("slider") {
+                self.advance();
+                let min = self.number("a minimum")?;
+                let max = self.number("a maximum")?;
+                spec.mode = MonitorMode::Slider;
+                spec.slider = Some((min.min(max), min.max(max)));
+            } else if self.is_ident("default") {
+                self.advance();
+                spec.mode = MonitorMode::Default;
+            } else if self.is_ident("continuous") {
+                self.advance();
+                spec.continuous = true;
+            } else {
+                return Ok(spec);
+            }
         }
-        self.advance();
-        let x = self.number("an x position")?;
-        let y = self.number("a y position")?;
-        Ok(Some((x, y)))
     }
 
     fn item(&mut self) -> Result<Item> {
@@ -347,7 +368,7 @@ impl<'a> Parser<'a> {
         self.expect_punct(';')?;
         Ok(VarDecl {
             visible: false,
-            at: self.monitor_at()?,
+            monitor: self.monitor_spec()?,
             global,
             name,
             init,
@@ -371,7 +392,7 @@ impl<'a> Parser<'a> {
         self.expect_punct(';')?;
         Ok(ListDecl {
             visible: false,
-            at: self.monitor_at()?,
+            monitor: self.monitor_spec()?,
             global,
             name,
             init,
