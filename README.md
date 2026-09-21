@@ -1,14 +1,14 @@
 # raven
 
+<p align="center">
+  <img src="docs/public/logo-banner.svg" alt="raven — two languages and one target: Scratch 3" width="880">
+</p>
+
 **Two languages and one target: Scratch 3.**
 
 [![CI](https://github.com/raven-scratch/raven/actions/workflows/ci.yml/badge.svg)](https://github.com/raven-scratch/raven/actions/workflows/ci.yml)
 [![Docs](https://github.com/raven-scratch/raven/actions/workflows/docs.yml/badge.svg)](https://raven-scratch.github.io/raven/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-<p align="center">
-  <img src="docs/public/logo.svg" alt="raven" width="128" height="128">
-</p>
 
 ```
 raven source (.rav)  ──▶  raven-asm source (.rasm)  ──▶  project.json  ──▶  .sb3
