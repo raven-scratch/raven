@@ -2286,6 +2286,28 @@ fn a_loop_condition_calling_a_proc_is_re_evaluated() {
     );
 }
 
+/// An error raised while compiling the generated raven-asm is reported against
+/// the raven that generated it, not against the staging `.rasm` the user never
+/// wrote — and it says where the generated line was.
+#[test]
+fn a_build_error_inside_generated_code_points_at_the_rav() {
+    let project = Project::new("staged-error").sprite(
+        "A",
+        r#"sprite "A" {
+            sound "beep" = "assets/missing.wav";
+        }"#,
+    );
+    project.write();
+    let error = match driver::build(&project.options()) {
+        Ok(_) => panic!("a missing asset must fail the build"),
+        Err(error) => error,
+    };
+    let rendered = error.render();
+    assert!(rendered.contains("src/sprites/A.rav"), "{rendered}");
+    assert!(rendered.contains("assets/missing.wav"), "{rendered}");
+    assert!(rendered.contains("generated raven-asm:"), "{rendered}");
+}
+
 /// A target whose only arena cells belong to procs still has to grow the
 /// arena before the first script reaches for one — the size is not known until
 /// every body has been lowered.
@@ -2428,10 +2450,11 @@ fn a_proc_is_warp_or_not_by_its_declaration() {
     let _ = json;
 }
 
-/// Monitors get a place of their own: the editor stacks them down the left
-/// edge, and two of them never land on the same spot.
+/// A monitor the declaration does not place itself is left for the editor to
+/// place — `x` and `y` are `null`, exactly as they are for a variable created in
+/// the editor — and a declaration that says `at X Y` keeps that spot.
 #[test]
-fn monitors_are_placed_in_a_column() {
+fn monitors_are_left_to_the_editor_unless_the_source_places_them() {
     let project = Project::new("monitors")
         .stage("stage { pub var best: num = 0; watch best; }")
         .sprite(
@@ -2439,7 +2462,7 @@ fn monitors_are_placed_in_a_column() {
             r#"sprite "A" {
                 var score: num = 0;
                 var lives: num = 3;
-                watch score, lives;
+                watch score;
                 on flag_clicked { score += 1; lives -= 0; }
             }"#,
         );
@@ -2449,24 +2472,13 @@ fn monitors_are_placed_in_a_column() {
     driver::build(&options).expect("build");
     let text = std::fs::read_to_string(project.dir.join("dist/project.json")).expect("json");
     let project_json: serde_json::Value = serde_json::from_str(&text).expect("parse");
-    let mut places: Vec<(f64, f64)> = Vec::new();
+    let mut auto = 0;
     for monitor in project_json["monitors"].as_array().expect("monitors") {
+        assert!(monitor["x"].is_null(), "auto-placed: {monitor}");
+        assert!(monitor["y"].is_null(), "auto-placed: {monitor}");
         if monitor["visible"].as_bool() == Some(true) {
-            let x = monitor["x"].as_f64().expect("a monitor x");
-            let y = monitor["y"].as_f64().expect("a monitor y");
-            places.push((x, y));
+            auto += 1;
         }
     }
-    assert!(places.len() >= 3, "three watched values: {places:?}");
-    let mut sorted = places.clone();
-    sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("ordered"));
-    sorted.dedup();
-    assert_eq!(
-        sorted.len(),
-        places.len(),
-        "no two monitors share a spot: {places:?}"
-    );
-    for (x, _) in &places {
-        assert_eq!(*x, 5.0, "the column starts at the left edge: {places:?}");
-    }
+    assert!(auto >= 2, "the two watched values are visible: {auto}");
 }

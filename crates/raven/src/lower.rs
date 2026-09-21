@@ -142,6 +142,8 @@ struct VarInfo {
     global: bool,
     /// The cell a scalar lives in, 1-based. Zero for a list.
     cell: usize,
+    /// Where the declaration is, so generated raven-asm can point back at it.
+    pos: Pos,
 }
 
 impl VarInfo {
@@ -159,10 +161,10 @@ impl VarInfo {
         Some(rasm::Item::List(rasm::ListDecl {
             global: self.global,
             visible: false,
-            at: None,
+            monitor: rasm::MonitorSpec::default(),
             name: self.name.clone(),
             init,
-            pos: Pos::default(),
+            pos: self.pos,
         }))
     }
 }
@@ -436,6 +438,7 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
             declared_empty: false,
             global,
             cell: 0,
+            pos: var.span.pos,
         });
     }
     let mut items = Vec::new();
@@ -473,6 +476,7 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
         declared_empty: is_list && var.init_items_empty(),
         global,
         cell: 0,
+        pos: var.span.pos,
     })
 }
 
@@ -1213,8 +1217,8 @@ impl<'a> Unit<'a> {
                             .center
                             .as_ref()
                             .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))),
-                        pos: Pos::default(),
-                        path_pos: Pos::default(),
+                        pos: decl.span.pos,
+                        path_pos: decl.path_span.pos,
                     }));
                 }
                 Item::Sound(decl) => {
@@ -1222,8 +1226,8 @@ impl<'a> Unit<'a> {
                     out.push(rasm::Item::Sound(rasm::SoundDecl {
                         name: decl.name.clone(),
                         path: self.asset_path(&decl.path),
-                        pos: Pos::default(),
-                        path_pos: Pos::default(),
+                        pos: decl.span.pos,
+                        path_pos: decl.path_span.pos,
                     }));
                 }
                 _ => {}
@@ -1276,7 +1280,7 @@ impl<'a> Unit<'a> {
                 locals.push(rasm::Item::List(rasm::ListDecl {
                     global: false,
                     visible: false,
-                    at: None,
+                    monitor: rasm::MonitorSpec::default(),
                     name: format!("{STACK}{index}"),
                     init: Vec::new(),
                     pos: Pos::default(),
@@ -1314,10 +1318,10 @@ impl<'a> Unit<'a> {
             locals.push(rasm::Item::Var(rasm::VarDecl {
                 global: var.global,
                 visible: true,
-                at: None,
+                monitor: rasm::MonitorSpec::default(),
                 name: var.name.clone(),
                 init: var.init.clone(),
-                pos: Pos::default(),
+                pos: var.pos,
             }));
         }
 
@@ -1376,7 +1380,7 @@ impl<'a> Unit<'a> {
                 globals.push(rasm::Item::List(rasm::ListDecl {
                     global: true,
                     visible: false,
-                    at: None,
+                    monitor: rasm::MonitorSpec::default(),
                     name: CONSOLE.to_string(),
                     init: Vec::new(),
                     pos: Pos::default(),
@@ -1471,7 +1475,7 @@ impl<'a> Unit<'a> {
         rasm::Item::List(rasm::ListDecl {
             global: true,
             visible: false,
-            at: None,
+            monitor: rasm::MonitorSpec::default(),
             name: GLOBAL_VM.to_string(),
             init: Vec::new(),
             pos: Pos::default(),
@@ -1527,7 +1531,7 @@ impl<'a> Unit<'a> {
         rasm::Item::List(rasm::ListDecl {
             global,
             visible: false,
-            at: None,
+            monitor: rasm::MonitorSpec::default(),
             name: name.to_string(),
             init,
             pos: Pos::default(),
@@ -4913,7 +4917,6 @@ fn subst_stmt(
                 name: subst_ident(&decl.name, subs, renames),
                 ty: decl.ty,
                 init: decl.init.clone(),
-                doc: decl.doc.clone(),
                 span: decl.span,
             })]
         }

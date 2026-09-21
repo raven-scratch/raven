@@ -99,10 +99,18 @@ pub fn build(options: &Options) -> Result<BuildResult> {
     let keep_asm = options.debug || options.emit_asm;
 
     let staging = staging_manifest(&program, &target_path, &asm_dir, &out);
-    let written = write_tree(&asm_dir, &out, &staging)?;
+    let marked = marked_files(&program, &output);
+    let pairs: Vec<(PathBuf, String)> = marked
+        .iter()
+        .map(|s| (s.path.clone(), s.text.clone()))
+        .collect();
+    let written = write_tree(&asm_dir, &pairs, &staging)?;
 
     let manifest_path = asm_dir.join(raven_asm::manifest::MANIFEST_NAME);
-    let build = raven_asm::compile::build(&manifest_path)?;
+    let build = match raven_asm::compile::build(&manifest_path) {
+        Ok(build) => build,
+        Err(error) => return Err(translate(error, &marked, &asm_dir)),
+    };
     result.warnings.extend(build.warnings.clone());
 
     // `compile::build` produces the project and its assets; writing the archive
@@ -211,6 +219,111 @@ fn files(program: &Program, output: &lower::Output) -> Vec<(PathBuf, String)> {
         out.push((path, rasm::print(file)));
     }
     out
+}
+
+/// The staging tree, with the position of each item written as a `//@ line col`
+/// comment above it, and the raven source that produced the file.
+///
+/// The markers are comments, so raven-asm compiles the same program; they are
+/// what lets an error raised *inside* generated raven-asm be reported against
+/// the raven that generated it. Anything below that is a bug in raven, and is
+/// reported as one.
+fn marked_files(program: &Program, output: &lower::Output) -> Vec<StagedFile> {
+    let mut out = Vec::new();
+    for (index, plan) in program.targets.iter().enumerate() {
+        let Some(file) = output.files.get(index) else {
+            continue;
+        };
+        let path = if plan.kind == crate::ast::TargetKind::Stage {
+            PathBuf::from("src/stage.rasm")
+        } else {
+            PathBuf::from("src/sprites").join(format!("{}.rasm", sanitis(&plan.name)))
+        };
+        let text = rasm::print_marked(file);
+        let markers = markers_of(&text);
+        out.push(StagedFile {
+            path,
+            text,
+            source: plan.main.source.clone(),
+            markers,
+        });
+    }
+    out
+}
+
+/// A generated raven-asm file, the raven source it came from, and where each
+/// marker line points in that source.
+struct StagedFile {
+    path: PathBuf,
+    text: String,
+    source: std::rc::Rc<raven_scratch::diag::Source>,
+    markers: Vec<(u32, raven_scratch::diag::Pos)>,
+}
+
+/// The `//@ line col` markers in a generated file, in line order.
+fn markers_of(text: &str) -> Vec<(u32, raven_scratch::diag::Pos)> {
+    let mut out = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let Some(rest) = line.trim().strip_prefix("//@ ") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let (Some(line_no), Some(col)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Ok(line_no), Ok(col)) = (line_no.parse(), col.parse()) {
+            out.push((
+                index as u32 + 1,
+                raven_scratch::diag::Pos::new(line_no, col),
+            ));
+        }
+    }
+    out
+}
+
+/// Report a raven-asm error against the raven that produced the generated code.
+///
+/// The file named in a diagnostic from the staging tree is one the user never
+/// wrote. Each one is rewritten to point at the `.rav` file, at the position of
+/// the last marker above the failing line, with the generated location kept as a
+/// note. A line with no marker above it cannot come from raven source at all,
+/// and is called what it is: a bug in raven.
+fn translate(error: Error, staged: &[StagedFile], dir: &Path) -> Error {
+    let mut diags = Vec::new();
+    for mut diag in error.diags {
+        let Some(file) = diag.file.clone() else {
+            diags.push(diag);
+            continue;
+        };
+        let relative = file.strip_prefix(dir).unwrap_or(&file);
+        let Some(staged) = staged.iter().find(|s| s.path == relative) else {
+            diags.push(diag);
+            continue;
+        };
+        let generated = format!(
+            "{}:{}",
+            file.display().to_string().replace('\\', "/"),
+            diag.pos.line
+        );
+        let mapped = staged
+            .markers
+            .iter()
+            .rfind(|(line, _)| *line <= diag.pos.line)
+            .map(|(_, pos)| *pos);
+        let pos = mapped.unwrap_or_else(|| raven_scratch::diag::Pos::new(1, 1));
+        let mut rebuilt = staged.source.error(pos, diag.message.clone());
+        rebuilt.level = diag.level;
+        rebuilt.notes.append(&mut diag.notes);
+        rebuilt.snippet = Some(staged.source.line_text(pos.line).to_string());
+        rebuilt = rebuilt.note(format!("generated raven-asm: {generated}"));
+        if mapped.is_none() {
+            rebuilt = rebuilt.note(
+                "no raven source maps to that line, so this is a bug in raven rather than in your program",
+            );
+        }
+        diags.push(rebuilt);
+    }
+    Error { diags }
 }
 
 /// The manifest raven-asm reads to build the staged project.

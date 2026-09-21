@@ -95,6 +95,21 @@ pub fn block_else(
 /// Print a whole file.
 #[must_use]
 pub fn print(file: &File) -> String {
+    render(file, false)
+}
+
+/// Print a whole file with a `//@ line col` comment before every item that
+/// knows where it came from.
+///
+/// raven-asm skips comments, so this is still the same program; the markers are
+/// how an error found inside generated code is reported against the raven that
+/// produced it instead of against the staging `.rasm` the user never wrote.
+#[must_use]
+pub fn print_marked(file: &File) -> String {
+    render(file, true)
+}
+
+fn render(file: &File, markers: bool) -> String {
     let mut out = String::new();
     for decl in &file.uses {
         out.push_str(&format!("use {};\n", quote(&decl.path)));
@@ -103,25 +118,44 @@ pub fn print(file: &File) -> String {
         out.push('\n');
     }
     if let Some(target) = &file.target {
-        print_target(&mut out, target);
+        print_target(&mut out, target, markers);
     } else {
-        print_items(&mut out, &file.items, 0);
+        print_items(&mut out, &file.items, 0, markers);
     }
     out
 }
 
-fn print_target(out: &mut String, target: &TargetDecl) {
+/// The marker line for an item that carries a real position.
+fn marker(out: &mut String, pos: Pos, pad: &str) {
+    if pos.line != 0 {
+        out.push_str(&format!("{pad}//@ {} {}\n", pos.line, pos.col));
+    }
+}
+
+fn print_target(out: &mut String, target: &TargetDecl, markers: bool) {
     match target.kind {
         TargetKind::Stage => out.push_str("stage {\n"),
         TargetKind::Sprite => out.push_str(&format!("sprite {} {{\n", quote(&target.name))),
     }
-    print_items(out, &target.items, 1);
+    print_items(out, &target.items, 1, markers);
     out.push_str("}\n");
 }
 
-fn print_items(out: &mut String, items: &[Item], depth: usize) {
+fn print_items(out: &mut String, items: &[Item], depth: usize, markers: bool) {
     let pad = indent(depth);
     for item in items {
+        if markers {
+            let pos = match item {
+                Item::Var(var) => var.pos,
+                Item::List(list) => list.pos,
+                Item::Broadcast(decl) => decl.pos,
+                Item::Costume(decl) => decl.path_pos,
+                Item::Sound(decl) => decl.path_pos,
+                Item::Proc(decl) => decl.pos,
+                Item::Stmt(stmt) => stmt.pos,
+            };
+            marker(out, pos, &pad);
+        }
         match item {
             Item::Var(var) => {
                 out.push_str(&format!(
@@ -317,7 +351,7 @@ mod tests {
                 pos: GENERATED,
                 items: vec![
                     Item::Var(VarDecl {
-                        at: None,
+                        monitor: MonitorSpec::default(),
                         visible: false,
                         global: false,
                         name: "score".into(),
@@ -376,7 +410,7 @@ mod tests {
                 pos: GENERATED,
                 items: vec![
                     Item::Var(VarDecl {
-                        at: None,
+                        monitor: MonitorSpec::default(),
                         visible: false,
                         global: true,
                         name: "best".into(),
@@ -384,7 +418,7 @@ mod tests {
                         pos: GENERATED,
                     }),
                     Item::List(ListDecl {
-                        at: None,
+                        monitor: MonitorSpec::default(),
                         visible: false,
                         global: true,
                         name: "trail".into(),
