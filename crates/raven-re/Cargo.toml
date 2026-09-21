@@ -22,7 +22,7 @@ clap.workspace = true
 # A .sb3 stores `project.json` deflated, so reading one needs an inflater.
 # raven-scratch's ZIP writer stays dependency-free; this is the reader's cost.
 flate2 = "1"
-raven-asm = { path = "../raven-asm", version = "0.3.0" }
-raven-scratch = { path = "../raven-scratch", version = "0.3.0" }
+raven-asm = { path = "../raven-asm", version = "0.3.1" }
+raven-scratch = { path = "../raven-scratch", version = "0.3.1" }
 serde.workspace = true
 serde_json.workspace = true
