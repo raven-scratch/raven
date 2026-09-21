@@ -65,28 +65,28 @@ function digit(value, colour) {
       return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
     })
     .join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">${
+  return `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="26" height="26" viewBox="0 0 26 26">${
     `<g stroke="${colour}" stroke-width="3.5" stroke-linecap="round" fill="none">${lines}</g>`
   }</svg>`;
 }
 
 /** The outline of the cell the player is on. */
-const cursor = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">${
+const cursor = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="26" height="26" viewBox="0 0 26 26">${
   `<rect x="1.5" y="1.5" width="23" height="23" rx="3" fill="none" stroke="#1565c0" stroke-width="3"/>`
 }</svg>`;
 
 /** The tint under every other cell holding the digit the cursor is on. */
-const match = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">${
+const match = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="26" height="26" viewBox="0 0 26 26">${
   `<rect x="1" y="1" width="24" height="24" rx="3" fill="#4a90d9" fill-opacity="0.22"/>`
 }</svg>`;
 
 /** What a sprite parks on between redraws: one transparent pixel. */
-const dot = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1">${
+const dot = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1" height="1" viewBox="0 0 1 1">${
   `<rect width="1" height="1" fill="#000000" fill-opacity="0"/>`
 }</svg>`;
 
 /// The cell's own size, which is what the flash tile covers.
-const flash = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">${
+const flash = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="26" height="26" viewBox="0 0 26 26">${
   `<rect x="0.5" y="0.5" width="25" height="25" rx="2" fill="${FLASH}"/>`
 }</svg>`;
 
@@ -94,16 +94,33 @@ const flash = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" vi
 // The HUD font
 // ---------------------------------------------------------------------------
 
-// Every glyph is drawn inside a 6 by 10 box, with one unit of air all round for
-// the stroke, so the costume is 16 by 24 at a scale of two and a character
-// advances 19. The paths are deliberately a touch narrower than their box: a
-// stroke font reads better with air between the letters than with a full cell.
-const GLYPH_W = 16;
-const GLYPH_H = 24;
+// Every glyph is drawn inside a 6 by 10 box, and the costume is that box with a
+// unit of air all round for the stroke to fill: an 8 by 12 SVG, one character
+// per costume, advancing 19 at the sprite's 200%.
+//
+// The costume's `width`, `height` and `viewBox` are the same box, and that is not
+// decoration. Scratch draws a costume at its `width` and `height` and does not
+// scale a `viewBox` that disagrees with them, so a costume that asks for one size
+// and declares another renders at its own units in the top-left corner of the
+// larger box — a glyph at half size in the corner, which is exactly what a
+// mismatched costume looks like on the stage. Every costume this file writes is
+// 1:1 with its viewBox at the origin, and `check.mjs` fails the build if one is
+// not.
+const GLYPH_W = 8;
+const GLYPH_H = 12;
 const STROKE = 1.5;
 
+// The glyph box is 0..6 by 0..10 and the costume has a unit of air round it, so
+// every coordinate moves by one. Offsetting both axes by the same amount is what
+// lets this add one to every number in the path without reading its commands.
+function pad(path) {
+  return path.replace(/-?\d+(?:\.\d+)?/g, (number) =>
+    String(Number((Number(number) + 1).toFixed(3))),
+  );
+}
+
 const PATHS = {
-  "": "",
+  " ": "",
   A: "M0 10 L3 0 L6 10 M1.2 6.6 H4.8",
   B: "M0 10 V0 H3.4 Q5.8 0 5.8 2.5 Q5.8 5 3.4 5 H0 M3.4 5 Q5.8 5 5.8 7.5 Q5.8 10 3.4 10 H0",
   C: "M5.8 2.2 Q5.8 0 3.4 0 Q0 0 0 5 Q0 10 3.4 10 Q5.8 10 5.8 7.8",
@@ -149,9 +166,16 @@ const PATHS = {
 /** One character, as a stroked path in the shared 6x10 box. */
 function glyph(character) {
   const path = PATHS[character];
+  // The whole box is inked, at an opacity no one can see, before the letter is
+  // drawn on it. A costume's rotation centre is the middle of its box, and a
+  // letter that is narrower than its box would otherwise be centred on its own
+  // ink and land a shade off the pitch. The same wash is what gives the space
+  // something to be — a glyph with no ink at all has no box to measure.
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${GLYPH_W}" height="${GLYPH_H}" ` +
-    `viewBox="-1 -1 8 12"><path d="${path}" fill="none" stroke="#2b2b2b" ` +
+    `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="${GLYPH_W}" ` +
+    `height="${GLYPH_H}" viewBox="0 0 ${GLYPH_W} ${GLYPH_H}">` +
+    `<rect width="${GLYPH_W}" height="${GLYPH_H}" fill="#2b2b2b" fill-opacity="0.004"/>` +
+    `<path d="${pad(path)}" fill="none" stroke="#2b2b2b" ` +
     `stroke-width="${STROKE}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
   );
 }
@@ -178,7 +202,7 @@ const ALPHABET = [
 ];
 
 /** The backdrop: a quiet field, so the pen layer is the only contrast. */
-const backdrop = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360">${
+const backdrop = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="480" height="360" viewBox="0 0 480 360">${
   `<rect width="480" height="360" fill="#f6f4ef"/>`
 }</svg>`;
 

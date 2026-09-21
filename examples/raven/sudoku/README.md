@@ -78,8 +78,8 @@ the edge — is the HUD's column, and the play readout is centred on x = 129, wh
 is the middle of it. A twelve-character line is 172 wide, so it fits the column
 with room to spare and never reaches the board.
 
-The HUD writes at one size: a glyph is 16 by 24 on a 6 by 10 box with one unit of
-air for the stroke, and a character advances 19, so a long line is 342 wide and
+The HUD writes at one size: a glyph costume is 8 by 12 and the sprite runs at
+200%, so a character draws 16 by 24 and advances 19. A long line is 342 wide and
 still fits the full stage when one is centred on it. The menu, the wait for a
 puzzle and the two cards a run ends on are centred on the stage, because the board
 is not drawn on any of them — the pen layer is cleared and left empty for the text.
@@ -89,6 +89,14 @@ Every character is drawn as a stroke — lines and quadratic curves in an SVG pa
 with round caps and joins — rather than as a grid of pixels, so a letter is a
 letter at any size. The board's digits are strokes too, seven segments of a cell.
 Neither needs a font installed on the machine.
+
+A costume's `width`, `height` and `viewBox` are the same box, always, and that is
+load-bearing. Scratch draws a costume at its `width` and `height` and does not
+scale a `viewBox` that disagrees with them: a costume asking for one size and
+declaring another renders at its own units in the top-left corner of the larger
+box, which reads as a half-size glyph in the corner rather than an error. The size
+a glyph is drawn at is therefore the sprite's, set with `set_size_to`, and
+`check.mjs` fails any asset whose viewBox is not its own box at the origin.
 
 ## Why the puzzles never need a guess
 
@@ -175,7 +183,11 @@ stage.
 `assets.mjs` writes every costume. The board's are a backdrop, the parking pixel,
 the cursor outline, the same-digit tint, the blue wave tile, and a seven-segment
 digit in two faces — `given` for a clue, `user` for a value the player entered.
-The HUD's are one per character of the stroked font. The font's costumes are
-written in the order the HUD's `alphabet` list reads, because the HUD finds a
-character by counting from the first glyph — `check.mjs` compares the two lists
-and fails if they drift apart. Regenerate the costumes rather than editing them.
+The HUD's are one per character of the stroked font, 8 by 12 each: lines and
+quadratic curves padded by one unit so the stroke has room, on a glyph box that is
+washed in at an opacity no one can see, because a costume's rotation centre is the
+middle of its box and a letter narrower than its box would otherwise be centred on
+its own ink. The font's costumes are written in the order the HUD's `alphabet`
+list reads, because the HUD finds a character by counting from the first glyph —
+`check.mjs` compares the two lists, and checks that every asset is 1:1 with its own
+viewBox at the origin. Regenerate the costumes rather than editing them.

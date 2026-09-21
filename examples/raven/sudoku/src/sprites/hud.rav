@@ -59,9 +59,16 @@ sprite "Hud" {
     costume "fslash" = "assets/fslash.svg";
     costume "fgt" = "assets/fgt.svg";
 
-    /// One glyph box plus its air, in stage units: a glyph is 12 wide and 20
-    /// tall, so a character advances 16 and a ten-character line is 172 wide.
-    const PITCH: num = 16;
+    /// One glyph box plus its air, in stage units: a glyph costume is 8 wide and
+    /// 12 tall and the sprite runs at `SIZE`, so a character draws 16 by 24 and
+    /// advances 19. A ten-character line is 190 wide.
+    ///
+    /// The size is the sprite's rather than the costume's because a costume is
+    /// drawn at its own `width` and `height` and a `viewBox` that disagrees with
+    /// them is not scaled — so the costume is exactly one glyph box and the
+    /// scaling happens here, where it cannot be got wrong quietly.
+    const SIZE: num = 200;
+    const PITCH: num = 19;
 
     /// The right column: the readout during play is centred on it. The board
     /// ends at x = 6 and the stage at 240, so the column is the middle of what
@@ -154,6 +161,7 @@ sprite "Hud" {
 
     /// The whole display for the state the game is in.
     proc paint() warp {
+        looks::set_size_to(SIZE);
         if state == 0 {
             menu();
         } else {

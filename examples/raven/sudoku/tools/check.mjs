@@ -31,7 +31,7 @@
  *   ROUNDS           how many puzzles to deal per difficulty (default 3).
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -189,6 +189,43 @@ async function main() {
     return `state=${state} sel=${sel} clues=${clues} tries=${tries} mistakes=${mistakes}`;
   };
   const press = (key) => vm.runtime.startHats('event_whenkeypressed', { KEY_OPTION: key });
+
+  // Every costume has to be 1:1 with its own viewBox, at the origin.
+  //
+  // Scratch draws a costume at its `width` and `height` and does not scale a
+  // viewBox that disagrees with them, so a costume asking for one size and
+  // declaring another renders at its own units in the top-left corner of the
+  // larger box. Nothing in the VM notices — the pen layer is not readable — and
+  // the costume files still look right on their own, so this is the only place
+  // the mistake can be caught.
+  const assets = join(root, 'assets');
+  const svgs = readdirSync(assets).filter((name) => name.endsWith('.svg'));
+  check(svgs.length > 0, 'no costumes were generated');
+  for (const name of svgs) {
+    const tag = /<svg[^>]*>/.exec(readFileSync(join(assets, name), 'utf8'));
+    const attribute = (key) => {
+      const found = new RegExp(`\\b${key}="([-\\d.]+)"`).exec(tag ? tag[0] : '');
+      return found ? Number(found[1]) : NaN;
+    };
+    const width = attribute('width');
+    const height = attribute('height');
+    const box = /\bviewBox="([-\d.\s]+)"/.exec(tag ? tag[0] : '');
+    const [minX, minY, boxWidth, boxHeight] = box
+      ? box[1].trim().split(/\s+/).map(Number)
+      : [NaN, NaN, NaN, NaN];
+    check(
+      Number.isFinite(width) && Number.isFinite(height),
+      `${name}: the costume has no width or height`,
+    );
+    check(
+      minX === 0 && minY === 0,
+      `${name}: the viewBox starts at ${minX},${minY} rather than the origin`,
+    );
+    check(
+      boxWidth === width && boxHeight === height,
+      `${name}: the viewBox is ${boxWidth}x${boxHeight} but the costume is ${width}x${height}`,
+    );
+  }
 
   // The HUD finds a character's costume by counting from the first glyph, so the
   // costume order and the `alphabet` list have to be the same list written
