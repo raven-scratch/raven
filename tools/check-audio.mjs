@@ -46,6 +46,7 @@ function wavs(directory) {
 
 const files = wavs(join(root, "examples"));
 console.log(`${files.length} sound files`);
+const peakOf = new Map();
 for (const path of files) {
   const name = path.slice(root.length + 1).replace(/\\/g, "/");
   const parsed = read(readFileSync(path));
@@ -62,8 +63,31 @@ for (const path of files) {
   check(parsed.frames > parsed.rate / 100, `${name}: only ${parsed.frames} frames`);
   let peak = 0;
   for (const sample of parsed.samples) peak = Math.max(peak, Math.abs(sample));
-  check(peak > 0.2, `${name}: peak ${peak.toFixed(3)} is nearly silent`);
+  check(peak > 0.01, `${name}: peak ${peak.toFixed(3)} is nearly silent`);
   check(peak <= 1, `${name}: peak ${peak.toFixed(3)} clips`);
+  peakOf.set(name, peak);
+}
+
+// The music has to sit under the effects, not beside them. An effect that a
+// player cannot pick out over the loop is an effect they do not notice, and the
+// volume of a generated file is a number in the generator, so it is worth a
+// check rather than an ear.
+const BACKGROUND = [
+  "examples/raven/tetris/assets/theme.wav",
+  "examples/raven/sudoku/assets/ambient.wav",
+];
+for (const name of BACKGROUND) {
+  const peak = peakOf.get(name);
+  const loudest = Math.max(
+    ...[...peakOf]
+      .filter(([other]) => !BACKGROUND.includes(other))
+      .map(([, value]) => value),
+  );
+  check(
+    peak < loudest,
+    `${name}: peak ${peak.toFixed(3)} is not under the effects at ${loudest.toFixed(3)}`,
+  );
+  console.log(`  ${name}: peak ${peak.toFixed(3)} against effects at ${loudest.toFixed(3)}`);
 }
 
 /**

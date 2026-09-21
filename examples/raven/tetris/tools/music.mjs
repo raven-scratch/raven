@@ -50,9 +50,14 @@ const BASS = [[A2, 4], [A2, 4], [E2, 4], [A2, 4], [D3, 4], [A2, 4], [E2, 4], [A2
 
 /// The tune, as data, so `tools/check-audio.mjs` can ask the WAV whether it is
 /// the tune this file says it is.
+///
+/// `level` is the whole tune's loudness, and it is a third of what the synthesizer
+/// would otherwise peak at: the music plays under the effects, which are at full
+/// and are the ones that have to be heard over it.
 export const TUNE = {
   tempo: 150,
   rate: TUNE_RATE,
+  level: 0.3,
   voices: [
     { wave: "square", level: 0.55, notes: MELODY },
     { wave: "triangle", level: 0.7, notes: BASS },

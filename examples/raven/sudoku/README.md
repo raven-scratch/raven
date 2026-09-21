@@ -238,8 +238,11 @@ grew a `for` loop. The soundtrack is written, and stays, without a local.
 The audio is checked, not assumed: `node tools/check-audio.mjs` reads every WAV
 the examples ship, and asks each note of each tune whether the samples at that
 moment are really at the pitch the tune gives it — against the semitone either
-side, which is the point at which a listener says the note is wrong. The check
-shares the tune data with the generator rather than copying it, so it cannot drift.
+side, which is the point at which a listener says the note is wrong. It also
+checks the loop's peak is *below* the effects', because an effect a player cannot
+pick out over the background is an effect they do not notice: the loop is rendered
+at 30% and the effects at 80%. The check shares the tune data with the generator
+rather than copying it, so it cannot drift.
 
 ## What it is made of
 
