@@ -1,0 +1,15 @@
+# Written by raven-re from a Scratch 3 project.
+#
+#   raven-asm check     parse and validate without writing anything
+#   raven-asm build     compile this project into dist/C7 多边形涂色.sb3
+#
+# Paths in this file are relative to it.
+
+[project]
+name = "C7 多边形涂色"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/stage.rasm"
+sprites = ["src/sprites/点.rasm", "src/sprites/画多边形.rasm"]

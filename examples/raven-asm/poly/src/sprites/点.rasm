@@ -1,0 +1,43 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "点" {
+    // the project calls this `克隆体`; raven-asm cannot write that as an identifier
+    var re_e5858be99a86e4bd93 = "0"; at 5 212
+    costume "造型1" = "assets/0791ccd9e9972c5036ec9acda7664248.svg" center 6.000000000000028 6;
+
+    event_whenflagclicked {
+        looks_hide;
+        data_setvariableto("re_e5858be99a86e4bd93", "0");
+    }
+
+    event_whenbroadcastreceived("发送位置") {
+        control_if(operator_equals(data_variable("re_e5858be99a86e4bd93"), "1")) {
+            data_addtolist(motion_xposition(), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087");
+            data_addtolist(motion_yposition(), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087");
+        }
+    }
+
+    event_whenbroadcastreceived("点") {
+        control_if(operator_equals(data_variable("re_e5858be99a86e4bd93"), "0")) {
+            control_create_clone_of("_myself_");
+        }
+    }
+
+    control_start_as_clone {
+        motion_goto("_mouse_");
+        looks_show;
+        data_setvariableto("re_e5858be99a86e4bd93", "1");
+    }
+
+    event_whenthisspriteclicked {
+        control_repeat_until(operator_not(sensing_mousedown())) {
+            motion_goto("_mouse_");
+        }
+        control_if(sensing_touchingobject("_edge_")) {
+            control_delete_this_clone;
+        }
+    }
+}

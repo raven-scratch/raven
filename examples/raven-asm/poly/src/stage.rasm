@@ -1,0 +1,15 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+
+stage {
+    broadcast "发送位置";
+    broadcast "点";
+    // the project calls this `[画多边形]顶点坐标`; raven-asm cannot write that as an identifier
+    list re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087 = [193, 53, -75, -159, 21, 169, 93, -162, -172, 57]; at 2 127
+    costume "背景1" = "assets/9af27a7ad39ec41b7cbfda3622d08a1a.svg" center 240 180;
+
+    event_whenstageclicked {
+        event_broadcast("点");
+    }
+}

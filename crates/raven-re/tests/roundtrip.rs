@@ -461,6 +461,74 @@ fn the_encoding_is_a_function_of_the_name_alone() {
     assert!(is_keyword("warp"));
 }
 
+/// The names an encoding can collide with are the ones already taken.
+///
+/// Hex is injective, so two different names never encode to the same string;
+/// what an encoding *can* collide with is a name the project really had that
+/// looks like one. Declarations are therefore handed out through a set that
+/// every claim goes through, and a second claim of the same string is moved
+/// aside deterministically instead of silently duplicating.
+#[test]
+fn names_that_collide_with_an_encoding_are_still_unique() {
+    let encoded = encode("my score");
+    let json = format!(
+        r#"{{
+        "targets": [
+            {{"isStage": true, "name": "Stage",
+              "variables": {{
+                "v1": ["my score", 0],
+                "v2": ["{encoded}", 0],
+                "v3": ["var", 0],
+                "v4": ["score", 0],
+                "v5": ["score", 0],
+                "v6": ["1st", 0],
+                "v7": ["my_score", 0]
+              }},
+              "lists": {{"l1": ["my score", []]}}, "broadcasts": {{}},
+              "blocks": {{}}, "comments": {{}}, "currentCostume": 0, "costumes": [{}], "sounds": [],
+              "volume": 100, "layerOrder": 0}}
+        ],
+        "monitors": [], "extensions": [],
+        "meta": {{"semver": "3.0.0", "vm": "0.2.0", "agent": "none"}}
+    }}"#,
+        costume()
+    );
+
+    let bytes = pack_json(&json);
+    let decompiled = decompile(&bytes, "demo").expect("reverse");
+    let root = scratch_dir("colliding-names");
+    write_decompiled(&decompiled, &root);
+
+    let stage = std::fs::read_to_string(root.join("src/stage.rasm")).expect("read the stage");
+    let mut declared: Vec<String> = Vec::new();
+    for line in stage.lines() {
+        let line = line.trim_start().trim_start_matches("visible ");
+        for kind in ["var ", "list "] {
+            if let Some(rest) = line.strip_prefix(kind) {
+                let name = rest.split([' ', '=']).next().expect("a name").to_string();
+                declared.push(name);
+            }
+        }
+    }
+    assert_eq!(declared.len(), 8, "{stage}");
+    let mut unique = declared.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        declared.len(),
+        "two declarations share a name: {declared:?}"
+    );
+    assert!(declared.contains(&encoded), "{declared:?}");
+
+    // The point of the encoding is that what came out compiles.
+    raven_asm::compile::build(&root.join("raven-asm.toml")).expect("the reversed project compiles");
+
+    // And the collision is broken the same way every time.
+    let again = decompile(&bytes, "demo").expect("reverse again");
+    assert_eq!(decompiled.files, again.files);
+}
+
 // ---------------------------------------------------------------------------
 // Blocks that are not part of a script
 // ---------------------------------------------------------------------------

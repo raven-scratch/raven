@@ -1,0 +1,98 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "画多边形" {
+    // the project calls this `<画多边形>i`; raven-asm cannot write that as an identifier
+    var re_3ce794bbe5a49ae8beb9e5bda23e69 = "0"; at 5 5
+    var fy1 = 170; at 5 35
+    var fy2 = 169; at 5 65
+    // the project calls this `<画多边形>检查列表`; raven-asm cannot write that as an identifier
+    list re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8 = [21, 21]; at 378 30
+    costume "造型1" = "assets/3339a2953a3bf62bb80e54ff575dbced.svg" center 0 0;
+
+    event_whenflagclicked {
+        control_forever {
+            data_deletealloflist("re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087");
+            event_broadcastandwait("发送位置");
+            pen_clear;
+            re_e5a1abe58585;
+            re_e68f8fe8beb9;
+        }
+    }
+
+    proc re_e68f8fe8beb9() warp {
+        pen_setPenColorToColor("#000000");
+        pen_setPenSizeTo("1");
+        data_setvariableto("re_3ce794bbe5a49ae8beb9e5bda23e69", "0");
+        motion_gotoxy(data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+        pen_penDown;
+        control_repeat(operator_subtract(operator_divide(data_lengthoflist("re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), "2"), "1")) {
+            data_changevariableby("re_3ce794bbe5a49ae8beb9e5bda23e69", "2");
+            motion_gotoxy(data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+        }
+        data_setvariableto("re_3ce794bbe5a49ae8beb9e5bda23e69", "0");
+        motion_gotoxy(data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+        pen_penUp;
+    }
+
+    proc re_e5a1abe58585() warp {
+        pen_setPenColorToColor("#cccccc");
+        pen_setPenSizeTo("1");
+        data_setvariableto("fy1", "180");
+        data_setvariableto("fy2", "-180");
+        data_setvariableto("re_3ce794bbe5a49ae8beb9e5bda23e69", "0");
+        control_repeat(operator_divide(data_lengthoflist("re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), "2")) {
+            data_changevariableby("re_3ce794bbe5a49ae8beb9e5bda23e69", "2");
+            control_if(operator_lt(data_itemoflist(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_variable("fy1"))) {
+                data_setvariableto("fy1", data_itemoflist(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+            }
+            control_if(operator_gt(data_itemoflist(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_variable("fy2"))) {
+                data_setvariableto("fy2", data_itemoflist(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+            }
+        }
+        data_setvariableto("fy1", operator_mathop("ceiling", data_variable("fy1")));
+        control_repeat(operator_add(operator_subtract(operator_mathop("floor", data_variable("fy2")), data_variable("fy1")), "1")) {
+            data_deletealloflist("re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8");
+            re_e6a380e69fa5e58897e8a1a8(data_variable("fy1"));
+            motion_sety(data_variable("fy1"));
+            data_setvariableto("re_3ce794bbe5a49ae8beb9e5bda23e69", "0");
+            control_repeat(operator_divide(data_lengthoflist("re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8"), "2")) {
+                motion_setx(data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8"));
+                pen_penDown;
+                motion_setx(data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8"));
+                pen_penUp;
+                data_changevariableby("re_3ce794bbe5a49ae8beb9e5bda23e69", "2");
+            }
+            data_changevariableby("fy1", "1");
+        }
+    }
+
+    proc re_e6a380e69fa5e58897e8a1a8(y: str) {
+        data_setvariableto("re_3ce794bbe5a49ae8beb9e5bda23e69", "0");
+        control_repeat(operator_subtract(operator_divide(data_lengthoflist("re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), "2"), "1")) {
+            re_e6a380e69fa5e4baa4e782b9(argument_reporter_string_number("y"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "3"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "4"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+            data_changevariableby("re_3ce794bbe5a49ae8beb9e5bda23e69", "2");
+        }
+        re_e6a380e69fa5e4baa4e782b9(argument_reporter_string_number("y"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "1"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist(operator_add(data_variable("re_3ce794bbe5a49ae8beb9e5bda23e69"), "2"), "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist("1", "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"), data_itemoflist("2", "re_5be794bbe5a49ae8beb9e5bda25de9a1b6e782b9e59d90e6a087"));
+    }
+
+    proc re_e6a380e69fa5e4baa4e782b9(y: str, x1: str, y1: str, x2: str, y2: str) {
+        control_if_else(operator_gt(argument_reporter_string_number("y1"), argument_reporter_string_number("y2"))) {
+            re_e6a380e69fa5e4baa4e782b9(argument_reporter_string_number("y"), argument_reporter_string_number("x2"), argument_reporter_string_number("y2"), argument_reporter_string_number("x1"), argument_reporter_string_number("y1"));
+        } else {
+            control_if(operator_and(operator_lt(argument_reporter_string_number("y1"), argument_reporter_string_number("y")), operator_not(operator_lt(argument_reporter_string_number("y2"), argument_reporter_string_number("y"))))) {
+                re_e58aa0e585a5e58897e8a1a8(operator_add(argument_reporter_string_number("x1"), operator_multiply(operator_subtract(argument_reporter_string_number("x2"), argument_reporter_string_number("x1")), operator_divide(operator_subtract(argument_reporter_string_number("y"), argument_reporter_string_number("y1")), operator_subtract(argument_reporter_string_number("y2"), argument_reporter_string_number("y1"))))), "1");
+            }
+        }
+    }
+
+    proc re_e58aa0e585a5e58897e8a1a8(x: str, n: str) warp {
+        control_if_else(operator_or(operator_gt(data_itemoflist(argument_reporter_string_number("n"), "re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8"), argument_reporter_string_number("x")), operator_gt(argument_reporter_string_number("n"), data_lengthoflist("re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8")))) {
+            data_insertatlist(argument_reporter_string_number("x"), argument_reporter_string_number("n"), "re_3ce794bbe5a49ae8beb9e5bda23ee6a380e69fa5e58897e8a1a8");
+        } else {
+            re_e58aa0e585a5e58897e8a1a8(argument_reporter_string_number("x"), operator_add(argument_reporter_string_number("n"), "1"));
+        }
+    }
+}
