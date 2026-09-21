@@ -49,6 +49,21 @@ sprite "Board" {
     costume "user8" = "assets/user8.svg";
     costume "user9" = "assets/user9.svg";
 
+    /// One file per effect, which is `tools/sounds.mjs`'s output. Regenerate them
+    /// rather than editing them.
+    ///
+    /// A sound is *started* by `play`, not waited for, so an effect returns at
+    /// once and can be asked for from the key handler that caused it. The note
+    /// blocks of the Music extension cannot: those wait for the length of the
+    /// note, and Scratch drops a key press that arrives while a thread from the
+    /// same key hat is still running.
+    sound "good" = "assets/good.wav";
+    sound "bad" = "assets/bad.wav";
+    sound "unit" = "assets/unit.wav";
+    sound "win" = "assets/win.wav";
+    sound "lose" = "assets/lose.wav";
+    sound "move" = "assets/move.wav";
+
     /// One cell, and the grid, in stage units.
     ///
     /// The stage is 480 by 360 and the board takes the left of it: 9 cells of 26
@@ -84,15 +99,6 @@ sprite "Board" {
     /// whole board rather than one of the twenty-seven units.
     var queue: list<num> = [];
     const BOARD: num = 100;
-
-    /// Which effect to play next, and the codes for them.
-    var sfx_kind: num = 0;
-    const SFX_GOOD: num = 1;
-    const SFX_BAD: num = 2;
-    const SFX_UNIT: num = 3;
-    const SFX_WIN: num = 4;
-    const SFX_LOSE: num = 5;
-    const SFX_MOVE: num = 6;
 
     /// Which of the twenty-seven units have already had their wave, so a cell
     /// that is cleared and filled again does not set one off twice.
@@ -623,7 +629,7 @@ sprite "Board" {
         let next = sel + step;
         if next >= 1 && next <= 3 {
             sel = next;
-            sfx(SFX_MOVE);
+            sound::play(Sound::Move);
             redraw();
         }
     }
@@ -701,7 +707,7 @@ sprite "Board" {
 
     proc lose() warp {
         state = 3;
-        sfx(SFX_LOSE);
+        sound::play(Sound::Lose);
         redraw();
     }
 
@@ -729,7 +735,7 @@ sprite "Board" {
             let cell = cursor;
             cells[cell] = d;
             queue_waves(cell);
-            sfx(SFX_GOOD);
+            sound::play(Sound::Good);
             if queue.len() == 0 {
                 redraw();
             } else {
@@ -738,7 +744,7 @@ sprite "Board" {
         } else {
             mistakes += 1;
             tries -= 1;
-            sfx(SFX_BAD);
+            sound::play(Sound::Bad);
             if mistakes >= TRIES {
                 lose();
             } else {
@@ -986,52 +992,6 @@ sprite "Board" {
         }
     }
 
-    /// Ask for an effect by code.
-    ///
-    /// Every note block waits for the length of the note it plays, and a key hat
-    /// that is still running swallows the next press of that key — so an effect
-    /// can never play on the handler that asked for it. The code goes in a cell
-    /// and one broadcast hands it to a thread of its own, which is the same
-    /// arrangement the waves use and for the same reason. A second effect
-    /// restarts that thread, so a run of them is the last one rather than all of
-    /// them at once.
-    proc sfx(kind: num) warp {
-        sfx_kind = kind;
-        events::broadcast("sfx");
-    }
-
-    /// The effects themselves, a few notes each. The tempo is the stage's, set by
-    /// the music, so a beat here is the same beat the tune uses.
-    on broadcast_received("sfx") {
-        match sfx_kind {
-            SFX_GOOD => {
-                music::play_note_for_beats(88, 0.06);
-            },
-            SFX_BAD => {
-                music::play_note_for_beats(41, 0.14);
-            },
-            SFX_UNIT => {
-                music::play_note_for_beats(84, 0.1);
-                music::play_note_for_beats(88, 0.1);
-                music::play_note_for_beats(91, 0.14);
-            },
-            SFX_WIN => {
-                music::play_note_for_beats(72, 0.16);
-                music::play_note_for_beats(76, 0.16);
-                music::play_note_for_beats(79, 0.16);
-                music::play_note_for_beats(84, 0.4);
-            },
-            SFX_LOSE => {
-                music::play_note_for_beats(60, 0.2);
-                music::play_note_for_beats(54, 0.2);
-                music::play_note_for_beats(48, 0.5);
-            },
-            _ => {
-                music::play_note_for_beats(79, 0.05);
-            }
-        }
-    }
-
     /// A finished line, a finished box or a finished board asks for its wave, in
     /// that order, and the win card comes after the last of them. Running them
     /// here rather than in the key handler is the point: the animation waits, and
@@ -1046,12 +1006,12 @@ sprite "Board" {
             queue.remove(1);
             if uid == BOARD {
                 setup_board();
-                sfx(SFX_WIN);
+                sound::play(Sound::Win);
                 wave();
                 win();
             } else {
                 setup_unit(uid);
-                sfx(SFX_UNIT);
+                sound::play(Sound::Unit);
                 wave();
             }
         }

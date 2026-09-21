@@ -39,7 +39,21 @@ stage {
     /// its own and lets the key handler end.
     broadcast "wave";
 
-    /// The board asks for an effect on this: the code for it is in the board's
-    /// own `sfx_kind`, because a broadcast carries no argument.
-    broadcast "sfx";
+    /// The background loop, which is `tools/sounds.mjs`'s output. Regenerate it
+    /// rather than editing it.
+    sound "ambient" = "assets/ambient.wav";
+
+    /// The loop plays for as long as the project runs.
+    ///
+    /// `play_until_done` waits for the sound it names, so a `forever` around it is
+    /// the loop — a Scratch sound cannot be told to loop by itself. This script
+    /// keeps no `let` on purpose: a stage script that keeps one and a sprite script
+    /// that keeps one both want a list called `_stack1`, and the stage's lists are
+    /// project-wide, so the second is refused as shadowing the first. A script
+    /// with no locals is safe anywhere.
+    on flag_clicked {
+        forever {
+            sound::play_until_done(Sound::Ambient);
+        }
+    }
 }

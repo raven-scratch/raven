@@ -82,48 +82,53 @@ redraw, the line clear, the spawn, the hard drop.
 
 ## Music and sound
 
-The sound effects are the `sound` extension playing the WAV files under
-`assets/`: a move, a rotate, a drop, a clear, a tetris and the game-over sting,
-each played by the block that does the thing — `sound::play(Sound::Clear)` is a
-started sample, so it returns immediately and never holds up the key that asked
-for it.
+All of it is the `sound` extension playing WAV files under `assets/`, and every one
+of them is started by `sound::play` — a sample that begins and returns, so nothing
+waits and no key handler is held up.
 
-The background music is the `music` extension and no file at all. A tune is
-sixteen note numbers — middle C is 60 — so it is a list, and a `forever` loop
-walks it at the stage's tempo:
+The effects are a move, a rotate, a drop, a clear, a tetris and the game-over
+sting, each played by the block that does the thing.
+
+The background music is Korobeiniki: the Russian folk song the game has been
+playing since 1984, and in the public domain for a century. It is not recorded
+here and it is not a quotation of anyone's arrangement — it is *generated*, from
+the tune written as notes:
+
+```sh
+node examples/raven/tetris/tools/music.mjs     # writes assets/theme.wav
+```
+
+`tools/music.mjs` holds the melody and the bass as note numbers with lengths in
+beats, and `tools/synth.mjs` renders them: a band-limited square for the tune, a
+triangle for one root a bar, an envelope so no note clicks, and a WAV header
+around the result. Twelve and a half seconds of it, which is the loop.
 
 ```rav
-var melody: list<num> = [
-    57, 69, 76, 72, 53, 65, 72, 69, 60, 72, 79, 76, 55, 67, 74, 71
-];
+sound "theme" = "assets/theme.wav";
 
 on flag_clicked {
-    music::set_tempo(TEMPO);
     forever {
-        for note in melody {
-            music::play_note_for_beats(note, 0.25);
-        }
+        sound::play_until_done(Sound::Theme);
     }
 }
 ```
 
-Sixteen notes over Am, F, C and G — the root an octave down, then the triad above
-it. A note block waits for the length of the note, which is what makes a loop a
-melody rather than a chord.
+`play_until_done` is the one block that waits, which is exactly what a loop wants:
+a Scratch sound cannot be told to loop by itself, so the `forever` is the loop.
 
-The tempo is the one thing the two share, and it is set once: the Music extension
-keeps it on the *stage*, not on the target that set it, so a second `set_tempo`
-anywhere would move the first one too.
+The script is on the stage, and it keeps no `let` — that is the condition for
+being there. A script's block-scoped cells live in a list named `_stack1`,
+`_stack2` and so on, numbered per file; a stage's lists are project-wide and a
+sprite's are its own, so a stage script that keeps a `let` and a sprite script
+that keeps one both ask for a list called `_stack1` and the compiler refuses the
+second as shadowing the first. This project happens not to trip it, but
+`examples/raven/sudoku` did the moment its stage grew a `for` loop, so no stage
+script in either project keeps a local.
 
-The music lives on the Hud sprite rather than on the stage because of how a
-script's locals are stored. A script's block-scoped cells — every `let`, every
-`for` counter — go in a list named `_stack1`, `_stack2` and so on, numbered per
-file. A stage's lists are project-wide and a sprite's are its own, so a stage
-script that keeps a `let` and a sprite script that keeps one both ask for a list
-called `_stack1`, and the compiler refuses the second as shadowing the first. This
-project happens not to trip it — its sprites need no script stack at all — but
-`examples/raven/sudoku` did the moment its stage grew a `for` loop, so the music
-is on a sprite in both.
+The audio is checked, not assumed: `node tools/check-audio.mjs` reads every WAV
+the examples ship, and asks each note of each tune whether the samples at that
+moment are really at the pitch the tune gives it — against the semitone either
+side, which is the point at which a listener says the note is wrong.
 
 ## Scoring
 

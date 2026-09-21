@@ -47,6 +47,7 @@ cargo run -p raven -- explain rules        # the language, for a machine reader
 cargo run -p raven-asm -- catalog --markdown > docs/reference/blocks.md   # regenerate
 cd docs && npm install && npm run build                                   # docs site
 node tools/validate-sb3.js <file.sb3> --steps 1500   # real Scratch VM (needs SCRATCH_VM_ROOT)
+node tools/check-audio.mjs                 # the generated WAVs, against the tunes
 ```
 
 `tools/validate-sb3.js` needs a checkout of `scratch-editor`'s `scratch-vm`; set
@@ -98,6 +99,7 @@ README explaining the shape of the code. It is not wired into CI or the test
 suite — build it by hand when a change touches the emitted blocks:
 
 ```sh
+node examples/raven/tetris/tools/music.mjs         # the theme
 cargo run -p raven -- check  -m examples/raven/tetris/raven.toml
 cargo run -p raven -- build  -m examples/raven/tetris/raven.toml --debug
 node tools/validate-sb3.js examples/raven/tetris/dist/tetris.sb3 --steps 1500
@@ -111,6 +113,7 @@ that check solves the puzzles the project deals with a solver written outside it
 
 ```sh
 node examples/raven/sudoku/tools/assets.mjs       # the costumes
+node examples/raven/sudoku/tools/sounds.mjs       # the loop and the effects
 cargo run -p raven -- check -m examples/raven/sudoku/raven.toml
 cargo run -p raven -- build -m examples/raven/sudoku/raven.toml
 SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs

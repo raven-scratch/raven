@@ -228,13 +228,16 @@ async function main() {
   }
 
   // A project has to declare every extension its blocks need, or Scratch opens it
-  // with those blocks missing: `pen` for everything drawn, `music` for the tune
-  // and the effects. raven derives the list from the blocks it emitted, and this
-  // is what says so.
+  // with those blocks missing: `pen` for everything drawn. The audio is files
+  // played by the `sound` extension, which is built in and declares nothing.
   const declared = JSON.parse(vm.toJSON()).extensions || [];
-  for (const name of ['pen', 'music']) {
+  for (const name of ['pen']) {
     check(declared.includes(name), `the project does not declare the ${name} extension`);
   }
+  check(
+    !declared.includes('music'),
+    'the project declares the music extension but plays audio files instead',
+  );
 
   // The HUD finds a character's costume by counting from the first glyph, so the
   // costume order and the `alphabet` list have to be the same list written

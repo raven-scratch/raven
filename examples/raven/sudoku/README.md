@@ -187,38 +187,59 @@ is the knob to turn when the generator changes.
 
 ## Music and sound
 
-All of it is the `music` extension, and none of it is a file.
+All of it is the `sound` extension playing WAV files, and every effect is started
+by `sound::play` — a sample that begins and returns, so an effect can be asked for
+from the key handler that caused it and never holds that key up.
 
-The background music is a list of sixteen note numbers — middle C is 60 — walked
-by a `forever` loop at the stage's tempo, sixteen slow notes over C, Am, D and G.
-A note block waits for the length of the note, which is what makes a loop a melody
-rather than a chord.
+The background is an original loop, not a quotation. There is no theme that
+belongs to Sudoku the way Korobeiniki belongs to Tetris; puzzle games generally
+license something quiet, and a licensed track is not something to copy into a
+repository. So it is a slow arpeggio over C, Am, F and G with a root under it —
+written, like the effects, as notes and rendered to audio:
 
-The effects are a few notes each, and there is one for each thing that happens: a
-blip when a cell takes its digit, a low buzz when one is refused, a rising
-arpeggio when a line or a box finishes, a fanfare when the board does, a fall when
-the tries run out, and a tick as the menu's marker moves.
+```sh
+node examples/raven/sudoku/tools/sounds.mjs    # writes assets/ambient.wav and six effects
+```
 
-An effect cannot play on the handler that asked for it. A note block waits for the
-length of the note, and Scratch drops a key press that arrives while a thread from
-the same key hat is still running — the same reason the waves are broadcast. So
-the effect's code goes in a cell, one broadcast hands it to a thread of its own,
-and a second effect restarts that thread: a run of them is the last one rather
-than all of them at once. The wave thread asks for its own effects at the same
-point, so a finished line plays its arpeggio and then sweeps.
+`tools/sounds.mjs` holds the loop and the effects as note numbers with lengths in
+beats, and `tools/synth.mjs` renders them. Twelve and a half seconds of loop; the
+effects are all under half a second, one per event:
 
-The tempo is the one thing the tune and the effects share, and it is set once. The
-Music extension keeps it on the *stage* rather than on the target that set it, so
-a second `set_tempo` anywhere would move the first one too.
+| Sound | When |
+| --- | --- |
+| `good` | A cell took its digit. |
+| `bad` | A digit was refused. |
+| `unit` | A line or a box finished. |
+| `win` | The board is solved. |
+| `lose` | The tries ran out. |
+| `move` | The menu's marker moved. |
 
-The music lives on the Hud sprite rather than on the stage because of how a
-script's locals are stored. A script's block-scoped cells — every `let`, every
-`for` counter — go in a list named `_stack1`, `_stack2` and so on, numbered per
-file. A stage's lists are project-wide and a sprite's are its own, so a stage
-script that keeps a `let` and a sprite script that keeps one both ask for a list
-called `_stack1`, and the compiler refuses the second as shadowing the first —
-which is exactly what the Board did the moment the stage grew a `for` loop. The
-music is on a sprite so the stage has no script stack to collide with.
+```rav
+sound "ambient" = "assets/ambient.wav";
+
+on flag_clicked {
+    forever {
+        sound::play_until_done(Sound::Ambient);
+    }
+}
+```
+
+`play_until_done` is the one block that waits, which is what a loop wants: a
+Scratch sound cannot be told to loop by itself, so the `forever` is the loop.
+
+The script is on the stage, and it keeps no `let` — that is the condition for
+being there. A script's block-scoped cells live in a list named `_stack1`,
+`_stack2` and so on, numbered per file; a stage's lists are project-wide and a
+sprite's are its own, so a stage script that keeps a `let` and a sprite script that
+keeps one both ask for a list called `_stack1`, and the compiler refuses the second
+as shadowing the first — which is exactly what the Board did the moment the stage
+grew a `for` loop. The soundtrack is written, and stays, without a local.
+
+The audio is checked, not assumed: `node tools/check-audio.mjs` reads every WAV
+the examples ship, and asks each note of each tune whether the samples at that
+moment are really at the pitch the tune gives it — against the semitone either
+side, which is the point at which a listener says the note is wrong. The check
+shares the tune data with the generator rather than copying it, so it cannot drift.
 
 ## What it is made of
 

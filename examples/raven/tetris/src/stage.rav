@@ -42,4 +42,23 @@ stage {
     /// The Hud redraws itself on this: Board clears the pen layer and draws
     /// the field, then asks for the text.
     broadcast "hud";
+
+    /// The Tetris theme, which is `tools/music.mjs`'s output: Korobeiniki, the
+    /// Russian folk song the game has been playing since 1984, rendered to a WAV
+    /// rather than played as notes. Regenerate it rather than editing it.
+    sound "theme" = "assets/theme.wav";
+
+    /// The theme plays for as long as the project runs.
+    ///
+    /// `play_until_done` waits for the sound it names, so a `forever` around it is
+    /// the loop — a Scratch sound cannot be told to loop by itself. This script
+    /// keeps no `let` on purpose: a stage script that keeps one and a sprite script
+    /// that keeps one both want a list called `_stack1`, and the stage's lists are
+    /// project-wide, so the second is refused as shadowing the first. A script with
+    /// no locals is safe anywhere.
+    on flag_clicked {
+        forever {
+            sound::play_until_done(Sound::Theme);
+        }
+    }
 }
