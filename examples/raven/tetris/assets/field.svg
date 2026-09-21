@@ -14,8 +14,8 @@
     <rect x="159" y="339" width="20" height="2"/><rect x="159" y="319" width="2" height="20"/>
     <rect x="301" y="339" width="20" height="2"/><rect x="319" y="319" width="2" height="20"/>
   </g>
-  <rect x="344" y="44" width="88" height="80" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
-  <rect x="346" y="46" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
-  <rect x="344" y="268" width="88" height="74" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
-  <rect x="346" y="270" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
+  <rect x="340" y="10" width="132" height="110" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
+  <rect x="342" y="12" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
+  <rect x="340" y="128" width="132" height="228" fill="#05080D" stroke="#1E2A3A" stroke-width="2"/>
+  <rect x="342" y="130" width="30" height="2" fill="#22D3EE" fill-opacity="0.28"/>
 </svg>

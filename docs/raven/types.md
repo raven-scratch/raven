@@ -192,12 +192,12 @@ hold `0` before any script runs.
 
 ## Monitors
 
-A watched value gets a monitor, and where it goes is the editor's decision
-unless the code makes it: a cell that is watched declares a real Scratch
-variable with `visible` set, and the editor places a monitor it is not given a
-position for exactly as it places one for a variable made by hand. Nothing about
-the layout is a compiler's guess, and `at X Y` (on a `var` or `list` in
-raven-asm) pins one down when a project wants an exact spot.
+A watched value gets a monitor: a cell that is watched declares a real Scratch
+variable with `visible` set, and the project carries one monitor record for it. A
+watched value with no position of its own is stacked down the left edge of the
+stage, one row each, so two of them never sit on top of each other;
+`at X Y`, `large` and `slider MIN MAX` on a `var` or a `list` in raven-asm pin one
+down when a project wants an exact spot.
 
 ## Lists
 

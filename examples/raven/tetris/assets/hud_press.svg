@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="108" height="20" viewBox="0 0 108 20">
-  <g fill="#8A94A6">
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="76" height="20" viewBox="0 0 76 20">
+  <g fill="#FFD23F">
   <rect x="0" y="0" width="4" height="4"/>
   <rect x="4" y="0" width="4" height="4"/>
   <rect x="8" y="0" width="4" height="4"/>
@@ -9,19 +9,18 @@
   <rect x="4" y="8" width="4" height="4"/>
   <rect x="8" y="8" width="4" height="4"/>
   <rect x="0" y="12" width="4" height="4"/>
-  <rect x="4" y="12" width="4" height="4"/>
   <rect x="0" y="16" width="4" height="4"/>
-  <rect x="8" y="16" width="4" height="4"/>
   <rect x="16" y="0" width="4" height="4"/>
   <rect x="20" y="0" width="4" height="4"/>
   <rect x="24" y="0" width="4" height="4"/>
   <rect x="16" y="4" width="4" height="4"/>
+  <rect x="24" y="4" width="4" height="4"/>
   <rect x="16" y="8" width="4" height="4"/>
   <rect x="20" y="8" width="4" height="4"/>
   <rect x="24" y="8" width="4" height="4"/>
   <rect x="16" y="12" width="4" height="4"/>
+  <rect x="20" y="12" width="4" height="4"/>
   <rect x="16" y="16" width="4" height="4"/>
-  <rect x="20" y="16" width="4" height="4"/>
   <rect x="24" y="16" width="4" height="4"/>
   <rect x="32" y="0" width="4" height="4"/>
   <rect x="36" y="0" width="4" height="4"/>
@@ -30,47 +29,31 @@
   <rect x="32" y="8" width="4" height="4"/>
   <rect x="36" y="8" width="4" height="4"/>
   <rect x="40" y="8" width="4" height="4"/>
-  <rect x="40" y="12" width="4" height="4"/>
+  <rect x="32" y="12" width="4" height="4"/>
   <rect x="32" y="16" width="4" height="4"/>
   <rect x="36" y="16" width="4" height="4"/>
   <rect x="40" y="16" width="4" height="4"/>
   <rect x="48" y="0" width="4" height="4"/>
   <rect x="52" y="0" width="4" height="4"/>
   <rect x="56" y="0" width="4" height="4"/>
-  <rect x="52" y="4" width="4" height="4"/>
+  <rect x="48" y="4" width="4" height="4"/>
+  <rect x="48" y="8" width="4" height="4"/>
   <rect x="52" y="8" width="4" height="4"/>
-  <rect x="52" y="12" width="4" height="4"/>
+  <rect x="56" y="8" width="4" height="4"/>
+  <rect x="56" y="12" width="4" height="4"/>
+  <rect x="48" y="16" width="4" height="4"/>
   <rect x="52" y="16" width="4" height="4"/>
+  <rect x="56" y="16" width="4" height="4"/>
   <rect x="64" y="0" width="4" height="4"/>
   <rect x="68" y="0" width="4" height="4"/>
   <rect x="72" y="0" width="4" height="4"/>
   <rect x="64" y="4" width="4" height="4"/>
-  <rect x="72" y="4" width="4" height="4"/>
   <rect x="64" y="8" width="4" height="4"/>
   <rect x="68" y="8" width="4" height="4"/>
   <rect x="72" y="8" width="4" height="4"/>
-  <rect x="64" y="12" width="4" height="4"/>
   <rect x="72" y="12" width="4" height="4"/>
   <rect x="64" y="16" width="4" height="4"/>
+  <rect x="68" y="16" width="4" height="4"/>
   <rect x="72" y="16" width="4" height="4"/>
-  <rect x="80" y="0" width="4" height="4"/>
-  <rect x="84" y="0" width="4" height="4"/>
-  <rect x="88" y="0" width="4" height="4"/>
-  <rect x="80" y="4" width="4" height="4"/>
-  <rect x="88" y="4" width="4" height="4"/>
-  <rect x="80" y="8" width="4" height="4"/>
-  <rect x="84" y="8" width="4" height="4"/>
-  <rect x="88" y="8" width="4" height="4"/>
-  <rect x="80" y="12" width="4" height="4"/>
-  <rect x="84" y="12" width="4" height="4"/>
-  <rect x="80" y="16" width="4" height="4"/>
-  <rect x="88" y="16" width="4" height="4"/>
-  <rect x="96" y="0" width="4" height="4"/>
-  <rect x="100" y="0" width="4" height="4"/>
-  <rect x="104" y="0" width="4" height="4"/>
-  <rect x="100" y="4" width="4" height="4"/>
-  <rect x="100" y="8" width="4" height="4"/>
-  <rect x="100" y="12" width="4" height="4"/>
-  <rect x="100" y="16" width="4" height="4"/>
   </g>
 </svg>

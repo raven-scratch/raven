@@ -5,6 +5,22 @@
 // word — and stamps them where they belong. Nothing here is a monitor, so
 // nothing here is a Scratch variable either.
 //
+// Every costume is drawn to its exact ink: a digit fills its 12-unit box, and a
+// word is as wide as its letters. Scratch puts a costume's rotation centre in
+// the middle of that box, which is the middle of the ink, so `go_to_xy` is
+// already a stamp of "put this text's centre here" — no per-costume centre is
+// needed and no word can drift. The sprite runs at 125%, so a glyph is 15x25 and
+// text advances in 20s.
+//
+// The playfield owns the left of the stage, so all the text lives in the right
+// column (x 100..232) except the menu and the game-over card, which are centred
+// on the field. Labels sit over their values, both centred on the same x, so a
+// number that gains a digit grows in both directions instead of sliding.
+//
+// The cards are one line per word (`PRESS` over `SPACE`, `GAME` over `OVER`):
+// side by side, those phrases are wider than the field frame and would run into
+// the stats column.
+//
 // The pen layer has one owner per frame: `Board` clears it and stamps the field,
 // then broadcasts `hud`, and this sprite stamps on top. Nothing here clears.
 
@@ -24,16 +40,26 @@ sprite "Hud" {
     costume "score" = "assets/hud_score.svg";
     costume "lines" = "assets/hud_lines.svg";
     costume "level" = "assets/hud_level.svg";
-    costume "press_space" = "assets/hud_press_space.svg";
-    costume "game_over" = "assets/hud_game_over.svg";
+    costume "press" = "assets/hud_press.svg";
+    costume "space" = "assets/hud_space.svg";
+    costume "game" = "assets/hud_game.svg";
+    costume "over" = "assets/hud_over.svg";
     costume "paused" = "assets/hud_paused.svg";
     costume "restart" = "assets/hud_restart.svg";
+    costume "r" = "assets/hud_r.svg";
 
-    /// One glyph is 12 units wide with 4 of air, so text walks right in 16s.
-    const PITCH: num = 16;
+    /// Text size, as a percentage of the font's 4-unit pixels.
+    const SIZE: num = 125;
 
-    /// Stamp one of the words: 1 tetris, 2 score, 3 lines, 4 level,
-    /// 5 press space, 6 game over, 7 paused, 8 restart.
+    /// One glyph plus its air, in stage units at SIZE. A digit is 15 wide.
+    const PITCH: num = 20;
+
+    /// The right column: labels and values are centred on its middle.
+    const COLUMN: num = 166;
+
+    /// Stamp one of the words where its centre belongs. The costume is the whole
+    /// word, so one stamp is the whole word: 1 tetris, 2 score, 3 lines, 4 level,
+    /// 5 press, 6 space, 7 game, 8 over, 9 paused, 10 restart, 11 the R key.
     proc stamp_word(w: num, x: num, y: num) warp {
         motion::go_to_xy(x, y);
         match w {
@@ -41,10 +67,13 @@ sprite "Hud" {
             2 => { looks::switch_costume_to(Costume::Score); },
             3 => { looks::switch_costume_to(Costume::Lines); },
             4 => { looks::switch_costume_to(Costume::Level); },
-            5 => { looks::switch_costume_to(Costume::PressSpace); },
-            6 => { looks::switch_costume_to(Costume::GameOver); },
-            7 => { looks::switch_costume_to(Costume::Paused); },
-            _ => { looks::switch_costume_to(Costume::Restart); }
+            5 => { looks::switch_costume_to(Costume::Press); },
+            6 => { looks::switch_costume_to(Costume::Space); },
+            7 => { looks::switch_costume_to(Costume::Game); },
+            8 => { looks::switch_costume_to(Costume::Over); },
+            9 => { looks::switch_costume_to(Costume::Paused); },
+            10 => { looks::switch_costume_to(Costume::Restart); },
+            _ => { looks::switch_costume_to(Costume::R); }
         }
         pen::stamp();
     }
@@ -66,12 +95,38 @@ sprite "Hud" {
         pen::stamp();
     }
 
-    /// A number of up to three digits, left-aligned at `x`. Leading zeros are
-    /// not drawn; a lone zero is.
-    proc stamp_number(n: num, x: num, y: num) warp {
-        let at = x;
+    /// How many digits a number needs, up to five. Leading zeros are never
+    /// drawn, and a lone zero counts as one digit.
+    proc digits_of(n: num) -> num warp {
+        if n >= 10000 {
+            return 5;
+        }
+        if n >= 1000 {
+            return 4;
+        }
         if n >= 100 {
-            stamp_digit(operators::mathop(MathOp::Floor, n / 100), at, y);
+            return 3;
+        }
+        if n >= 10 {
+            return 2;
+        }
+        return 1;
+    }
+
+    /// A number of up to five digits, centred on `x`. The block is centred, so
+    /// the ones digit moves right as the number grows and nothing reflows.
+    proc stamp_number(n: num, x: num, y: num) warp {
+        let at = x - (digits_of(n) - 1) * PITCH / 2;
+        if n >= 10000 {
+            stamp_digit(operators::mathop(MathOp::Floor, n / 10000), at, y);
+            at += PITCH;
+        }
+        if n >= 1000 {
+            stamp_digit(operators::mathop(MathOp::Floor, n / 1000) % 10, at, y);
+            at += PITCH;
+        }
+        if n >= 100 {
+            stamp_digit(operators::mathop(MathOp::Floor, n / 100) % 10, at, y);
             at += PITCH;
         }
         if n >= 10 {
@@ -81,27 +136,36 @@ sprite "Hud" {
         stamp_digit(n % 10, at, y);
     }
 
+    /// One label over its value, both centred in the column. `row` is the y of
+    /// the label; the value sits 32 below it, which clears the 25-unit glyphs.
+    proc stamp_row(w: num, n: num, row: num) warp {
+        stamp_word(w, COLUMN, row);
+        stamp_number(n, COLUMN, row - 32);
+    }
+
     /// The whole display for the state the game is in.
     proc paint() warp {
-        stamp_word(2, 148, 130);
-        stamp_number(score, 124, 100);
-        stamp_word(3, 148, 40);
-        stamp_number(lines, 132, 10);
-        stamp_word(4, 148, -50);
-        stamp_number(level, 132, -80);
+        looks::set_size_to(SIZE);
+
+        stamp_row(2, score, 30);
+        stamp_row(3, lines, -50);
+        stamp_row(4, level, -130);
 
         if state == 0 {
-            stamp_word(1, 0, 60);
-            stamp_word(5, 0, -20);
+            stamp_word(1, 0, 44);
+            stamp_word(5, 0, -32);
+            stamp_word(6, 0, -64);
         } else {
             if state == 2 {
-                stamp_word(7, 0, 0);
+                stamp_word(9, 0, 0);
             } else {
                 if state == 3 {
-                    stamp_word(6, 0, 70);
-                    stamp_word(2, 0, 10);
-                    stamp_number(score, -24, -20);
-                    stamp_word(8, 0, -70);
+                    stamp_word(7, 0, 88);
+                    stamp_word(8, 0, 56);
+                    stamp_word(2, 0, 12);
+                    stamp_number(score, 0, -20);
+                    stamp_word(10, 12, -84);
+                    stamp_word(11, -72, -84);
                 }
             }
         }

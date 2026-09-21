@@ -279,7 +279,7 @@ sprite "Board" {
         if state == 1 {
             paint(piece, rot, px, py);
         }
-        paint(nextone, 0, 12, 2);
+        paint(nextone, 0, 13, 2);
         looks::switch_costume_to(Costume::Tile);
         events::broadcast("hud");
     }

@@ -25,11 +25,10 @@ the semicolon describes that monitor:
 | `continuous` | A slider that steps by 0.01 instead of 1. |
 | `default` | The ordinary readout, when a later clause would override it. |
 
-A declaration that says none of them leaves the position **unset**, and the
-editor places the monitor itself — exactly as it places one for a variable made
-in the editor. That is the only reason a project's monitor records ever hold a
-`null` position, and it is what keeps a row of watched values evenly spaced
-instead of wherever a compiler guessed.
+A declaration that says none of them still gets a position, chosen by the
+compiler: monitors are stacked down the left edge of the stage, one row each — a
+readout every 38 stage pixels, a list every 205 — so two of them never land on
+top of each other. `at X Y` overrides that one monitor.
 
 ## Scope: who owns the variable
 

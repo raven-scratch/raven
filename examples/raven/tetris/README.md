@@ -8,7 +8,7 @@ lines, and line-clear scoring (100 / 300 / 500 / 800 × level).
 src/stage.rav            the playfield, the rotation table, the bag, the state
 src/sprites/board.rav    the game: drawing, input, gravity, rules
 src/sprites/hud.rav      the display: a 3×5 pixel font, stamped with the pen
-assets/                  a backdrop, ten cell tiles, nineteen font tiles, sounds
+assets/                  a backdrop, nine cell tiles, twenty-two font tiles, sounds
 ```
 
 ```sh
@@ -40,6 +40,18 @@ digit and one per word — and stamps them with the pen. `score`, `lines` and
 score, so this project declares **no Scratch variables and no variable
 monitors**; the only monitor records left are the hidden ones Scratch gives
 every list.
+
+**The display has a layout, not a scatter of stamps.** Every costume is drawn to
+its exact ink, so Scratch's default rotation centre — the middle of the costume —
+is already the middle of the text, and `go_to_xy` centres a word or a number
+without any per-costume offset. On top of that: the sprite runs at 125%, so a
+glyph is 15×25 and text advances in 20s; the playfield keeps the left of the
+stage, so the stats live in the right column (`x` 100..232) with each label
+centred over its value, which means a number that gains a digit grows in both
+directions instead of sliding; and each card is one word per line (`PRESS` over
+`SPACE`), because side by side those phrases are wider than the field frame and
+would run into the column. Numbers are drawn up to five digits, so the score
+readout keeps telling the truth once a game passes 999.
 
 ## What it is made of
 
