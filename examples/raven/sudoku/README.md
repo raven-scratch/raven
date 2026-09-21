@@ -37,6 +37,21 @@ The board highlights every cell that holds the same digit as the cell the cursor
 is on. With the cursor on a 7, every other 7 reads as one group, which is most of
 how a person scans a grid.
 
+Finishing a row, a column, a box or the whole board sets a wave off along it: the
+group tints blue and fades back, and the tint starts a little later on each cell,
+so it travels across the group instead of blinking on. The strength is computed
+rather than drawn — the tile is one flat blue and the sprite's *ghost* effect is
+the ramp, a half sine, which is what puts the fast part of the transition in the
+middle: the tint eases away from nothing, crosses blue quickly, and eases back
+out. The board's own wave carries the win card in behind it.
+
+A wave waits between steps to animate, and Scratch drops a key press that arrives
+while a thread from the same key hat is still running. So nothing slow is allowed
+on a key handler: the wave is handed to its own thread by a broadcast, and the
+handler that took the key is finished before the animation starts. The one place
+a wave is ever missed is two groups finished faster than one wave takes, which is
+under a second and not something hands can do.
+
 The three difficulties are clue counts: easy aims for 50, medium for 44, hard for
 40. The number is an aim, not a promise — a pass stops when nothing left in it is
 forced, which is the order's decision, so a deal can come out a few clues richer
@@ -44,6 +59,14 @@ than the number. The generator never removes a cell it cannot justify, so it tak
 what it can get. Measured over a few thousand deals, the construction bottoms out
 between 29 and 38 clues, which is why the aims sit where they do: asking for
 fewer would only mean asking for something the last pass did not reach.
+
+No row, column or box is ever handed over already finished. A pass stops the
+moment the clue count reaches its target, so a unit the walk never happened to
+open can survive with all nine of its cells still clues — a finished line given
+away, which is most of the puzzle's work. `open_units` opens one cell in any unit
+that came out full, and it can always: with the unit still full, any of its cells
+is the only empty one in that unit, so the hidden-single test passes for it and
+the removal cannot cost the guarantee.
 
 ## The screen
 
@@ -55,11 +78,17 @@ the edge — is the HUD's column, and the play readout is centred on x = 129, wh
 is the middle of it. A twelve-character line is 172 wide, so it fits the column
 with room to spare and never reaches the board.
 
-The HUD writes at one size: a glyph is 12 by 20 and a character advances 16, so a
-long line is 384 wide and still fits the full stage when one is centred on it. The
-menu, the wait for a puzzle and the two cards a run ends on are centred on the
-stage, because the board is not drawn on any of them — the pen layer is cleared
-and left empty for the text. Nothing in the game uses a speech bubble.
+The HUD writes at one size: a glyph is 16 by 24 on a 6 by 10 box with one unit of
+air for the stroke, and a character advances 19, so a long line is 342 wide and
+still fits the full stage when one is centred on it. The menu, the wait for a
+puzzle and the two cards a run ends on are centred on the stage, because the board
+is not drawn on any of them — the pen layer is cleared and left empty for the text.
+Nothing in the game uses a speech bubble.
+
+Every character is drawn as a stroke — lines and quadratic curves in an SVG path,
+with round caps and joins — rather than as a grid of pixels, so a letter is a
+letter at any size. The board's digits are strokes too, seven segments of a cell.
+Neither needs a font installed on the machine.
 
 ## Why the puzzles never need a guess
 
@@ -111,9 +140,13 @@ thousands of dealt puzzles is for.
 **This is checked, not asserted.** `tools/check.mjs` runs the project in a real
 Scratch VM, walks the menu with the arrow keys and Enter to ask for a puzzle at
 each difficulty, and solves each one with its own singles-only solver, written
-separately and sharing no code with the generator. It also plays whole games
-through the real key hats — one to a win, one to a loss — and fails if the project
-does not react.
+separately and sharing no code with the generator. It fails a puzzle that needs a
+guess, a puzzle whose units are not clean, a unit handed over already finished and
+a unit still contradicting the digits, and it compares the HUD's two alphabets.
+It also plays whole games through the real key hats — one to a win, one to a loss —
+and fails if the project does not react: that a finished line actually animates
+rather than switching on, that the last entry reaches the win card, and that the
+menu deals again afterwards.
 
 ```sh
 SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
@@ -134,16 +167,15 @@ built once per run, in `build_tables`.
 
 The board draws with the pen in one `warp` procedure: `draw_grid` rules the lines,
 with every third one thick for a box; the tint goes down under every cell holding
-the cursor's digit; the cursor's outline goes over that; and the digits go last, so
-nothing is ever stamped on top of them. Both sprites then park on the same
-transparent pixel, so neither is ever visible on the stage.
+the cursor's digit; the wave's tint goes over that; the cursor's outline goes over
+that; and the digits go last, so nothing is ever stamped on top of them. Both
+sprites then park on the same transparent pixel, so neither is ever visible on the
+stage.
 
 `assets.mjs` writes every costume. The board's are a backdrop, the parking pixel,
-the cursor outline, the tint, and a seven-segment digit in two faces — `given` for
-a clue, `user` for a value the player entered. The HUD's are one per character of a
-3x5 font: a digit is drawn as segments and a character as pixels, rather than as
-text, because Scratch deletes `<text>` elements from an SVG, and neither needs a
-font installed on the machine. The font's costumes are written in the order the
-HUD's `alphabet` list reads, because the HUD finds a character by counting from the
-first glyph — `check.mjs` compares the two lists and fails if they drift apart.
-Regenerate the costumes rather than editing them.
+the cursor outline, the same-digit tint, the blue wave tile, and a seven-segment
+digit in two faces — `given` for a clue, `user` for a value the player entered.
+The HUD's are one per character of the stroked font. The font's costumes are
+written in the order the HUD's `alphabet` list reads, because the HUD finds a
+character by counting from the first glyph — `check.mjs` compares the two lists
+and fails if they drift apart. Regenerate the costumes rather than editing them.

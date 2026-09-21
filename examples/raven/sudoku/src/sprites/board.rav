@@ -29,6 +29,7 @@ sprite "Board" {
     costume "dot" = "assets/dot.svg";
     costume "cursor" = "assets/cursor.svg";
     costume "match" = "assets/match.svg";
+    costume "flash" = "assets/flash.svg";
     costume "given1" = "assets/given1.svg";
     costume "given2" = "assets/given2.svg";
     costume "given3" = "assets/given3.svg";
@@ -67,6 +68,25 @@ sprite "Board" {
 
     /// The cell the player is on, 1..81.
     var cursor: num = 1;
+
+    /// The wave that runs when a line, a box or the whole board is finished.
+    ///
+    /// `flash_cells` holds the cells being tinted and `flash_order` holds how
+    /// many steps after the first each one starts, so the tint sweeps along the
+    /// group instead of appearing all at once. `flash_step` is the animation's
+    /// clock, and a negative value means no wave is running — which is what
+    /// `redraw` reads before it draws any tint at all.
+    var flash_cells: list<num> = [];
+    var flash_order: list<num> = [];
+    var flash_step: num = -1;
+
+    /// Set while the wave being asked for is the board's, so the thread that
+    /// runs it knows to put the win card up when it is done.
+    var finish: num = 0;
+
+    /// Which of the twenty-seven units have already had their wave, so a cell
+    /// that is cleared and filled again does not set one off twice.
+    var marked: list<num> = [];
 
     /// The finished grid the puzzle was cut from, and the puzzle itself.
     var solution: list<num> = [];
@@ -409,6 +429,176 @@ sprite "Board" {
                 done = 1;
             }
         }
+        open_units();
+    }
+
+    /// Whether all nine cells of unit `uid` are clues.
+    proc full_unit(uid: num) -> bool warp {
+        for k in 1..=9 {
+            if puzzle[units[(uid - 1) * 9 + k]] == 0 {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Take one cell out of a unit that is still all clues.
+    ///
+    /// A pass stops as soon as the clue count reaches the target, so a unit the
+    /// walk never happened to open can survive with every one of its nine cells
+    /// filled — a finished line or box handed to the player, which is most of
+    /// the puzzle's work given away. Opening one is always possible, and the
+    /// reason is worth writing down: with the unit full, any of its cells
+    /// becomes the only empty cell in that unit, so the hidden-single test
+    /// passes for it and the removal cannot cost the guarantee.
+    proc open_units() warp {
+        let uid = 1;
+        repeat_until uid > 27 {
+            if full_unit(uid) {
+                order.clear();
+                for k in 1..=9 {
+                    order.push(units[(uid - 1) * 9 + k]);
+                }
+                shuffle_order();
+                let k = 1;
+                let opened = 0;
+                repeat_until k > 9 || opened == 1 {
+                    let i = order[k];
+                    let held = puzzle[i];
+                    puzzle[i] = 0;
+                    if forced(i, held) {
+                        clues -= 1;
+                        opened = 1;
+                    } else {
+                        puzzle[i] = held;
+                    }
+                    k += 1;
+                }
+            }
+            uid += 1;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // The wave
+    // ---------------------------------------------------------------------
+
+    /// How long one cell's tint lasts, in steps, and how many steps apart two
+    /// neighbours in a group start. The whole group is `SPAN + 8 * STAGGER`
+    /// steps, which at a step of `BEAT` seconds is a little over half a second:
+    /// long enough to see the sweep, short enough not to hold up the game.
+    const SPAN: num = 14;
+    const STAGGER: num = 1.2;
+    const BEAT: num = 0.03;
+
+    /// Tint the cells in `flash_cells`, then leave the layer as it was.
+    ///
+    /// Nothing about the colour is a costume: the tile is one flat blue and the
+    /// strength of the tint is the sprite's *ghost* effect, computed per cell
+    /// from the clock. The ramp is a half sine, which is what puts the fast part
+    /// of the transition in the middle — the tint eases away from nothing,
+    /// crosses blue quickly, and eases back out, instead of switching on.
+    ///
+    /// This waits between steps, so it must not be `warp`: a warp procedure
+    /// suppresses the screen refresh and the whole wave would land as one frame.
+    ///
+    /// There is no guard against a wave arriving while one is running, and that
+    /// is deliberate: a broadcast restarts the thread that receives it, so there
+    /// is only ever one of these. A guard would be worse than useless — a
+    /// restarted wave would find the clock of the dead one still up and return
+    /// without resetting it, leaving the board tinted for good. Taking the clock
+    /// unconditionally is what makes a restart mean "start this group now".
+    proc wave() {
+        flash_step = 0;
+        repeat_until flash_step > SPAN + 8 * STAGGER {
+            redraw();
+            control::wait(BEAT);
+            flash_step += 1;
+        }
+        flash_step = -1;
+        redraw();
+    }
+
+    /// Set the group off: every cell of unit `uid`, with a start delay that
+    /// walks the unit, so the tint crosses it rather than blinking as a block.
+    ///
+    /// The setup happens here and the animation is broadcast, so the caller — a
+    /// key handler — is done immediately. A key hat that is still running
+    /// swallows the next press of that key, so nothing slow may happen on it.
+    proc wave_unit(uid: num) warp {
+        flash_cells.clear();
+        flash_order.clear();
+        for k in 1..=9 {
+            let i = units[(uid - 1) * 9 + k];
+            flash_cells.push(i);
+            if uid <= 9 {
+                flash_order.push(col_of(i));
+            } else {
+                if uid <= 18 {
+                    flash_order.push(row_of(i));
+                } else {
+                    flash_order.push((row_of(i) % 3) * 3 + col_of(i) % 3);
+                }
+            }
+        }
+        finish = 0;
+        events::broadcast("wave");
+    }
+
+    /// Set the whole board off, sweeping down it a row at a time, and have the
+    /// win card follow it. This one goes through the same thread as every other
+    /// wave, which is what keeps the card behind the wave rather than on top of
+    /// it.
+    proc wave_board() warp {
+        flash_cells.clear();
+        flash_order.clear();
+        for i in 1..=81 {
+            flash_cells.push(i);
+            flash_order.push(row_of(i));
+        }
+        finish = 1;
+        events::broadcast("wave");
+    }
+
+    /// Whether every cell of unit `uid` holds a value.
+    proc unit_done(uid: num) -> bool warp {
+        for k in 1..=9 {
+            if cells[units[(uid - 1) * 9 + k]] == 0 {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Wave for any of the three units the cell just filled has completed.
+    ///
+    /// All three are marked, so a cell that is cleared and filled again does not
+    /// set a wave off twice, but only the first one found is swept: two waves for
+    /// one placement would be one effect shown twice.
+    proc celebrate(cell: num) warp {
+        let pick = 0;
+        let uid = row_of(cell) + 1;
+        if unit_done(uid) && marked[uid] == 0 {
+            marked[uid] = 1;
+            pick = uid;
+        }
+        uid = col_of(cell) + 10;
+        if unit_done(uid) && marked[uid] == 0 {
+            marked[uid] = 1;
+            if pick == 0 {
+                pick = uid;
+            }
+        }
+        uid = boxes[cell] + 19;
+        if unit_done(uid) && marked[uid] == 0 {
+            marked[uid] = 1;
+            if pick == 0 {
+                pick = uid;
+            }
+        }
+        if pick != 0 {
+            wave_unit(pick);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -477,6 +667,13 @@ sprite "Board" {
         mistakes = 0;
         tries = TRIES;
         state = 1;
+        flash_step = -1;
+        flash_cells.clear();
+        flash_order.clear();
+        marked.clear();
+        for uid in 1..=27 {
+            marked.push(0);
+        }
         sensing::reset_timer();
         redraw();
     }
@@ -508,6 +705,11 @@ sprite "Board" {
     /// A wrong digit is refused rather than written, so the board never holds a
     /// value the puzzle did not have and a full board is always the answer. It
     /// costs one of the three tries instead.
+    ///
+    /// Nothing slow happens here. The wave that a good entry may start is handed
+    /// to a thread of its own, because a key hat that is still running swallows
+    /// the next press of that key — so the win card is the wave's job, not this
+    /// one's, and this returns before the board has finished celebrating.
     proc place(d: num) warp {
         if state != 1 {
             return;
@@ -516,11 +718,13 @@ sprite "Board" {
             return;
         }
         if solution[cursor] == d {
-            cells[cursor] = d;
+            let cell = cursor;
+            cells[cell] = d;
             if solved() {
-                win();
+                wave_board();
             } else {
                 redraw();
+                celebrate(cell);
             }
         } else {
             mistakes += 1;
@@ -617,13 +821,16 @@ sprite "Board" {
     /// one is being generated, and on the two cards a run ends on, the pen layer
     /// is cleared and left empty for the HUD to write on.
     ///
-    /// Three layers go down in order: the grid, the tint under every cell that
-    /// holds the same digit as the cell the cursor is on, the cursor's own
-    /// outline, and then the digits themselves. The tint is the solving aid —
-    /// with the cursor on a 7, every other 7 on the board reads as one group —
-    /// and it is stamped under the digits so it never sits on top of them.
+    /// The layers go down in order: the grid, the tint under every cell that
+    /// holds the same digit as the cell the cursor is on, the wave's tint, the
+    /// cursor's own outline, and then the digits. The wave goes under the digits
+    /// so a finished line reads as a blue background rather than a blue digit,
+    /// and the ghost effect is put back to none at the top because a stamp
+    /// carries the sprite's effects into the layer — a wave left at full ghost
+    /// would make every later stamp invisible.
     proc redraw() warp {
         pen::clear();
+        looks::set_effect_to(Effect::Ghost, 0);
         if state != 1 {
             broadcast_hud();
             return;
@@ -640,6 +847,20 @@ sprite "Board" {
                     pen::stamp();
                 }
             }
+        }
+
+        if flash_step >= 0 {
+            for k in 1..=flash_cells.len() {
+                let local = flash_step - flash_order[k];
+                if local > 0 && local < SPAN {
+                    let rise = operators::mathop(MathOp::Sin, 180 * local / SPAN);
+                    motion::go_to_xy(cell_x(col_of(flash_cells[k])), cell_y(row_of(flash_cells[k])));
+                    looks::switch_costume_to(Costume::Flash);
+                    looks::set_effect_to(Effect::Ghost, 100 - 72 * rise);
+                    pen::stamp();
+                }
+            }
+            looks::set_effect_to(Effect::Ghost, 0);
         }
 
         motion::go_to_xy(cell_x(col_of(cursor)), cell_y(row_of(cursor)));
@@ -768,6 +989,19 @@ sprite "Board" {
             if state == 2 || state == 3 {
                 menu();
             }
+        }
+    }
+
+    /// A finished line or box asks for its wave, and the board's own wave asks
+    /// for the card as well. Running it here rather than in the key handler is
+    /// the point: the animation waits, and a key hat that is still running
+    /// swallows the next press of that key. The runtime restarts this thread
+    /// when a second wave is asked for, so a wave is never run twice at once.
+    on broadcast_received("wave") {
+        wave();
+        if finish == 1 {
+            finish = 0;
+            win();
         }
     }
 }

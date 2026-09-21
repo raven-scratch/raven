@@ -30,4 +30,12 @@ stage {
 
     /// The board clears the pen layer and draws, then asks for the text.
     broadcast "hud";
+
+    /// A finished line or box asks for its wave on this.
+    ///
+    /// The wave waits between steps to animate, and a key hat that is still
+    /// running swallows the next press of that key — so the animation cannot run
+    /// on the thread that handled the key. Broadcasting hands it to a thread of
+    /// its own and lets the key handler end.
+    broadcast "wave";
 }

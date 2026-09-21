@@ -176,6 +176,18 @@ async function main() {
     const variable = board.lookupVariableByNameAndType(name, 'list');
     return variable ? variable.value.map(Number) : null;
   };
+  // The stage declares the shared scalar cells in a known order, so the arena is
+  // the only way a test can see `state` and the try count: a `pub var` is a cell
+  // of `_gvm`, not a Scratch variable with a name.
+  const arena = () => {
+    const stage = vm.runtime.targets.find((t) => t.getName() === 'Stage');
+    const variable = stage.lookupVariableByNameAndType('_gvm', 'list');
+    return variable ? variable.value : [];
+  };
+  const where = () => {
+    const [state, sel, clues, tries, mistakes] = arena();
+    return `state=${state} sel=${sel} clues=${clues} tries=${tries} mistakes=${mistakes}`;
+  };
   const press = (key) => vm.runtime.startHats('event_whenkeypressed', { KEY_OPTION: key });
 
   // The HUD finds a character's costume by counting from the first glyph, so the
@@ -321,6 +333,12 @@ async function main() {
       for (const unit of UNITS) {
         const seen = unit.map((c) => puzzle[c]).filter((v) => v !== 0);
         check(new Set(seen).size === seen.length, `${label}: a unit repeats a clue`);
+        // A unit that is all clues is a finished line or box handed over, which
+        // is most of the puzzle's work given away.
+        check(
+          seen.length < 9,
+          `${label}: a unit came out already finished (${unit.join(',')})`,
+        );
       }
 
       const solved = solveBySingles(puzzle);
@@ -369,18 +387,24 @@ async function main() {
     const solution = list('solution');
     vm.stopAll();
 
+    // One press, one move: wait for the cursor to actually change before asking
+    // for another. Pressing on a fixed timer outruns the VM — the arrow threads
+    // queue up, the cursor overshoots, and a cell in an earlier row can no
+    // longer be reached at all.
     const step = async (key) => {
+      const before = cursorCell();
       press(key);
-      await sleep(40);
+      await until(() => cursorCell() !== before, 3000);
     };
     // Walk to the wanted cell by watching where the cursor actually is. Each
-    // `move_cursor` redraws the whole board, so presses are one frame apart; a
+    // `move_cursor` redraws the whole board, so presses are a frame apart; a
     // player cannot outrun that, and neither does this.
     const goTo = async (target) => {
-      for (let guard = 0; guard < 40; guard += 1) {
+      for (let guard = 0; guard < 60; guard += 1) {
         const cell = cursorCell();
         if (cell === target) return true;
         if (row(cell) < row(target)) await step('down arrow');
+        else if (row(cell) > row(target)) await step('up arrow');
         else if (col(cell) > col(target)) await step('left arrow');
         else await step('right arrow');
       }
@@ -389,15 +413,71 @@ async function main() {
 
     const empty = [];
     for (let i = 0; i < 81; i += 1) if (puzzle[i] === 0) empty.push(i);
+
+    // Fill the first row and watch what a finished line does. The wave steps a
+    // clock and redraws for about half a second, so the arena keeps moving while
+    // the board is otherwise idle; a tint that simply switched on would leave it
+    // completely still, and nothing else about the game would notice.
+    for (let c = 0; c < 9; c += 1) {
+      if (puzzle[c] === 0) {
+        await goTo(c);
+        let wrote = false;
+        for (let attempt = 0; attempt < 6 && !wrote; attempt += 1) {
+          press(String(solution[c]));
+          wrote = await until(() => (list('cells') || [])[c] !== 0, 1500);
+        }
+      }
+    }
+    const samples = [];
+    for (let i = 0; i < 5; i += 1) {
+      samples.push(vms().join(','));
+      await sleep(110);
+    }
+    check(
+      new Set(samples).size >= 3,
+      'a finished line did not animate: the wave never stepped a clock',
+    );
+
     let missed = 0;
+    const notes = [];
 
     for (const cell of empty) {
-      await goTo(cell);
-      press(String(solution[cell]));
-      await sleep(40);
-      if ((list('cells') || [])[cell] === 0) missed += 1;
+      const before = (list('cells') || []).slice();
+      const reached = await goTo(cell);
+      // Press until it takes. Scratch drops a key press that arrives while a
+      // thread from the same key hat is still running, and this test presses
+      // far faster than a person can; a player would simply press again.
+      let landed = false;
+      let tries = 0;
+      while (!landed && tries < 6) {
+        press(String(solution[cell]));
+        tries += 1;
+        landed = await until(() => (list('cells') || [])[cell] !== 0, 1500);
+      }
+      if (!landed) {
+        missed += 1;
+        if (notes.length < 4) {
+          const after = list('cells') || [];
+          const locks = list('locked') || [];
+          const changed = after.map((v, i) => (v !== before[i] ? i : -1)).filter((i) => i >= 0);
+          notes.push(
+            `wanted ${cell} (reached=${reached}, cursor=${cursorCell()}, ` +
+              `locked=${locks[cell]}, cells=${after[cell]}, ` +
+              `wrote ${changed.join('/') || 'nothing'}, ${where()})`,
+          );
+        }
+      }
     }
     await until(() => (list('cells') || []).every((v) => v !== 0), 20000);
+    // The last entry sets the board's wave off and the card comes after it, so
+    // wait for the card rather than stopping the threads that are about to show
+    // it — stopping them leaves the game in play with nothing left to play.
+    const carded = await until(() => Number(arena()[0]) === 2, 30000);
+    check(
+      carded,
+      `the last entry never reached the win card (${where()}, ` +
+        `cells=${(list('flash_cells') || []).length})`,
+    );
     vm.stopAll();
 
     const filled = list('cells') || [];
@@ -405,30 +485,36 @@ async function main() {
     check(
       filled.every((v) => v !== 0),
       `the playthrough left ${stillEmpty.length} cells empty ` +
-        `(first ${stillEmpty.slice(0, 8).join(',')}; ${missed} placements did not land)`,
+        `(first ${stillEmpty.slice(0, 8).join(',')}; ${missed} placements did not land; ` +
+        `${notes.join('; ')}; ${where()})`,
     );
 
     // Enter goes back to the menu, and the marker walks again: two downs and
     // Enter must deal the hardest puzzle, which is a different one again. That
     // is also what proves Enter left the card — the menu is the only state where
     // the arrows and Enter do anything.
+    //
+    // The whole board waves before the card appears, and keys pressed during a
+    // wave are refused, so this knocks until the deal happens rather than
+    // assuming how long the celebration lasts.
     const won = (list('puzzle') || []).join(',');
-    press('enter');
-    await sleep(250);
-    press('down arrow');
-    await sleep(90);
-    press('down arrow');
-    await sleep(90);
-    press('enter');
-    const harder = await until(() => {
-      const next = list('puzzle') || [];
-      return (
-        next.length === 81 &&
-        next.some((v) => v !== 0) &&
-        next.join(',') !== won &&
-        next.filter((v) => v !== 0).length <= DIFFICULTY[2].target
-      );
-    }, 90000);
+    let harder = false;
+    for (let attempt = 0; attempt < 40 && !harder; attempt += 1) {
+      press('down arrow');
+      await sleep(90);
+      press('down arrow');
+      await sleep(90);
+      press('enter');
+      harder = await until(() => {
+        const next = list('puzzle') || [];
+        return (
+          next.length === 81 &&
+          next.some((v) => v !== 0) &&
+          next.join(',') !== won &&
+          next.filter((v) => v !== 0).length <= DIFFICULTY[2].target
+        );
+      }, 700);
+    }
     vm.stopAll();
     check(harder, 'after a win, Enter and the menu did not deal hard');
   }
@@ -467,18 +553,21 @@ async function main() {
       (list('cells') || []).every((v, i) => v === before[i]),
       'the board kept taking digits after the run ended',
     );
-    press('enter');
-    await sleep(250);
-    press('enter');
-    const restarted = await until(() => {
-      const next = list('puzzle') || [];
-      return (
-        next.length === 81 &&
-        next.some((v) => v !== 0) &&
-        (list('cells') || []).join(',') === next.join(',') &&
-        next.filter((v) => v !== 0).length <= DIFFICULTY[0].target
-      );
-    }, 90000);
+    let restarted = false;
+    for (let attempt = 0; attempt < 20 && !restarted; attempt += 1) {
+      press('enter');
+      await sleep(300);
+      press('enter');
+      restarted = await until(() => {
+        const next = list('puzzle') || [];
+        return (
+          next.length === 81 &&
+          next.some((v) => v !== 0) &&
+          (list('cells') || []).join(',') === next.join(',') &&
+          next.filter((v) => v !== 0).length <= DIFFICULTY[0].target
+        );
+      }, 700);
+    }
     vm.stopAll();
     check(restarted, 'after a loss, Enter and the menu did not deal a puzzle');
   }
