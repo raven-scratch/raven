@@ -27,11 +27,11 @@ keywords whose lowerings are written down in
   doubled brace stands for a literal brace.
 * **Booleans** — `true`, `false`.
 * **Keywords** — `bool` `broadcast` `const` `costume` `else` `false` `fn` `for`
-  `forever` `if` `in` `let` `list` `macro` `map` `match` `num` `on` `proc` `pub`
-  `repeat` `repeat_until` `return` `sound` `sprite` `stage` `str` `struct` `true`
-  `use` `var` `warp` `watch` `while`. `for`, `in`, `match` and `while` are
-  reserved so the prelude can define them.
-* **Punctuation** — `( ) { } [ ] , ; : :: = -> => . .. ! && || == != <= >= < > + - * / %`
+  `forever` `if` `in` `let` `list` `loop` `macro` `map` `match` `num` `on` `proc`
+  `pub` `repeat` `repeat_until` `return` `sound` `sprite` `stage` `str` `struct`
+  `true` `use` `var` `warp` `watch` `while`. `for`, `in`, `loop`, `match` and
+  `while` are reserved so the prelude can define them.
+* **Punctuation** — `( ) { } [ ] , ; : :: = -> => . .. ..= ! && || == != <= >= < > + - * / %`
   the wildcard `_`, and `$` introducing a macro parameter.
 * **Whitespace** — insignificant. Items and block statements are not terminated;
   `let`, assignment, calls and `use` end with `;`.
@@ -228,8 +228,8 @@ or a `proc`, because a loose stack in Scratch never runs.
 
 ```text
 stmt = let         | assign      | op_assign   | return     | if_stmt
-     | repeat_stmt | repeat_until| forever     | while_stmt | for_stmt
-     | match_stmt  | var_decl    | call ";"
+     | repeat_stmt | repeat_until| forever     | loop_stmt  | while_stmt
+     | for_stmt    | match_stmt  | var_decl    | call ";"
 
 let          = "let" IDENT [ ":" type ] "=" expr ";"
 assign       = lvalue "=" expr ";"
@@ -242,8 +242,9 @@ if_stmt      = "if" expr block [ "else" ( if_stmt | block ) ]
 repeat_stmt  = "repeat" expr block
 repeat_until = "repeat_until" expr block
 forever      = "forever" block
+loop_stmt    = "loop" block
 while_stmt   = "while" expr block
-for_stmt     = "for" IDENT "in" expr ".." expr block
+for_stmt     = "for" IDENT "in" ( expr ".." expr | expr "..=" expr | expr ) block
 match_stmt   = "match" expr "{" { pattern "=>" block } "}"
 pattern      = literal | IDENT | "_"
 ```
@@ -269,8 +270,11 @@ return value;                   // only inside a proc that declares -> type
 repeat 10 { motion::move_steps(1); }
 repeat_until sensing::key_pressed(Key::Space) { }
 forever { }
+loop { }                            // the same block, spelled the other way
 while score < 10 { score += 1; }
 for i in 1..10 { looks::say(f"{i}"); }
+for i in 1..=10 { looks::say(f"{i}"); }   // the last step runs too
+for x in trail { looks::say(x); }         // the list, element by element
 match score { 0 => { looks::say("zero"); }, _ => { } }
 match STEP { SIDES => { looks::say("a square"); }, _ => { } }   // a const is a pattern
 ```
@@ -295,13 +299,28 @@ The `_` arm must be last, and a `match` needs at least one arm.
 | `repeat_until` | core | `control_repeat_until` |
 | `forever` | core | `control_forever` |
 | `while` | macro | `operator_not` and `control_repeat_until` — two blocks |
-| `for` | macro | a `_stackN` cell, `data_addtolist` and `repeat_until` |
+| `loop` | macro | `control_forever`, exactly as `forever` |
+| `for i in a..b` | macro | a `_stackN` cell, `data_addtolist` and `repeat_until` |
+| `for i in a..=b` | macro | the same, with `>` where `..` uses `>=` |
+| `for x in items` | macro | the counter of `..`, plus a `_stackN` cell per element |
 | `match` | core | a chain of `control_if_else` |
 | `f(x)` where `f` returns a value | core | the `procedures_call`, one cell copy, and a `data_itemoflist` |
 | `control::while(c) { }` | std | `control_while` — the extended block, if you want it |
 | `control::for_each(i, n) { }` | std | `control_for_each`, counting a variable you already have |
 
 `else if` is accepted and means `else { if … }`.
+
+`for` has three shapes, and they are three macros:
+
+* `for i in a..b { … }` counts from `a` while `i < b`;
+* `for i in a..=b { … }` counts from `a` while `i <= b`, so `b` runs too;
+* `for x in items { … }` binds `x` to each element of a list, in order. `items` is
+  the list's **name** — a `var` or a `let`, not an expression — because the loop
+  reads its length each turn; `items.at(2)` is not a list to walk. The element is
+  a `let` in the loop's own block, so it is gone when the loop ends.
+
+A loop may sit inside a loop of the same kind: `for` inside `for`, `while` inside
+`while`. Only a macro whose own definition calls it is a cycle.
 
 `let` declares a **new** cell every time it runs, so a `let` inside a loop
 reinitializes its cell each iteration, and a `let` inside a block disappears when

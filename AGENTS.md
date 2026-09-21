@@ -148,8 +148,8 @@ generated from the binding table, and the docs are checked against the code.
 
 ## Known warts (do not "fix" by documentation drift)
 
-* A macro may not nest inside itself, so `for` inside `for` is rejected as a
-  cycle. Write the outer loop as `repeat`. The error message says so.
+* `for x in items` takes the list's *name*, not an expression: the macro reads the
+  list's length through an `ident` parameter, so `items.at(2)` is refused.
 * A `costume`, a `sound` or a non-`pub` `var` written in a *module* file is
   accepted and then ignored. Modules export items, not target content.
 * `control_while`, `control_for_each`, the counter blocks and `sensing_online`

@@ -1185,6 +1185,88 @@ fn a_macro_cycle_names_the_whole_chain() {
 }
 
 #[test]
+fn a_self_recursive_macro_is_still_a_cycle() {
+    let project = Project::new("macro-self-cycle").sprite(
+        "A",
+        r#"sprite "A" {
+            macro again() -> stmts { again(); }
+            on flag_clicked { again(); }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(rendered.contains("expands into itself"), "{rendered}");
+    assert!(
+        rendered.contains("the cycle is again → again"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_macro_body_may_nest_inside_itself() {
+    let project = Project::new("macro-nesting").sprite(
+        "A",
+        r#"sprite "A" {
+            var total: num = 4;
+            on flag_clicked {
+                for i in 0..2 { for j in 0..2 { looks::say(f"{i}{j}"); } }
+                while total > 0 { while total > 0 { total -= 1; } }
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    // Two `for`s and two `while`s, nesting inside themselves; the arena
+    // reservation proc has a loop of its own and is not part of the count.
+    let body = asm.split("proc __vms_reserve").next().unwrap_or(&asm);
+    assert_eq!(body.matches("control_repeat_until").count(), 4, "{asm}");
+}
+
+#[test]
+fn a_for_can_run_an_inclusive_range() {
+    let project = Project::new("for-inclusive").sprite(
+        "A",
+        r#"sprite "A" {
+            var total: num = 0;
+            on flag_clicked { for i in 0..=3 { total += i; } }
+        }"#,
+    );
+    let asm = project.expand();
+    // `..=` reaches past its end, so the test is `>` rather than `>=`.
+    assert!(
+        asm.contains("operator_gt(data_itemoflist(1, \"_stack1\"), 3)"),
+        "{asm}"
+    );
+}
+
+#[test]
+fn a_for_walks_a_list() {
+    let project = Project::new("for-each").sprite(
+        "A",
+        r#"sprite "A" {
+            var trail: list<num> = [1, 2, 3];
+            on flag_clicked { for x in trail { looks::say(x); } }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(asm.contains("data_lengthoflist(\"trail\")"), "{asm}");
+    assert!(
+        asm.contains("data_itemoflist(data_itemoflist(1, \"_stack1\"), \"trail\")"),
+        "{asm}"
+    );
+}
+
+#[test]
+fn a_loop_is_a_forever() {
+    let project = Project::new("loop-forever").sprite(
+        "A",
+        r#"sprite "A" {
+            on flag_clicked { loop { looks::say("on"); } }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(asm.contains("control_forever"), "{asm}");
+}
+
+#[test]
 fn a_macro_result_type_is_checked() {
     let project = Project::new("macro-result").sprite(
         "A",

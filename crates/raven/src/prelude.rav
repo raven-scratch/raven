@@ -16,6 +16,15 @@
 // a Scratch variable changes with `data_changevariableby`, and a VMS cell with a
 // read and a `data_replaceitemoflist`.
 
+/// `loop { … }`
+///
+/// `forever`, spelled the way every other language spells it.
+pub macro loop_forever($body: block) -> stmts {
+    forever {
+        $body;
+    }
+}
+
 /// `while c { … }`
 ///
 /// Vanilla Scratch has no `while`, so this is `repeat_until` on the negated
@@ -37,4 +46,75 @@ pub macro for_range($i: ident, $from: expr<num>, $to: expr<num>, $body: block) -
         $body;
         $i += 1;
     }
+}
+
+/// `for i in a..=b { … }`
+///
+/// The same loop with an inclusive end: the test is `>` rather than `>=`.
+pub macro for_range_inclusive($i: ident, $from: expr<num>, $to: expr<num>, $body: block) -> stmts {
+    let $i: num = $from;
+    repeat_until $i > $to {
+        $body;
+        $i += 1;
+    }
+}
+
+/// `for x in items { … }`
+///
+/// The list is named rather than read once, so the loop counts to whatever the
+/// list's length is at the top of each turn, and an item appended inside the
+/// body is visited. `x` is a `let` in the loop's own block, so it holds the
+/// element and disappears with the loop.
+pub macro for_each($x: ident, $items: ident, $body: block) -> stmts {
+    let cursor__: num = 1;
+    repeat_until cursor__ > $items.len() {
+        let $x = $items[cursor__];
+        $body;
+        cursor__ += 1;
+    }
+}
+
+// The one-block reporters, by the name the language they come from gives them:
+// `abs(x)` rather than `operators::mathop(MathOp::Abs, $x)`. The trigonometric
+// entries of the Scratch menu are deliberately absent — Scratch measures angles
+// in degrees and `sin` reads as radians — so write those out.
+
+/// `abs(x)` — one `operator_mathop`.
+pub macro abs($x: expr<num>) -> num {
+    operators::mathop(MathOp::Abs, $x)
+}
+
+/// `floor(x)` — one `operator_mathop`.
+pub macro floor($x: expr<num>) -> num {
+    operators::mathop(MathOp::Floor, $x)
+}
+
+/// `ceil(x)` — one `operator_mathop`.
+pub macro ceil($x: expr<num>) -> num {
+    operators::mathop(MathOp::Ceiling, $x)
+}
+
+/// `sqrt(x)` — one `operator_mathop`.
+pub macro sqrt($x: expr<num>) -> num {
+    operators::mathop(MathOp::Sqrt, $x)
+}
+
+/// `ln(x)` — the natural logarithm, one `operator_mathop`.
+pub macro ln($x: expr<num>) -> num {
+    operators::mathop(MathOp::Ln, $x)
+}
+
+/// `log10(x)` — Scratch's `log`, which is base 10.
+pub macro log10($x: expr<num>) -> num {
+    operators::mathop(MathOp::Log, $x)
+}
+
+/// `exp(x)` — `e` to the `x`, one `operator_mathop`.
+pub macro exp($x: expr<num>) -> num {
+    operators::mathop(MathOp::E, $x)
+}
+
+/// `pow10(x)` — ten to the `x`, one `operator_mathop`.
+pub macro pow10($x: expr<num>) -> num {
+    operators::mathop(MathOp::Ten, $x)
 }

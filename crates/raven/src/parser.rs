@@ -845,6 +845,15 @@ impl Parser<'_> {
                 span: start,
             }));
         }
+        if self.at_kw(Kw::Loop) {
+            self.bump();
+            let body = self.block()?;
+            return Ok(Stmt::Macro(MacroCall {
+                name: Ident::new(sugar::LOOP, start),
+                args: vec![MacroArg::Block(body)],
+                span: start,
+            }));
+        }
         if self.at_kw(Kw::While) {
             self.bump();
             let cond = self.expr()?;
@@ -947,25 +956,49 @@ impl Parser<'_> {
         let start = self.expect_kw(Kw::For)?.span;
         let var = self.expect_ident("a loop variable")?;
         self.expect_kw(Kw::In)?;
-        let from = self.expr()?;
-        self.expect(P::DotDot).map_err(|_| {
-            self.err(
-                self.span(),
-                "a `for` loop counts a range; write `for i in 0..10 { … }`",
+        let source = self.expr()?;
+        // Three shapes, one keyword: a half-open range, a closed range, and a
+        // walk over a list.
+        let (name, range) = if self.eat(P::DotDot) {
+            (
+                sugar::FOR,
+                vec![MacroArg::Expr(source), MacroArg::Expr(self.expr()?)],
             )
-        })?;
-        let to = self.expr()?;
+        } else if self.eat(P::DotDotEq) {
+            (
+                sugar::FOR_INCLUSIVE,
+                vec![MacroArg::Expr(source), MacroArg::Expr(self.expr()?)],
+            )
+        } else {
+            // `for x in items` reads the list's length on every turn, so the
+            // list is named rather than computed.
+            let Expr::Name(path) = &source else {
+                return Err(self.for_shape_error(source.span()));
+            };
+            if !path.is_single() {
+                return Err(self.for_shape_error(source.span()));
+            }
+            (sugar::FOR_EACH, vec![MacroArg::Expr(source)])
+        };
+        if !self.at_punct(P::LBrace) {
+            return Err(self.for_shape_error(self.span()));
+        }
         let body = self.block()?;
+        let mut args = vec![MacroArg::Ident(var)];
+        args.extend(range);
+        args.push(MacroArg::Block(body));
         Ok(Stmt::Macro(MacroCall {
-            name: Ident::new(sugar::FOR, start),
-            args: vec![
-                MacroArg::Ident(var),
-                MacroArg::Expr(from),
-                MacroArg::Expr(to),
-                MacroArg::Block(body),
-            ],
+            name: Ident::new(name, start),
+            args,
             span: start,
         }))
+    }
+
+    /// The three shapes a `for` has, for a header that is none of them.
+    fn for_shape_error(&self, span: crate::diag::Span) -> raven_scratch::diag::Error {
+        self.err(span, "a `for` loop counts a range or walks a list")
+            .note("write `for i in 0..10 { … }`, `for i in 0..=10 { … }` or `for x in items { … }`")
+            .note("a walked list is its name, so `for x in items { … }` rather than an expression")
     }
 
     fn match_stmt(&mut self) -> Result<Stmt> {

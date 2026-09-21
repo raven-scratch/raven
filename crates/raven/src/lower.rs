@@ -87,7 +87,7 @@ const STACK: &str = "_stack";
 /// makes a project's `project.json` enormous.
 const MAX_STRUCT_SIZE: usize = 64;
 
-/// How deep macro expansion may nest before a cycle is reported.
+/// How deep macro expansion may nest before it is refused.
 const MAX_EXPANSION_DEPTH: usize = 32;
 
 /// What a compiled project is: one raven-asm file per target.
@@ -928,8 +928,10 @@ struct Unit<'a> {
     pre: Vec<rasm::Stmt>,
     /// The return cell of each value-returning `proc` in this target.
     ret_cells: HashMap<String, usize>,
-    /// The macros currently being expanded, for cycle reporting.
-    macro_stack: Vec<String>,
+    /// How many expansions are open right now.
+    macro_depth: usize,
+    /// The macros whose definitions reach themselves, and a chain that says how.
+    macro_cycles: HashMap<String, Vec<String>>,
     /// The `proc` body currently being lowered, if any.
     proc_context: Option<ProcContext>,
     /// The procedures that reach themselves, and a call chain that says how.
@@ -971,12 +973,14 @@ impl<'a> Unit<'a> {
             stacks: vec![0],
             pre: Vec::new(),
             ret_cells: HashMap::new(),
-            macro_stack: Vec::new(),
+            macro_depth: 0,
+            macro_cycles: HashMap::new(),
             proc_context: None,
             recursion: HashMap::new(),
         };
         unit.collect()?;
         unit.compute_recursion();
+        unit.compute_macro_cycles();
         Ok(unit)
     }
 
@@ -1180,6 +1184,35 @@ impl<'a> Unit<'a> {
             }
         }
         self.recursion = recursion;
+    }
+
+    /// Record which macros reach themselves through their own definitions.
+    ///
+    /// The graph is syntactic, and only the definition counts: a call written in
+    /// a macro body is a step of that expansion, while the same name arriving
+    /// through a substituted argument belongs to the caller. That is exactly the
+    /// difference between `macro a() { a(); }` — which never terminates — and a
+    /// `for` inside a `for`, which does.
+    fn compute_macro_cycles(&mut self) {
+        let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+        for (name, def) in &self.macros {
+            let mut calls = Vec::new();
+            match &def.body {
+                MacroBody::Stmts(stmts) => collect_calls_block(stmts, &mut calls),
+                MacroBody::Expr(expr) => collect_calls_expr(expr, &mut calls),
+            }
+            calls.retain(|called| self.macros.contains_key(called));
+            calls.sort();
+            calls.dedup();
+            edges.insert(name.clone(), calls);
+        }
+        let mut cycles = HashMap::new();
+        for name in edges.keys() {
+            if let Some(chain) = cycle_through(&edges, name) {
+                cycles.insert(name.clone(), chain);
+            }
+        }
+        self.macro_cycles = cycles;
     }
 
     // -- driver -----------------------------------------------------------
@@ -2371,9 +2404,7 @@ impl<'a> Unit<'a> {
             Stmt::Macro(call) => {
                 let expansion = self.expand(call, source, params)?;
                 match expansion {
-                    Expansion::Stmts(stmts) => {
-                        self.lower_macro_stmts(&call.name.name, &stmts, source, params)
-                    }
+                    Expansion::Stmts(stmts) => self.lower_macro_stmts(&stmts, source, params),
                     Expansion::Expr(_) => Err(Error::new(
                         source
                             .error(
@@ -2581,9 +2612,7 @@ impl<'a> Unit<'a> {
             };
             let expansion = self.expand(&macro_call, source, params)?;
             return match expansion {
-                Expansion::Stmts(stmts) => {
-                    self.lower_macro_stmts(&macro_call.name.name, &stmts, source, params)
-                }
+                Expansion::Stmts(stmts) => self.lower_macro_stmts(&stmts, source, params),
                 Expansion::Expr(_) => Err(Error::new(
                     source
                         .error(
@@ -2870,8 +2899,7 @@ impl<'a> Unit<'a> {
                 let expansion = self.expand(call, source, params)?;
                 match expansion {
                     Expansion::Expr(expr) => {
-                        let typed =
-                            self.lower_macro_expr(&call.name.name, &expr, source, params)?;
+                        let typed = self.lower_macro_expr(&expr, source, params)?;
                         if let Some(def) = &def {
                             self.check_result(def, &typed, call.span, source)?;
                         }
@@ -3057,8 +3085,7 @@ impl<'a> Unit<'a> {
                 };
                 return match self.expand(&macro_call, source, params)? {
                     Expansion::Expr(expr) => {
-                        let typed =
-                            self.lower_macro_expr(&macro_call.name.name, &expr, source, params)?;
+                        let typed = self.lower_macro_expr(&expr, source, params)?;
                         self.check_result(&def, &typed, call.span, source)?;
                         Ok(typed)
                     }
@@ -4570,12 +4597,10 @@ impl<'a> Unit<'a> {
                     .note(format!("it is declared as {}", def.signature())),
             ));
         }
-        if let Some(position) = self.macro_stack.iter().position(|n| n == &name) {
-            let mut chain: Vec<&str> = self.macro_stack[position..]
-                .iter()
-                .map(String::as_str)
-                .collect();
-            chain.push(name.as_str());
+        // A macro is refused when its *definition* reaches itself. A call that
+        // arrives through a substituted argument is the caller's code, not a
+        // step of this expansion, so `for` inside `for` is not a cycle.
+        if let Some(chain) = self.macro_cycles.get(&name) {
             return Err(Error::new(
                 source
                     .error(
@@ -4587,7 +4612,7 @@ impl<'a> Unit<'a> {
                     .note("macro expansion must be acyclic; that is what makes every program cost a decidable number of blocks"),
             ));
         }
-        if self.macro_stack.len() >= MAX_EXPANSION_DEPTH {
+        if self.macro_depth >= MAX_EXPANSION_DEPTH {
             return Err(Error::new(
                 source
                     .error(call.name.span.pos, format!("`{name}` expands too deeply"))
@@ -4711,35 +4736,33 @@ impl<'a> Unit<'a> {
         }
     }
 
-    /// Lower an expanded macro body, with the macro on the expansion stack so a
-    /// cycle through the expansion is caught.
+    /// Lower an expanded macro body: one nested expansion deeper, and inside a
+    /// macro, so a `var` statement and a `$name` target are allowed.
     fn lower_macro_stmts(
         &mut self,
-        name: &str,
         stmts: &[Stmt],
         source: &Rc<Source>,
         params: &[(String, Scalar)],
     ) -> Result<Vec<rasm::Stmt>> {
-        self.macro_stack.push(name.to_string());
+        self.macro_depth += 1;
         let saved = self.in_macro;
         self.in_macro = true;
         let result = self.stmts(stmts, source, params);
         self.in_macro = saved;
-        self.macro_stack.pop();
+        self.macro_depth -= 1;
         result
     }
 
-    /// Lower an expanded macro expression with the macro on the stack.
+    /// Lower an expanded macro expression, one nested expansion deeper.
     fn lower_macro_expr(
         &mut self,
-        name: &str,
         expr: &Expr,
         source: &Rc<Source>,
         params: &[(String, Scalar)],
     ) -> Result<Typed> {
-        self.macro_stack.push(name.to_string());
+        self.macro_depth += 1;
         let result = self.expr(expr, source, params);
-        self.macro_stack.pop();
+        self.macro_depth -= 1;
         result
     }
 
@@ -5247,6 +5270,7 @@ fn collect_calls_block(stmts: &[Stmt], out: &mut Vec<String>) {
                 }
             }
             Stmt::Macro(call) => {
+                out.push(call.name.name.clone());
                 for arg in &call.args {
                     match arg {
                         MacroArg::Expr(expr) => collect_calls_expr(expr, out),
@@ -5287,6 +5311,7 @@ fn collect_calls_expr(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         Expr::Macro(call) => {
+            out.push(call.name.name.clone());
             for arg in &call.args {
                 if let MacroArg::Expr(expr) = arg {
                     collect_calls_expr(expr, out);

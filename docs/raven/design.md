@@ -26,14 +26,14 @@ loop had become.
 
 ## 3. Sugar is a macro, or it is a keyword with a written lowering
 
-Every convenience whose shape is fixed — `while`, `for` — is a macro in
-`std::prelude`, and the compiler knows no special case for either. `while` and
-`for` are still *keywords*, because the parser has to recognise the form to
-rewrite it into a call to `while_loop` or `for_range`; the prelude then defines
-those two macros, so replacing it with a different definition of `while_loop`
-changes what `while` means without touching the compiler. The consequence is that
-the language can grow without the compiler growing, and a user can add sugar the
-standard library does not have.
+Every convenience whose shape is fixed — `while`, `for`, `loop` — is a macro in
+`std::prelude`, and the compiler knows no special case for any of them. They are
+still *keywords*, because the parser has to recognise the form to rewrite it into
+a call to `while_loop`, `for_range`, `for_range_inclusive`, `for_each` or
+`loop_forever`; the prelude then defines those macros, so replacing it with a
+different definition of `while_loop` changes what `while` means without touching
+the compiler. The consequence is that the language can grow without the compiler
+growing, and a user can add sugar the standard library does not have.
 
 Some constructs are keywords instead, because their shape is not a substitution:
 
@@ -388,9 +388,10 @@ program's run, which is what the virtual memory system deliberately does not hav
 
 ### A general `for` over anything, and iterators
 
-An iterator is a hidden variable plus a protocol. raven's `for` is a range with a
-visible counter cell, and a `list` is walked with `for i in 0..xs.len()` or
-`for_each`-style macros the prelude can grow. Nothing hides a state machine.
+An iterator is a hidden variable plus a protocol. raven's `for` counts a range
+with a visible counter cell, or walks a named list with a counter and an element
+cell, and both are in the expansion where you can see them. A `map` is not walked
+this way; its keys are a list you can read. Nothing hides a state machine.
 
 ### `break` and `continue`
 

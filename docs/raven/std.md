@@ -165,8 +165,17 @@ can be read or redefined.
 
 | Item | What it does |
 | --- | --- |
+| `loop { … }` | `forever` |
 | `while c { … }` | `repeat_until` on the negated condition |
 | `for i in a..b { … }` | a `_stackN` cell for the counter, then `repeat_until` |
+| `for i in a..=b { … }` | the same, with an inclusive end |
+| `for x in items { … }` | a `_stackN` cell for the counter and one for the element |
+| `abs(x)`, `floor(x)`, `ceil(x)`, `sqrt(x)`, `ln(x)`, `log10(x)`, `exp(x)`, `pow10(x)` | the matching `operator_mathop`, one block each |
+
+The numeric shorthands stop at the entries that mean the same thing in every
+language. Scratch's trigonometry is in degrees, so `sin` and its siblings are not
+renamed; write `operators::mathop(MathOp::Sin, x)`, which is where the unit is
+visible.
 
 `num(x)` and `str(x)` are not prelude items either: they are core syntax, because
 a keyword is what tells the parser a conversion is meant. See

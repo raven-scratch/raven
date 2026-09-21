@@ -921,8 +921,14 @@ pub enum MacroArg {
 pub mod sugar {
     /// `while c { … }` → `while_loop(c, { … })`
     pub const WHILE: &str = "while_loop";
+    /// `loop { … }` → `loop_forever({ … })`
+    pub const LOOP: &str = "loop_forever";
     /// `for i in a..b { … }` → `for_range(i, a, b, { … })`
     pub const FOR: &str = "for_range";
+    /// `for i in a..=b { … }` → `for_range_inclusive(i, a, b, { … })`
+    pub const FOR_INCLUSIVE: &str = "for_range_inclusive";
+    /// `for x in items { … }` → `for_each(x, items, { … })`
+    pub const FOR_EACH: &str = "for_each";
 }
 
 #[cfg(test)]

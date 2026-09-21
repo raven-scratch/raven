@@ -144,7 +144,8 @@ script      = \"on\" hat block
 hat         = IDENT [ \"(\" [ expr { \",\" expr } ] \")\" ]
 
 stmt        = let | assign | op_assign | return | if_stmt | repeat_stmt
-            | repeat_until | forever | while_stmt | for_stmt | match_stmt | call \";\"
+            | repeat_until | forever | loop_stmt | while_stmt | for_stmt
+            | match_stmt | call \";\"
 let         = \"let\" IDENT [ \":\" type ] \"=\" expr \";\"
 assign      = lvalue \"=\" expr \";\"
 lvalue      = IDENT | index | field
@@ -156,8 +157,9 @@ if_stmt     = \"if\" expr block [ \"else\" ( if_stmt | block ) ]
 repeat_stmt = \"repeat\" expr block
 repeat_until= \"repeat_until\" expr block
 forever     = \"forever\" block
+loop_stmt   = \"loop\" block
 while_stmt  = \"while\" expr block
-for_stmt    = \"for\" IDENT \"in\" expr \"..\" expr block
+for_stmt    = \"for\" IDENT \"in\" ( expr \"..\" expr | expr \"..=\" expr | expr ) block
 match_stmt  = \"match\" expr \"{\" { pattern \"=>\" block } \"}\"
 pattern     = literal | IDENT | \"_\"
 call        = path \"(\" [ expr { \",\" expr } ] \")\"
@@ -180,9 +182,9 @@ path        = IDENT { \"::\" ( IDENT | keyword ) }
 block       = \"{\" { stmt } \"}\"
 
 # keywords: bool broadcast const costume else false fn for forever if in let list
-#   macro map match num on proc pub repeat repeat_until return sound sprite stage
-#   str struct true use var warp watch while
-# punctuation: ( ) { } [ ] , ; : :: = -> => . .. ! && || == != <= >= < > + - * / %
+#   loop macro map match num on proc pub repeat repeat_until return sound sprite
+#   stage str struct true use var warp watch while
+# punctuation: ( ) { } [ ] , ; : :: = -> => . .. ..= ! && || == != <= >= < > + - * / %
 "
     .to_string()
 }
@@ -211,8 +213,11 @@ m.remove(k)          5 + cell
 return e             2        arena cell write + control_stop(\"this script\")
 if / if-else         1
 repeat / repeat_until / forever  1
+loop                 1        control_forever, the same block as forever
 while c              2        operator_not + control_repeat_until
 for i in a..b        9 + cell counter on _stackN
+for i in a..=b       8 + cell counter on _stackN
+for x in items       13 + cell counter on _stackN, and one cell per element
 match e              1 per arm, plus 1 and a cell when the subject is sampled
 proc call            1
 reporter call        1 per block in the expression

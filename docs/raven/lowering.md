@@ -138,8 +138,11 @@ the construct adds *beyond* the code you wrote inside it.
 | `repeat n { A }` | `control_repeat(n) { A }` | 1 |
 | `repeat_until c { A }` | `control_repeat_until(c) { A }` | 1 |
 | `forever { A }` | `control_forever { A }` | 1 |
+| `loop { A }` | `control_forever { A }` | 1 |
 | `while c { A }` | `control_repeat_until(operator_not(c)) { A }` | 2 |
 | `for i in a..b { A }` | a cell write for `i`, `control_repeat_until(operator_not(operator_lt(item("i"), b))) { A; a read, an add and a cell write for `i` }` | 9, and one cell |
+| `for i in a..=b { A }` | the same with `operator_gt(item("i"), b)`, which needs no `operator_not` | 8, and one cell |
+| `for x in items { A }` | a cell write for the counter, `control_repeat_until(operator_gt(item("counter"), length of items)) { a cell c is given `items[counter]`; A; a read, an add and a cell write for `counter`; c is popped }` | 13, and two cells |
 | `match e { k => A, _ => B }` | `control_if_else(operator_equals(e, k)) { A } else { B }` | 1 per arm, plus 1 and a cell when `e` is read into one first |
 | `control::stop(StopOption::All);` | `control_stop("all");` | 1 |
 | `some_proc(a, b);` | a `procedures_call` with a matching mutation | 1 |

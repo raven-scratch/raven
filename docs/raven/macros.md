@@ -188,8 +188,9 @@ Macro expansion must terminate, and the way raven guarantees it is by refusing
 recursion:
 
 * a macro body may call other macros;
-* the call graph must be acyclic;
-* a cycle is an error, reported at the call that closes it;
+* the call graph over definitions must be acyclic;
+* a cycle is an error, reported at every call of a macro whose definition reaches
+  itself, and the note names the whole chain;
 * expansion stops after 32 levels, and a program that deep is an error too — the
   bound is what keeps a macro that expands into a slightly larger call of itself
   from running the compiler out of stack before the cycle check can name it.
@@ -207,8 +208,17 @@ ordinary macro you can shadow.
 
 | Macro | Expands to | Cost |
 | --- | --- | --- |
+| `loop { … }` | `forever { … }` | nothing |
 | `while c { … }` | `repeat_until !c { … }` — the `!` is an `operator_not` | 2 extra blocks |
 | `for i in a..b { … }` | a `_stackN` cell for `i`, then `repeat_until` | 9 blocks and one cell |
+| `for i in a..=b { … }` | the same, testing `>` instead of `>=` | 8 blocks and one cell |
+| `for x in items { … }` | a `_stackN` counter, and a `_stackN` cell for `x` per turn | 13 blocks and two cells |
+| `abs(x)`, `floor(x)`, `ceil(x)`, `sqrt(x)`, `ln(x)`, `log10(x)`, `exp(x)`, `pow10(x)` | `operators::mathop` with the matching menu entry | one block each |
+
+The eight numeric shorthands are the `operator_mathop` entries, under the names
+the languages they come from use. The trigonometric ones are deliberately not
+among them: Scratch measures angles in degrees, so `sin(x)` would read as radians
+and be wrong. Write `operators::mathop(MathOp::Sin, x)` for those.
 
 `+=` and the other compound assignments are core forms, not macros, because the
 lowering depends on where the target lives; `match`, `f"…"`, compound assignment
@@ -218,29 +228,28 @@ and `return` are keywords, and are on the
 A program may redefine a prelude macro: the program's definition wins, and the
 expansion is printed either way.
 
-## A macro cannot nest inside itself
+## A macro may nest inside itself
 
-Expansion is one pass with a call stack, and the stack is not unwound until the
-whole expansion is lowered — so a `for` written inside another `for`'s body is
-reported as a cycle, even though it is not one:
-
-```
-error: `for_range` expands into itself
-  = note: the cycle is for_range → for_range
-```
-
-Write the outer loop as a core form and the problem disappears:
+A `for` inside a `for`, or a `while` inside a `while`, is an ordinary program:
 
 ```rav
-let L: num = 0;
-repeat 4 {
-    for i in 0..4 { board[L * 4 + i] = 0; }
-    L += 1;
+for row in 0..4 {
+    for column in 0..4 { board[row * 4 + column] = 0; }
 }
 ```
 
-`repeat`, `forever`, `if` and `match` are keywords rather than macros, so they
-may nest freely. This is a wart in the expander, not a design decision.
+What the expander refuses is a macro whose **own definition** calls it, because
+that expansion never terminates:
+
+```rav
+macro again() -> stmts { again(); }        // error: `again` expands into itself
+```
+
+The distinction is the definition. A call written in a macro body is a step of
+that expansion; the same name arriving through a substituted `$body` belongs to
+the caller, who wrote it once and gets it expanded once. So the call graph the
+checker builds is over macro bodies only, and a macro that reaches itself through
+one is the one that is refused.
 
 ## Errors in expanded code
 

@@ -40,6 +40,7 @@ pub enum Kw {
     Repeat,
     RepeatUntil,
     Forever,
+    Loop,
     While,
     For,
     In,
@@ -80,6 +81,7 @@ impl Kw {
             Kw::Repeat => "repeat",
             Kw::RepeatUntil => "repeat_until",
             Kw::Forever => "forever",
+            Kw::Loop => "loop",
             Kw::While => "while",
             Kw::For => "for",
             Kw::In => "in",
@@ -119,6 +121,7 @@ impl Kw {
             "repeat" => Kw::Repeat,
             "repeat_until" => Kw::RepeatUntil,
             "forever" => Kw::Forever,
+            "loop" => Kw::Loop,
             "while" => Kw::While,
             "for" => Kw::For,
             "in" => Kw::In,
@@ -156,6 +159,7 @@ pub enum P {
     FatArrow,
     Dot,
     DotDot,
+    DotDotEq,
     Plus,
     Minus,
     Star,
@@ -191,6 +195,7 @@ impl P {
             P::Arrow => "->",
             P::FatArrow => "=>",
             P::DotDot => "..",
+            P::DotDotEq => "..=",
             P::Dot => ".",
             P::Plus => "+",
             P::Minus => "-",
@@ -693,7 +698,12 @@ impl<'a> Lexer<'a> {
             '-' => (P::Minus, 1),
             '.' if self.peek() == Some('.') => {
                 self.bump();
-                (P::DotDot, 2)
+                if self.peek() == Some('=') {
+                    self.bump();
+                    (P::DotDotEq, 3)
+                } else {
+                    (P::DotDot, 2)
+                }
             }
             '.' => (P::Dot, 1),
             '!' if self.peek() == Some('=') => {
