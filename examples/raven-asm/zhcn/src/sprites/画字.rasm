@@ -1,0 +1,307 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "画字" {
+    var rgb = 12583104; at 5 5
+    // the project calls this `参数`; raven-asm cannot write that as an identifier
+    var re_e58f82e695b0 = 15;
+    // the project calls this `字i`; raven-asm cannot write that as an identifier
+    var re_e5ad9769 = 284;
+    // the project calls this `字x`; raven-asm cannot write that as an identifier
+    var re_e5ad9778 = -47.96875; at 5 5
+    // the project calls this `字x下`; raven-asm cannot write that as an identifier
+    var re_e5ad9778e4b88b = 9.84375;
+    // the project calls this `字y`; raven-asm cannot write that as an identifier
+    var re_e5ad9779 = -75; at 5 36
+    // the project calls this `字y下`; raven-asm cannot write that as an identifier
+    var re_e5ad9779e4b88b = 15;
+    // the project calls this `字代码`; raven-asm cannot write that as an identifier
+    var re_e5ad97e4bba3e7a081 = "页2a2432543D3452447907M254265M452460920M554814912A0CAC4AC2M9179DDAE4B24"; at 5 5
+    // the project calls this `字属性b`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a762 = "0";
+    // the project calls this `字属性c大小写`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699 = "0";
+    // the project calls this `字属性f大小`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a766e5a4a7e5b08f = 15;
+    // the project calls this `字属性i`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a769 = "0";
+    // the project calls this `字属性s`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a773 = "0";
+    // the project calls this `字属性u`; raven-asm cannot write that as an identifier
+    var re_e5ad97e5b19ee680a775 = "0";
+    // the project calls this `定位x`; raven-asm cannot write that as an identifier
+    var re_e5ae9ae4bd8d78 = 36;
+    // the project calls this `定位y`; raven-asm cannot write that as an identifier
+    var re_e5ae9ae4bd8d79 = 44;
+    // the project calls this `找字i`; raven-asm cannot write that as an identifier
+    var re_e689bee5ad9769 = 28370;
+    // the project calls this `找字j`; raven-asm cannot write that as an identifier
+    var re_e689bee5ad976a = 0.5;
+    // the project calls this `画字i`; raven-asm cannot write that as an identifier
+    var re_e794bbe5ad9769 = 72;
+    // the project calls this `转义触发`; raven-asm cannot write that as an identifier
+    var re_e8bdace4b989e8a7a6e58f91 = "1";
+    costume "造型1" = "assets/14e46ec3e2ba471c2adfe8f119052307.svg" center 0 0;
+
+    event_whenflagclicked {
+        data_setvariableto("gi", "1");
+        data_setvariableto("re_e88c83e59bb47831", "-235");
+        data_setvariableto("re_e88c83e59bb47832", "235");
+        data_setvariableto("re_e88c83e59bb47931", "175");
+        data_setvariableto("re_e88c83e59bb47932", "-175");
+        event_broadcast("刷新显示");
+    }
+
+    event_whenbroadcastreceived("刷新显示") {
+        pen_clear;
+        pen_setPenColorToColor("#000000");
+        data_setvariableto("re_e6b58be8af95e69687e69cac", data_itemoflist(data_variable("gi"), "re_e6bc94e7a4bae58685e5aeb9"));
+        re_e794bbe5ad97e887aae58aa8e68e92e78988(data_variable("re_e88c83e59bb47831"), data_variable("re_e88c83e59bb47931"), data_variable("re_e88c83e59bb47832"), data_variable("re_e88c83e59bb47932"), data_variable("re_e6b58be8af95e69687e69cac"));
+        looks_switchcostumeto("造型1");
+        motion_gotoxy(data_variable("re_e88c83e59bb47831"), data_variable("re_e88c83e59bb47931"));
+        pen_setPenColorToColor("#b0b0b0");
+        pen_setPenSizeTo("1");
+        pen_penDown;
+        motion_setx(data_variable("re_e88c83e59bb47832"));
+        motion_sety(data_variable("re_e88c83e59bb47932"));
+        motion_setx(data_variable("re_e88c83e59bb47831"));
+        motion_sety(data_variable("re_e88c83e59bb47931"));
+        pen_penUp;
+        motion_gotoxy(operator_subtract(data_variable("re_e88c83e59bb47831"), "5"), operator_add(data_variable("re_e88c83e59bb47931"), "5"));
+        pen_penDown;
+        motion_gotoxy(operator_add(data_variable("re_e88c83e59bb47831"), "5"), operator_subtract(data_variable("re_e88c83e59bb47931"), "5"));
+        pen_penUp;
+        motion_gotoxy(operator_add(data_variable("re_e88c83e59bb47831"), "5"), operator_add(data_variable("re_e88c83e59bb47931"), "5"));
+        pen_penDown;
+        motion_gotoxy(operator_subtract(data_variable("re_e88c83e59bb47831"), "5"), operator_subtract(data_variable("re_e88c83e59bb47931"), "5"));
+        pen_penUp;
+    }
+
+    event_whenbroadcastreceived("翻页") {
+        data_setvariableto("gi", operator_add(operator_mod(data_variable("gi"), data_lengthoflist("re_e6bc94e7a4bae58685e5aeb9")), "1"));
+        event_broadcast("刷新显示");
+    }
+
+    event_whenbroadcastreceived("反向翻页") {
+        data_setvariableto("gi", operator_add(operator_mod(operator_subtract(data_variable("gi"), "2"), data_lengthoflist("re_e6bc94e7a4bae58685e5aeb9")), "1"));
+        event_broadcast("刷新显示");
+    }
+
+    proc re_e9878de7bdaee5b19ee680a7() {
+        data_setvariableto("re_e5ad97e5b19ee680a762", "0");
+        data_setvariableto("re_e5ad97e5b19ee680a769", "0");
+        data_setvariableto("re_e5ad97e5b19ee680a775", "0");
+        data_setvariableto("re_e5ad97e5b19ee680a773", "0");
+        data_setvariableto("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699", "0");
+        data_setvariableto("re_e5ad97e5b19ee680a766e5a4a7e5b08f", "20");
+        pen_setPenColorToColor("#000000");
+    }
+
+    proc re_e794bbe5ad97e887aae58aa8e68e92e78988(x1: str, y1: str, x2: str, y2: str, re_e69687e5ad97: str) warp {
+        data_setvariableto("re_e5ad9778", argument_reporter_string_number("x1"));
+        data_setvariableto("re_e5ad9779", argument_reporter_string_number("y1"));
+        data_setvariableto("re_e5ad9778e4b88b", "0");
+        data_setvariableto("re_e5ad9779e4b88b", "0");
+        data_setvariableto("re_e5ad9769", "0");
+        re_e9878de7bdaee5b19ee680a7;
+        control_repeat_until(operator_gt(operator_add(data_variable("re_e5ad9769"), "1"), operator_length(argument_reporter_string_number("re_e69687e5ad97")))) {
+            data_changevariableby("re_e5ad9769", "1");
+            data_setvariableto("re_e8bdace4b989e8a7a6e58f91", "0");
+            control_if(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "/")) {
+                data_changevariableby("re_e5ad9769", "1");
+                data_setvariableto("re_e8bdace4b989e8a7a6e58f91", "1");
+                control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "/")) {
+                    data_setvariableto("re_e8bdace4b989e8a7a6e58f91", "0");
+                } else {
+                    control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "n")) {
+                        control_if(operator_gt(data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"), data_variable("re_e5ad9779e4b88b"))) {
+                            data_setvariableto("re_e5ad9779e4b88b", data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"));
+                        }
+                        data_setvariableto("re_e5ad9778", argument_reporter_string_number("x1"));
+                        data_changevariableby("re_e5ad9779", operator_subtract("", data_variable("re_e5ad9779e4b88b")));
+                        data_setvariableto("re_e5ad9779e4b88b", "0");
+                    } else {
+                        control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "f")) {
+                            re_e58f82e695b0(argument_reporter_string_number("re_e69687e5ad97"));
+                            data_setvariableto("re_e5ad97e5b19ee680a766e5a4a7e5b08f", data_variable("re_e58f82e695b0"));
+                        } else {
+                            control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "!")) {
+                                data_setvariableto("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699", "2");
+                            } else {
+                                control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "-")) {
+                                    re_2f2d20e5a484e79086(argument_reporter_string_number("re_e69687e5ad97"));
+                                } else {
+                                    control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "#")) {
+                                        re_2f2320e5a484e79086(argument_reporter_string_number("re_e69687e5ad97"));
+                                    } else {
+                                        re_e5bc80e585b3e5b19ee680a7(argument_reporter_string_number("re_e69687e5ad97"), "1");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            control_if(operator_equals(data_variable("re_e8bdace4b989e8a7a6e58f91"), "0")) {
+                re_e689bee5ad972020e5a4a7e586993a(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), data_variable("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699"));
+                data_setvariableto("re_e5ad97e4bba3e7a081", data_itemoflist(data_variable("re_e689bee5ad9769"), "re_e5ad97e4bd93"));
+                data_setvariableto("re_e5ad9778e4b88b", operator_multiply(data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"), operator_divide(operator_join("0x", operator_join(operator_letter_of("2", data_variable("re_e5ad97e4bba3e7a081")), operator_letter_of("3", data_variable("re_e5ad97e4bba3e7a081")))), "64")));
+                control_if(operator_gt(operator_add(data_variable("re_e5ad9778"), data_variable("re_e5ad9778e4b88b")), argument_reporter_string_number("x2"))) {
+                    data_setvariableto("re_e5ad9778", argument_reporter_string_number("x1"));
+                    data_changevariableby("re_e5ad9779", operator_subtract("", data_variable("re_e5ad9779e4b88b")));
+                    data_setvariableto("re_e5ad9779e4b88b", "0");
+                }
+                control_if(operator_gt(data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"), data_variable("re_e5ad9779e4b88b"))) {
+                    data_setvariableto("re_e5ad9779e4b88b", data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"));
+                }
+                control_if(operator_lt(operator_subtract(data_variable("re_e5ad9779"), data_variable("re_e5ad9779e4b88b")), argument_reporter_string_number("y2"))) {
+                    control_stop("this script");
+                }
+                control_if(operator_equals(data_variable("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699"), "2")) {
+                    data_setvariableto("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699", "0");
+                }
+                control_if(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), operator_letter_of("1", data_itemoflist(data_variable("re_e689bee5ad9769"), "re_e5ad97e4bd93")))) {
+                    re_e794bbe5ad97(data_variable("re_e689bee5ad9769"), data_variable("re_e5ad9778"), data_variable("re_e5ad9779"), data_variable("re_e5ad97e5b19ee680a766e5a4a7e5b08f"));
+                }
+                data_changevariableby("re_e5ad9778", data_variable("re_e5ad9778e4b88b"));
+            }
+        }
+    }
+
+    proc re_e5bc80e585b3e5b19ee680a7(re_e69687e5ad97: str, re_e5bc80e585b3: str) {
+        control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "b")) {
+            data_setvariableto("re_e5ad97e5b19ee680a762", argument_reporter_string_number("re_e5bc80e585b3"));
+        } else {
+            control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "i")) {
+                data_setvariableto("re_e5ad97e5b19ee680a769", argument_reporter_string_number("re_e5bc80e585b3"));
+            } else {
+                control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "u")) {
+                    data_setvariableto("re_e5ad97e5b19ee680a775", argument_reporter_string_number("re_e5bc80e585b3"));
+                } else {
+                    control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "s")) {
+                        data_setvariableto("re_e5ad97e5b19ee680a773", argument_reporter_string_number("re_e5bc80e585b3"));
+                    } else {
+                        control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "c")) {
+                            data_setvariableto("re_e5ad97e5b19ee680a763e5a4a7e5b08fe58699", argument_reporter_string_number("re_e5bc80e585b3"));
+                        } else {
+                            data_changevariableby("re_e5ad9769", operator_add("-2", argument_reporter_string_number("re_e5bc80e585b3")));
+                            data_setvariableto("re_e8bdace4b989e8a7a6e58f91", "0");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    proc re_2f2d20e5a484e79086(re_e69687e5ad97: str) {
+        data_changevariableby("re_e5ad9769", "1");
+        control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "f")) {
+            data_setvariableto("re_e5ad97e5b19ee680a766e5a4a7e5b08f", "20");
+        } else {
+            control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "#")) {
+                pen_setPenColorToColor("#000000");
+            } else {
+                control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "0")) {
+                    re_e9878de7bdaee5b19ee680a7;
+                } else {
+                    re_e5bc80e585b3e5b19ee680a7(argument_reporter_string_number("re_e69687e5ad97"), "0");
+                }
+            }
+        }
+    }
+
+    proc re_2f2320e5a484e79086(re_e69687e5ad97: str) {
+        data_changevariableby("re_e5ad9769", "1");
+        control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "h")) {
+            re_e58f82e695b0(argument_reporter_string_number("re_e69687e5ad97"));
+            pen_setPenColorParamTo("color", data_variable("re_e58f82e695b0"));
+        } else {
+            control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "s")) {
+                re_e58f82e695b0(argument_reporter_string_number("re_e69687e5ad97"));
+                pen_setPenColorParamTo("saturation", data_variable("re_e58f82e695b0"));
+            } else {
+                control_if_else(operator_equals(operator_letter_of(data_variable("re_e5ad9769"), argument_reporter_string_number("re_e69687e5ad97")), "v")) {
+                    re_e58f82e695b0(argument_reporter_string_number("re_e69687e5ad97"));
+                    pen_setPenColorParamTo("brightness", data_variable("re_e58f82e695b0"));
+                } else {
+                    data_changevariableby("re_e5ad9769", "-1");
+                    data_setvariableto("rgb", "0");
+                    control_repeat("6") {
+                        data_setvariableto("rgb", operator_add(operator_join("0x", operator_letter_of(operator_add(data_variable("re_e5ad9769"), "1"), argument_reporter_string_number("re_e69687e5ad97"))), operator_multiply(data_variable("rgb"), "16")));
+                        data_changevariableby("re_e5ad9769", "1");
+                    }
+                    pen_setPenColorToColor(data_variable("rgb"));
+                }
+            }
+        }
+    }
+
+    proc re_e58f82e695b0(re_e69687e5ad97: str) {
+        data_setvariableto("re_e58f82e695b0", operator_add("", operator_join(operator_letter_of(operator_add(data_variable("re_e5ad9769"), "1"), argument_reporter_string_number("re_e69687e5ad97")), operator_join(operator_letter_of(operator_add(data_variable("re_e5ad9769"), "2"), argument_reporter_string_number("re_e69687e5ad97")), operator_letter_of(operator_add(data_variable("re_e5ad9769"), "3"), argument_reporter_string_number("re_e69687e5ad97"))))));
+        data_changevariableby("re_e5ad9769", "3");
+    }
+
+    proc re_e794bbe5ad97(re_e5ad9769: str, x: str, y: str, re_e5a4a7e5b08f: str) warp {
+        control_if_else(operator_equals(data_variable("re_e5ad97e5b19ee680a762"), "1")) {
+            pen_setPenSizeTo(operator_divide(argument_reporter_string_number("re_e5a4a7e5b08f"), "12"));
+        } else {
+            pen_setPenSizeTo(operator_divide(argument_reporter_string_number("re_e5a4a7e5b08f"), "24"));
+        }
+        data_setvariableto("re_e5ad97e4bba3e7a081", data_itemoflist(argument_reporter_string_number("re_e5ad9769"), "re_e5ad97e4bd93"));
+        data_setvariableto("re_e794bbe5ad9769", "4");
+        control_repeat_until(operator_gt(data_variable("re_e794bbe5ad9769"), operator_length(data_variable("re_e5ad97e4bba3e7a081")))) {
+            re_e5ae9ae4bd8d(argument_reporter_string_number("x"), argument_reporter_string_number("y"), argument_reporter_string_number("re_e5a4a7e5b08f"));
+            pen_penDown;
+            control_repeat_until(operator_or(operator_gt(data_variable("re_e794bbe5ad9769"), operator_length(data_variable("re_e5ad97e4bba3e7a081"))), operator_equals(operator_letter_of(data_variable("re_e794bbe5ad9769"), data_variable("re_e5ad97e4bba3e7a081")), "M"))) {
+                re_e5ae9ae4bd8d(argument_reporter_string_number("x"), argument_reporter_string_number("y"), argument_reporter_string_number("re_e5a4a7e5b08f"));
+            }
+            data_changevariableby("re_e794bbe5ad9769", "1");
+            pen_penUp;
+        }
+        control_if(operator_equals(data_variable("re_e5ad97e5b19ee680a775"), "1")) {
+            motion_gotoxy(argument_reporter_string_number("x"), operator_round(operator_subtract(argument_reporter_string_number("y"), argument_reporter_string_number("re_e5a4a7e5b08f"))));
+            pen_penDown;
+            motion_changexby(data_variable("re_e5ad9778e4b88b"));
+            pen_penUp;
+        }
+        control_if(operator_equals(data_variable("re_e5ad97e5b19ee680a773"), "1")) {
+            motion_gotoxy(argument_reporter_string_number("x"), operator_round(operator_subtract(argument_reporter_string_number("y"), operator_divide(argument_reporter_string_number("re_e5a4a7e5b08f"), "2"))));
+            pen_penDown;
+            motion_changexby(data_variable("re_e5ad9778e4b88b"));
+            pen_penUp;
+        }
+    }
+
+    proc re_e5ae9ae4bd8d(x: str, y: str, re_e5a4a7e5b08f: str) {
+        data_setvariableto("re_e5ae9ae4bd8d78", operator_join(operator_join("0x", operator_letter_of(operator_add(data_variable("re_e794bbe5ad9769"), "0"), data_variable("re_e5ad97e4bba3e7a081"))), operator_join(operator_letter_of(operator_add(data_variable("re_e794bbe5ad9769"), "1"), data_variable("re_e5ad97e4bba3e7a081")), operator_letter_of(operator_add(data_variable("re_e794bbe5ad9769"), "2"), data_variable("re_e5ad97e4bba3e7a081")))));
+        data_setvariableto("re_e5ae9ae4bd8d79", operator_mathop("floor", operator_divide(data_variable("re_e5ae9ae4bd8d78"), "64")));
+        data_setvariableto("re_e5ae9ae4bd8d78", operator_mod(data_variable("re_e5ae9ae4bd8d78"), "64"));
+        control_if_else(operator_equals(data_variable("re_e5ad97e5b19ee680a769"), "1")) {
+            motion_gotoxy(operator_add(operator_add(argument_reporter_string_number("x"), operator_multiply(operator_divide(data_variable("re_e5ae9ae4bd8d78"), "64"), argument_reporter_string_number("re_e5a4a7e5b08f"))), operator_multiply(operator_divide(operator_subtract("32", data_variable("re_e5ae9ae4bd8d79")), "64"), operator_divide(argument_reporter_string_number("re_e5a4a7e5b08f"), "3"))), operator_subtract(argument_reporter_string_number("y"), operator_multiply(operator_divide(data_variable("re_e5ae9ae4bd8d79"), "64"), argument_reporter_string_number("re_e5a4a7e5b08f"))));
+        } else {
+            motion_gotoxy(operator_add(argument_reporter_string_number("x"), operator_multiply(operator_divide(data_variable("re_e5ae9ae4bd8d78"), "64"), argument_reporter_string_number("re_e5a4a7e5b08f"))), operator_subtract(argument_reporter_string_number("y"), operator_multiply(operator_divide(data_variable("re_e5ae9ae4bd8d79"), "64"), argument_reporter_string_number("re_e5a4a7e5b08f"))));
+        }
+        data_changevariableby("re_e794bbe5ad9769", "3");
+    }
+
+    proc re_e689bee5ad972020e5a4a7e586993a(re_e5ad97: str, re_e5a4a7e58699: str) {
+        data_setvariableto("re_e689bee5ad9769", "0");
+        data_setvariableto("re_e689bee5ad976a", "1");
+        control_repeat_until(operator_gt(operator_multiply(data_variable("re_e689bee5ad976a"), "2"), data_lengthoflist("re_e5ad97e5ba93e7b4a2e5bc95"))) {
+            data_setvariableto("re_e689bee5ad976a", operator_multiply(data_variable("re_e689bee5ad976a"), "2"));
+        }
+        control_repeat_until(operator_lt(data_variable("re_e689bee5ad976a"), "1")) {
+            control_if(operator_and(operator_lt(operator_add(data_variable("re_e689bee5ad9769"), data_variable("re_e689bee5ad976a")), data_lengthoflist("re_e5ad97e5ba93e7b4a2e5bc95")), operator_lt(operator_letter_of("1", data_itemoflist(data_itemoflist(operator_add(data_variable("re_e689bee5ad9769"), data_variable("re_e689bee5ad976a")), "re_e5ad97e5ba93e7b4a2e5bc95"), "re_e5ad97e4bd93")), argument_reporter_string_number("re_e5ad97")))) {
+                data_changevariableby("re_e689bee5ad9769", data_variable("re_e689bee5ad976a"));
+            }
+            data_setvariableto("re_e689bee5ad976a", operator_divide(data_variable("re_e689bee5ad976a"), "2"));
+        }
+        data_changevariableby("re_e689bee5ad9769", "1");
+        control_if(operator_and(operator_equals(argument_reporter_string_number("re_e5a4a7e58699"), "0"), operator_equals(operator_letter_of("1", data_itemoflist(data_itemoflist(operator_add(data_variable("re_e689bee5ad9769"), "1"), "re_e5ad97e5ba93e7b4a2e5bc95"), "re_e5ad97e4bd93")), argument_reporter_string_number("re_e5ad97")))) {
+            data_changevariableby("re_e689bee5ad9769", "1");
+        }
+        data_setvariableto("re_e689bee5ad9769", data_itemoflist(data_variable("re_e689bee5ad9769"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+    }
+}

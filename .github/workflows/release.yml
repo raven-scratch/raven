@@ -86,7 +86,7 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          cargo build --release --target "${{ matrix.target }}" -p raven -p raven-asm
+          cargo build --release --target "${{ matrix.target }}" -p raven -p raven-asm -p raven-re
           mkdir -p dist
           version="${{ inputs.version }}"
           platform="${{ matrix.platform }}"
@@ -94,6 +94,7 @@ jobs:
           out="target/${{ matrix.target }}/release"
           cp "$out/raven$suffix" "dist/raven-v$version-$platform$suffix"
           cp "$out/raven-asm$suffix" "dist/raven-asm-v$version-$platform$suffix"
+          cp "$out/raven-re$suffix" "dist/raven-re-v$version-$platform$suffix"
           ls -l dist
 
       - uses: actions/upload-artifact@v4

@@ -120,3 +120,16 @@ raven-asm check && raven-asm build && cp dist/my-game.sb3 public/
 Because identifiers are derived deterministically, an unchanged project
 produces a byte-identical `.sb3`, which makes it safe to commit or diff the
 output if you want to.
+
+## The other direction
+
+raven-asm is reversible, because one statement is one block. `raven-re` reads a
+vanilla Scratch 3 `.sb3` and writes the raven-asm project that reproduces it, then
+compiles it to prove the reversal holds:
+
+```sh
+raven-re dist/my-game.sb3 --output my-game-asm
+```
+
+See [What is raven-re?](/raven-re/) for what it refuses and what raven-asm has no
+syntax for.

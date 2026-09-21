@@ -1,0 +1,85 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "字库" {
+    var i = 42220;
+    var j = 42220;
+    // the project calls this `中间值`; raven-asm cannot write that as an identifier
+    var re_e4b8ade997b4e580bc = 42220;
+    // the project calls this `比较结果`; raven-asm cannot write that as an identifier
+    var re_e6af94e8be83e7bb93e69e9c = 0;
+    costume "造型1" = "assets/14e46ec3e2ba471c2adfe8f119052307.svg" center 0 0;
+
+    proc re_e5bbbae7ab8be7b4a2e5bc95() warp {
+        data_setvariableto("i", "0");
+        data_deletealloflist("re_e5ad97e5ba93e7b4a2e5bc95");
+        control_repeat(data_lengthoflist("re_e5ad97e4bd93")) {
+            data_changevariableby("i", "1");
+            data_addtolist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95");
+        }
+        re_e5bfabe68e92("1", data_lengthoflist("re_e5ad97e4bd93"));
+    }
+
+    proc re_e5bfabe68e92(i: str, j: str) warp {
+        control_if(operator_lt(argument_reporter_string_number("i"), argument_reporter_string_number("j"))) {
+            data_setvariableto("j", operator_mathop("floor", operator_divide(operator_add(argument_reporter_string_number("i"), argument_reporter_string_number("j")), "2")));
+            control_if(operator_lt(argument_reporter_string_number("i"), data_variable("j"))) {
+                data_setvariableto("re_e4b8ade997b4e580bc", data_itemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+                data_replaceitemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95", data_itemoflist(argument_reporter_string_number("i"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+                data_replaceitemoflist(argument_reporter_string_number("i"), "re_e5ad97e5ba93e7b4a2e5bc95", data_variable("re_e4b8ade997b4e580bc"));
+            }
+            data_setvariableto("i", argument_reporter_string_number("i"));
+            data_setvariableto("j", argument_reporter_string_number("j"));
+            data_setvariableto("re_e4b8ade997b4e580bc", data_itemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+            control_repeat_until(operator_equals(data_variable("i"), data_variable("j"))) {
+                re_e6af94e8be83(data_itemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95"), data_variable("re_e4b8ade997b4e580bc"));
+                control_repeat_until(operator_or(operator_equals(data_variable("i"), data_variable("j")), operator_lt(data_variable("re_e6af94e8be83e7bb93e69e9c"), "1"))) {
+                    data_changevariableby("j", "-1");
+                    re_e6af94e8be83(data_itemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95"), data_variable("re_e4b8ade997b4e580bc"));
+                }
+                control_if(operator_lt(data_variable("i"), data_variable("j"))) {
+                    data_replaceitemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95", data_itemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+                    data_changevariableby("i", "1");
+                }
+                re_e6af94e8be83(data_itemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95"), data_variable("re_e4b8ade997b4e580bc"));
+                control_repeat_until(operator_or(operator_equals(data_variable("i"), data_variable("j")), operator_gt(data_variable("re_e6af94e8be83e7bb93e69e9c"), "-1"))) {
+                    data_changevariableby("i", "1");
+                    re_e6af94e8be83(data_itemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95"), data_variable("re_e4b8ade997b4e580bc"));
+                }
+                control_if(operator_lt(data_variable("i"), data_variable("j"))) {
+                    data_replaceitemoflist(data_variable("j"), "re_e5ad97e5ba93e7b4a2e5bc95", data_itemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95"));
+                    data_changevariableby("j", "-1");
+                }
+            }
+            data_replaceitemoflist(data_variable("i"), "re_e5ad97e5ba93e7b4a2e5bc95", data_variable("re_e4b8ade997b4e580bc"));
+            re_e5bfabe68e92e4b88b(argument_reporter_string_number("i"), data_variable("i"), argument_reporter_string_number("j"));
+        }
+    }
+
+    proc re_e5bfabe68e92e4b88b(i: str, mid: str, j: str) {
+        re_e5bfabe68e92(argument_reporter_string_number("i"), operator_subtract(argument_reporter_string_number("mid"), "1"));
+        re_e5bfabe68e92(operator_add(argument_reporter_string_number("mid"), "1"), argument_reporter_string_number("j"));
+    }
+
+    proc re_e6af94e8be83(i: str, j: str) {
+        control_if_else(operator_lt(operator_letter_of("1", data_itemoflist(argument_reporter_string_number("i"), "re_e5ad97e4bd93")), operator_letter_of("1", data_itemoflist(argument_reporter_string_number("j"), "re_e5ad97e4bd93")))) {
+            data_setvariableto("re_e6af94e8be83e7bb93e69e9c", "-1");
+        } else {
+            control_if_else(operator_gt(operator_letter_of("1", data_itemoflist(argument_reporter_string_number("i"), "re_e5ad97e4bd93")), operator_letter_of("1", data_itemoflist(argument_reporter_string_number("j"), "re_e5ad97e4bd93")))) {
+                data_setvariableto("re_e6af94e8be83e7bb93e69e9c", "1");
+            } else {
+                control_if_else(operator_lt(argument_reporter_string_number("i"), argument_reporter_string_number("j"))) {
+                    data_setvariableto("re_e6af94e8be83e7bb93e69e9c", "-1");
+                } else {
+                    control_if_else(operator_gt(argument_reporter_string_number("i"), argument_reporter_string_number("j"))) {
+                        data_setvariableto("re_e6af94e8be83e7bb93e69e9c", "1");
+                    } else {
+                        data_setvariableto("re_e6af94e8be83e7bb93e69e9c", "0");
+                    }
+                }
+            }
+        }
+    }
+}

@@ -59,6 +59,17 @@ what each construct cost.
 [Start with raven](/raven/)
 
 </div>
+<div class="path">
+
+**[raven-re](/raven-re/)**
+
+Read it back. A vanilla Scratch 3 `.sb3` becomes the raven-asm project that
+reproduces it — one statement per block — and the result is compiled before the
+tool exits.
+
+[Reverse a project](/raven-re/)
+
+</div>
 </div>
 
 Not sure? [Getting started](/guide/getting-started) builds a project with both,
@@ -71,6 +82,7 @@ flowchart LR
   rav["raven source<br/>.rav"] -->|"raven expand"| asm["raven-asm source<br/>.rasm"]
   asm -->|"raven-asm build"| json["project.json"]
   json -->|"pack"| sb3["project.sb3"]
+  sb3 -->|"raven-re"| asm
 ```
 
 You can also start at the second box: `raven-asm` is a complete language on its
@@ -78,10 +90,16 @@ own and never needs `raven` above it. That is the one direction the workspace
 depends on, and it is why a raven bug can never change what a raven-asm
 statement means.
 
+Because one statement is exactly one block, the last arrow is reversible:
+[`raven-re`](/raven-re/) reads a vanilla Scratch 3 `.sb3` and writes the
+raven-asm that reproduces it, refusing a project whose blocks the language cannot
+spell.
+
 | Stage | Command | What it guarantees |
 | --- | --- | --- |
 | raven → raven-asm | `raven expand` | Every macro, every `_vms` cell, every block it will cost. |
 | raven-asm → `.sb3` | `raven-asm build` | One statement is one block. The project you open in Scratch is the project you wrote. |
+| `.sb3` → raven-asm | `raven-re` | One block is one statement, and the result compiles. |
 
 ## The same program, twice
 
@@ -146,6 +164,7 @@ hidden state and no Scratch variable, which is what makes it safe to have both.
 | [For LLMs](/guide/for-llms) | `raven explain`, and the check/expand/build loop for a model writing raven. |
 | [What is raven-asm?](/raven-asm/) | The one-block rule, the manifest, the command line. |
 | [What is raven?](/raven/) | What the high-level language adds, and what it refuses to add. |
+| [What is raven-re?](/raven-re/) | Reading a `.sb3` back, what is refused, and what has no raven-asm spelling. |
 | [Design laws](/raven/design) | The rules the sugar is not allowed to break. |
 | [From raven to Scratch](/raven/lowering) | What every construct becomes, block by block. |
 | [Block reference](/reference/blocks) | Every block either language can reach. |

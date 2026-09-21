@@ -1,8 +1,10 @@
 # Getting started
 
-The repository is a Cargo workspace with three crates. `raven-asm` is the
-assembly-level compiler; `raven` is the high-level language on top of it. Both
-work today — the difference is how much you want to write by hand.
+The repository is a Cargo workspace with four crates. `raven-asm` is the
+assembly-level compiler; `raven` is the high-level language on top of it, and
+`raven-re` reads a `.sb3` back into raven-asm. They all work today — the
+difference is how much you want to write by hand, and in which direction you are
+travelling.
 
 ## Install
 
@@ -11,11 +13,13 @@ git clone https://github.com/raven-scratch/raven
 cd raven
 cargo install --path crates/raven-asm
 cargo install --path crates/raven
+cargo install --path crates/raven-re
 ```
 
-That puts `raven-asm` and `raven` on your `PATH`. During development you can also
-run either straight from the checkout with `cargo run -p raven-asm -- <command>`
-or `cargo run -p raven -- <command>`.
+That puts `raven-asm`, `raven` and `raven-re` on your `PATH`. During development
+you can also run any of them straight from the checkout with
+`cargo run -p raven-asm -- <command>`, `cargo run -p raven -- <command>` or
+`cargo run -p raven-re -- <command>`.
 
 ## Create a project
 
@@ -230,6 +234,25 @@ and `raven expand` prints the cost of any construct you write. For a language
 reference written for a machine reader, run `raven explain`; see
 [For LLMs](/guide/for-llms).
 
+## Reading a project back
+
+The chain reverses. `raven-re` reads a `.sb3` and writes the raven-asm project
+that reproduces it — which is what the one-block rule buys you:
+
+```sh
+raven-re dist/hello.sb3 --output hello-asm
+cd hello-asm
+raven-asm check        # the source is valid raven-asm
+raven-asm build        # and it compiles back to the same project
+```
+
+The output is an ordinary project: `raven-asm.toml`, `src/stage.rasm`, one file
+per sprite, and every costume and sound under `assets/`. A project that is not
+vanilla Scratch 3 — one that uses a TurboWarp-only block, a foreign extension or
+a `TurboWarp` agent string — is refused by name, and a name Scratch allows but
+raven-asm does not is encoded rather than renamed away. See
+[What is raven-re?](/raven-re/).
+
 ## Where to go next
 
 * [Project structure](/raven-asm/project-structure) — what each file is for.
@@ -238,4 +261,5 @@ reference written for a machine reader, run `raven explain`; see
 * [What is raven?](/raven/) — the other language, and what it adds.
 * [Design laws](/raven/design) — what that language is not allowed to do.
 * [From raven to Scratch](/raven/lowering) — the cost of every construct.
+* [What is raven-re?](/raven-re/) — the same chain, read backwards.
 * [Block reference](/reference/blocks) — everything you can write.

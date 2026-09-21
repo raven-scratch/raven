@@ -46,6 +46,7 @@ export default defineConfig({
       { text: "Guide", link: "/guide/", activeMatch: "^/guide/" },
       { text: "raven-asm", link: "/raven-asm/", activeMatch: "^/raven-asm/" },
       { text: "raven", link: "/raven/", activeMatch: "^/raven/" },
+      { text: "raven-re", link: "/raven-re/", activeMatch: "^/raven-re/" },
       { text: "Reference", link: "/reference/blocks", activeMatch: "^/reference/" },
     ],
 
@@ -125,6 +126,16 @@ export default defineConfig({
             { text: "From raven to Scratch", link: "/raven/lowering" },
             { text: "Command line", link: "/raven/cli" },
             { text: "Coming from Scrust", link: "/raven/from-scrust" },
+          ],
+        },
+      ],
+
+      "/raven-re/": [
+        {
+          text: "Introduction",
+          items: [
+            { text: "What is raven-re?", link: "/raven-re/" },
+            { text: "Command line", link: "/raven-re/cli" },
           ],
         },
       ],

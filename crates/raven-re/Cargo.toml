@@ -1,0 +1,28 @@
+[package]
+name = "raven-re"
+description = "raven-re: reverse a vanilla Scratch 3 .sb3 project into raven-asm source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
+keywords = ["scratch", "sb3", "decompiler", "language", "cli"]
+categories = ["command-line-utilities", "compilers"]
+
+[[bin]]
+name = "raven-re"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+# A .sb3 stores `project.json` deflated, so reading one needs an inflater.
+# raven-scratch's ZIP writer stays dependency-free; this is the reader's cost.
+flate2 = "1"
+raven-asm = { path = "../raven-asm", version = "0.2.1" }
+raven-scratch = { path = "../raven-scratch", version = "0.2.1" }
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,8 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "角色1" {
+    costume "造型1" = "assets/14e46ec3e2ba471c2adfe8f119052307.svg" center 0 0;
+
+}

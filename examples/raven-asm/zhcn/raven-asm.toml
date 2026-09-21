@@ -1,0 +1,15 @@
+# Written by raven-re from a Scratch 3 project.
+#
+#   raven-asm check     parse and validate without writing anything
+#   raven-asm build     compile this project into dist/A7 四万字纯画笔中文引擎.sb3
+#
+# Paths in this file are relative to it.
+
+[project]
+name = "A7 四万字纯画笔中文引擎"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/stage.rasm"
+sprites = ["src/sprites/角色1.rasm", "src/sprites/画字.rasm", "src/sprites/字库.rasm", "src/sprites/范围编辑.rasm"]

@@ -9,6 +9,9 @@ target/
 /dist/
 **/dist/
 
+# Local Scratch fixtures used while working on a reversal; not part of the repo.
+/test/
+
 # Node / VitePress
 node_modules/
 docs/.vitepress/cache/

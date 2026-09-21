@@ -5,12 +5,13 @@ language guide is in `docs/`; this file is about the *code*.
 
 ## What this is
 
-Two languages and one target: Scratch 3.
+Two languages and one target: Scratch 3, plus the decompiler that walks back.
 
 ```
 raven (.rav)  ->  raven-asm (.rasm)  ->  project.json  ->  .sb3
 sugar, types       one statement,          Scratch 3
 macros             one block               file format
+                              <- raven-re
 ```
 
 | Crate | What it holds | Depends on |
@@ -18,11 +19,12 @@ macros             one block               file format
 | `crates/raven-scratch` | The Scratch 3 domain model: the 150-block catalog, `.sb3` container, ZIP writer, deterministic ids, assets, diagnostics. | — |
 | `crates/raven-asm` | The assembly-level language, its compiler, CLI, and the generated block reference. | `raven-scratch` |
 | `crates/raven` | The high-level language and compiler. | `raven-scratch`, `raven-asm` |
+| `crates/raven-re` | The decompiler: a vanilla Scratch 3 `.sb3` back into raven-asm source. | `raven-scratch`, `raven-asm` |
 
 Dependencies only point right. A front end may never be surprised by the layer
 above it.
 
-## The two laws
+## The three laws
 
 1. **raven-asm never rewrites.** One statement is one Scratch block. A feature
    that needs several blocks belongs in raven, as a macro.
@@ -30,6 +32,10 @@ above it.
    written lowering, and `raven expand` prints it. A convenience whose shape is
    fixed belongs in `crates/raven/src/prelude.rav`, not as a compiler special
    case.
+3. **raven-re never guesses.** A reversal writes one statement per block, reads
+   names from the project rather than inventing them, and refuses a project whose
+   blocks raven-asm cannot spell — TurboWarp and every other edit of Scratch are
+   out of scope.
 
 ## Commands
 
@@ -65,12 +71,17 @@ installed — and attaches them to the release as
 
 ```
 raven-v<version>-windows-x86_64.exe        raven-asm-v<version>-windows-x86_64.exe
+raven-re-v<version>-windows-x86_64.exe
 raven-v<version>-linux-x86_64              raven-asm-v<version>-linux-x86_64
+raven-re-v<version>-linux-x86_64
 raven-v<version>-macos-aarch64             raven-asm-v<version>-macos-aarch64
+raven-re-v<version>-macos-aarch64
 ```
 
-Either binary can be carried to another machine and run as it is; `raven`
-compiles raven to raven-asm itself and does not need `raven-asm` on the `PATH`.
+Every binary can be carried to another machine and run as it is; `raven`
+compiles raven to raven-asm itself, and `raven-re` hands its result to the
+raven-asm library rather than to an installed `raven-asm`, so neither needs the
+other on the `PATH`.
 Re-running the workflow for a version that already has a release replaces the
 binaries in it instead of failing, which is how to rebuild them for an existing
 tag.
@@ -92,14 +103,14 @@ cargo run -p raven -- build  -m examples/raven/tetris/raven.toml --debug
 node tools/validate-sb3.js examples/raven/tetris/dist/tetris.sb3 --steps 1500
 ```
 
-`examples/raven/text` is the second one: a text engine — a generated pixel font,
-word wrap, alignment and per-character colour — with the stage arithmetic in its
-README. Its glyphs are generated, so regenerate them rather than editing them:
+`examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
+vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
+raven-asm, not raven, and it is the example to read when a reversal has to encode
+names, expand a compressed reporter or wrap a 40,000-item list. Regenerate it
+rather than editing it, and read its README for what the reversal had to say:
 
 ```sh
-node examples/raven/text/tools/font.mjs          # the assets and the two tables
-cargo run -p raven -- check -m examples/raven/text/raven.toml
-node tools/validate-sb3.js examples/raven/text/dist/text.sb3 --steps 400
+cargo run -p raven-re -- "test/zhcn/A7 四万字纯画笔中文引擎.sb3" --output examples/raven-asm/zhcn --force
 ```
 
 ## Where things live
@@ -112,6 +123,10 @@ node tools/validate-sb3.js examples/raven/text/dist/text.sb3 --steps 400
 | raven-asm grammar | `crates/raven-asm/src/parser.rs`, `lexer.rs` |
 | raven-asm semantics | `crates/raven-asm/src/compile.rs` |
 | The block reference generator | `crates/raven-asm/src/docs_gen.rs` |
+| Writing raven-asm text: the escapes | `crates/raven-asm/src/source.rs` |
+| Reading a `.sb3`: the ZIP reader | `crates/raven-re/src/zipr.rs` |
+| The reversal: the vanilla gate and the block walk | `crates/raven-re/src/reverse.rs` |
+| Deterministic encodings of names Scratch allows | `crates/raven-re/src/names.rs` |
 | raven grammar | `crates/raven/src/parser.rs`, `lexer.rs` |
 | raven semantics: names, types, macros, cells | `crates/raven/src/lower.rs` |
 | The raven name of every block | `crates/raven/src/stdlib.rs` |
@@ -138,6 +153,9 @@ generated from the binding table, and the docs are checked against the code.
 
 * `cargo test --workspace` — includes the headline memory law: a built project
   declares no Scratch variable no `watch` asked for.
+* `crates/raven-re/tests/roundtrip.rs` compiles a project, reverses it, compiles
+  it again and compares the two through a fingerprint of everything Scratch can
+  observe. A change that alters emitted blocks breaks it.
 * `docs/reference/blocks.md` is generated: regenerate it rather than editing it.
 * The `identity` modules are the single place a name is declared. Read names from
   them; never hardcode a crate name, manifest filename, source extension, or the

@@ -11,6 +11,7 @@
 //! language and the compiler that lowers it:
 //!
 //! * [`lexer`] / [`parser`] / [`ast`] — reading raven-asm source.
+//! * [`source`] — writing it: the escapes and spellings the lexer accepts.
 //! * [`compile`] — source files to a [`raven_scratch::sb3::Project`].
 //! * [`manifest`] / [`scaffold`] — `raven-asm.toml` and `raven-asm new`.
 //! * [`cli`] / [`docs_gen`] — the command line front end and the generated
@@ -29,5 +30,6 @@ pub mod lexer;
 pub mod manifest;
 pub mod parser;
 pub mod scaffold;
+pub mod source;
 
 pub use raven_scratch::{assets, catalog, diag, ids, sb3, zipw};

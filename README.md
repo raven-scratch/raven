@@ -14,6 +14,8 @@
 raven source (.rav)  ──▶  raven-asm source (.rasm)  ──▶  project.json  ──▶  .sb3
    sugar, types,              one statement,                Scratch 3
    macros                     one block                     file format
+                          ◀────────────────────────────────────────────
+                                            raven-re
 ```
 
 * **raven-asm** is the assembly level. Its whole design is one rule: *one
@@ -79,9 +81,10 @@ raven-asm to disk so `raven-asm build` can produce the identical `.sb3`.
 
 | Crate | What it holds | Depends on |
 | --- | --- | --- |
-| [`raven-scratch`](crates/raven-scratch) | The Scratch 3 domain model: the 150-block catalog, the `.sb3` container and ZIP writer, deterministic identifiers, asset hashing, diagnostics. | — |
-| [`raven-asm`](crates/raven-asm) | The assembly-level language and compiler, its CLI, and the generated block reference. | `raven-scratch` |
+| [`raven-scratch`](crates/raven-scratch) | The Scratch 3 domain model: the 150-block catalog, the `.sb3` container, deterministic identifiers, asset hashing, diagnostics. | — |
+| [`raven-asm`](crates/raven-asm) | The assembly-level language, its compiler, CLI, and the generated block reference. | `raven-scratch` |
 | [`raven`](crates/raven) | The high-level language and compiler. | `raven-scratch`, `raven-asm` |
+| [`raven-re`](crates/raven-re) | The decompiler: a vanilla Scratch 3 `.sb3` back into raven-asm source. | `raven-scratch`, `raven-asm` |
 
 Dependencies only ever point right, so a front end cannot be surprised by the
 layer above it.
@@ -93,6 +96,7 @@ git clone https://github.com/raven-scratch/raven
 cd raven
 cargo install --path crates/raven-asm
 cargo install --path crates/raven
+cargo install --path crates/raven-re
 ```
 
 ## Use
@@ -114,6 +118,29 @@ raven-asm catalog         # every block raven-asm understands
 | `raven-asm check` | Validate without writing (`--strict`). |
 | `raven-asm clean` | Remove the output directory. |
 | `raven-asm catalog` | Print the block catalog (`--json`, `--markdown`, `-c, --category <text>`). |
+
+And the decompiler, which reads the other direction. It reverses vanilla Scratch
+3 only — a TurboWarp-only block, a foreign extension or a `TurboWarp` agent
+string is refused, naming what gave it away — and it verifies its own output by
+compiling it before it exits:
+
+```sh
+raven-re my-game.sb3      # write ./my-game/, a raven-asm project
+raven-re my-game.sb3 -o work/game --force
+cd my-game && raven-asm build
+```
+
+| Command | Purpose |
+| --- | --- |
+| `raven-re <input.sb3>` | Write the raven-asm project that reproduces the `.sb3` (`-o, --output <dir>`, `--force`). |
+
+A name Scratch allows but raven-asm does not — `"foo`, `< Perfect`, `a&b` — is
+replaced by `re_` followed by its UTF-8 bytes in hex, which is a pure function of
+the name, so the same file always reverses to the same source. What raven-asm has
+no syntax for at all — Scratch comments, costume `bitmapResolution`, monitors
+that watch a reporter — is reported as a warning and dropped.
+[`examples/raven-asm/zhcn`](examples/raven-asm/zhcn) is a real reversal: a 40,000-glyph
+pen-drawn Chinese engine, with its names encoded and its font list kept.
 
 And the high-level tool, which writes the same kind of project:
 
@@ -159,6 +186,9 @@ raven fmt --check         # canonical indentation, without writing
   and packed for you, with rotation centres worked out from the image.
 * **Reproducible builds** — identifiers are derived deterministically and the ZIP
   timestamp is pinned, so the same source always produces the same bytes.
+* **Reversible output** — because one statement is one block, `raven-re` reads a
+  vanilla `.sb3` back into the raven-asm that reproduces it, and refuses a
+  project that is not vanilla Scratch 3.
 
 ## What raven adds
 
@@ -262,6 +292,8 @@ flowchart LR
   symbols --> blocks["one block per statement"]
   asm --> blocks
   blocks --> sb3[".sb3"]
+  sb3 --> reverse["raven-re"]
+  reverse --> rasm
 ```
 
 | File | Role |
@@ -270,8 +302,12 @@ flowchart LR
 | `crates/raven-scratch/src/sb3.rs`, `zipw.rs` | The Scratch file format and a dependency-free ZIP writer. |
 | `crates/raven-asm/src/compile.rs` | Source files to `project.json`: symbol resolution, block emission, procedures, monitors. |
 | `crates/raven-asm/src/parser.rs`, `lexer.rs` | The grammar. |
+| `crates/raven-asm/src/source.rs` | Writing raven-asm text: the escapes the lexer reads back. |
 | `crates/raven-asm/src/manifest.rs`, `scaffold.rs` | `raven-asm.toml` and `raven-asm new`. |
 | `crates/raven-asm/src/docs_gen.rs` | Generates the block reference from the catalog. |
+| `crates/raven-re/src/reverse.rs` | The walk back: blocks to statements, the vanilla gate, the warnings. |
+| `crates/raven-re/src/names.rs` | Deterministic encodings for names an identifier cannot hold. |
+| `crates/raven-re/src/zipr.rs` | The ZIP reader a `.sb3` needs, stored and deflated entries. |
 | `crates/raven/src/lexer.rs`, `parser.rs` | raven's grammar. |
 | `crates/raven/src/lower.rs` | The whole front end: names, types, macros and the descent to raven-asm, in one traversal. |
 | `crates/raven/src/stdlib.rs` | Binds every catalog block to its raven name, with a totality test. |
@@ -320,6 +356,9 @@ Two rules keep the design intact:
   not finished. A convenience whose shape is fixed belongs in
   [`prelude.rav`](crates/raven/src/prelude.rav) as an ordinary macro, not in the
   compiler as a special case.
+* **raven-re never guesses.** The first rule is what makes a `.sb3` reversible:
+  a reversal writes one statement per block and refuses a project whose blocks
+  the language cannot spell, rather than inventing a structure for them.
 
 ## Renaming
 
@@ -330,6 +369,7 @@ of edits rather than a search-and-replace:
 | --- | --- |
 | `crates/raven-scratch/src/identity.rs` | `ORG`, `REPOSITORY_NAME`, `REPOSITORY`, `DOCS` — shared by every crate |
 | `crates/raven-asm/src/identity.rs` | `CRATE`, `DISPLAY`, `MANIFEST`, `SOURCE_EXTENSION` |
+| `crates/raven-re/src/identity.rs` | `CRATE`, `DISPLAY`; the manifest, extension and layout are raven-asm's |
 | `crates/raven/src/identity.rs` | the same, for the high-level language |
 | `*/Cargo.toml` | `name`, `[[bin]] name` |
 | `Cargo.toml` | `[workspace.package]` `repository`, `homepage`, `documentation` |

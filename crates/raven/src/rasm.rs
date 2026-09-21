@@ -292,35 +292,14 @@ fn identifier(name: &str) -> String {
     out
 }
 
-/// A raven-asm string literal. The escapes are raven-asm's, which are raven's.
-#[must_use]
-pub fn quote(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\0' => out.push_str("\\0"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{{{:X}}}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
+/// A raven-asm string literal. The escapes are raven-asm's, because raven-asm
+/// owns the syntax that has to read them back.
+pub use raven_asm::source::quote;
 
 /// A number as raven-asm writes it. Integral values lose the `.0`, because that
 /// is what the source meant.
 fn number(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{}", value as i64)
-    } else {
-        format!("{value}")
-    }
+    raven_asm::source::number(value)
 }
 
 #[cfg(test)]

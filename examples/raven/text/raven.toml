@@ -1,8 +1,0 @@
-[project]
-name = "text"
-output = "dist"
-extensions = ["pen"]
-
-[targets]
-stage = "src/stage.rav"
-sprites = ["src/sprites/typewriter.rav"]

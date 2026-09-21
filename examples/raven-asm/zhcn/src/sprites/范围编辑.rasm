@@ -1,0 +1,69 @@
+// Reversed from a Scratch 3 project by raven-re.
+// One statement is one Scratch block, as everywhere in raven-asm.
+// A name raven-asm cannot write as an identifier became `re_` followed by its UTF-8 bytes in hex.
+// This file owns only this sprite's variables and lists; the stage's are global to all of them.
+
+sprite "范围编辑" {
+    // the project calls this `上次x`; raven-asm cannot write that as an identifier
+    var re_e4b88ae6aca178 = -66;
+    // the project calls this `上次y`; raven-asm cannot write that as an identifier
+    var re_e4b88ae6aca179 = -165;
+    // the project calls this `点击x偏`; raven-asm cannot write that as an identifier
+    var re_e782b9e587bb78e5818f = 0; at 5 5
+    // the project calls this `点击y偏`; raven-asm cannot write that as an identifier
+    var re_e782b9e587bb79e5818f = 0; at 5 36
+    costume "造型1" = "assets/14e46ec3e2ba471c2adfe8f119052307.svg" center 0 0;
+
+    event_whenbroadcastreceived("点击舞台") {
+        re_e689abe68f8fe782b9e587bbe588b0e79a84;
+        control_if_else(operator_and(operator_or(operator_equals(data_variable("re_e782b9e587bb78e5818f"), "0"), operator_equals(data_variable("re_e782b9e587bb78e5818f"), "-2")), operator_or(operator_equals(data_variable("re_e782b9e587bb79e5818f"), "0"), operator_equals(data_variable("re_e782b9e587bb79e5818f"), "-2")))) {
+            control_if_else(operator_lt(sensing_mousex(), "0")) {
+                event_broadcast("反向翻页");
+            } else {
+                event_broadcast("翻页");
+            }
+        } else {
+            data_setvariableto("re_e4b88ae6aca178", sensing_mousex());
+            data_setvariableto("re_e4b88ae6aca179", sensing_mousey());
+            control_repeat_until(operator_not(sensing_mousedown())) {
+                control_if(operator_equals(data_variable("re_e782b9e587bb78e5818f"), "-1")) {
+                    data_changevariableby("re_e88c83e59bb47831", operator_subtract(sensing_mousex(), data_variable("re_e4b88ae6aca178")));
+                }
+                control_if(operator_equals(data_variable("re_e782b9e587bb79e5818f"), "-1")) {
+                    data_changevariableby("re_e88c83e59bb47931", operator_subtract(sensing_mousey(), data_variable("re_e4b88ae6aca179")));
+                }
+                control_if(operator_equals(data_variable("re_e782b9e587bb78e5818f"), "1")) {
+                    data_changevariableby("re_e88c83e59bb47832", operator_subtract(sensing_mousex(), data_variable("re_e4b88ae6aca178")));
+                }
+                control_if(operator_equals(data_variable("re_e782b9e587bb79e5818f"), "1")) {
+                    data_changevariableby("re_e88c83e59bb47932", operator_subtract(sensing_mousey(), data_variable("re_e4b88ae6aca179")));
+                }
+                data_setvariableto("re_e4b88ae6aca178", sensing_mousex());
+                data_setvariableto("re_e4b88ae6aca179", sensing_mousey());
+                event_broadcast("刷新显示");
+            }
+        }
+    }
+
+    proc re_e689abe68f8fe782b9e587bbe588b0e79a84() warp {
+        re_e689abe68f8fe782b9e587bbe588b0e79a84e8beb9e7bc98(sensing_mousex(), data_variable("re_e88c83e59bb47831"), data_variable("re_e88c83e59bb47832"));
+        data_setvariableto("re_e782b9e587bb78e5818f", data_variable("re_e782b9e587bb79e5818f"));
+        re_e689abe68f8fe782b9e587bbe588b0e79a84e8beb9e7bc98(sensing_mousey(), data_variable("re_e88c83e59bb47931"), data_variable("re_e88c83e59bb47932"));
+    }
+
+    proc re_e689abe68f8fe782b9e587bbe588b0e79a84e8beb9e7bc98(v: str, i: str, j: str) {
+        control_if_else(operator_lt(operator_mathop("abs", operator_subtract(argument_reporter_string_number("i"), argument_reporter_string_number("v"))), "10")) {
+            data_setvariableto("re_e782b9e587bb79e5818f", "-1");
+        } else {
+            control_if_else(operator_lt(operator_mathop("abs", operator_subtract(argument_reporter_string_number("j"), argument_reporter_string_number("v"))), "10")) {
+                data_setvariableto("re_e782b9e587bb79e5818f", "1");
+            } else {
+                control_if_else(operator_equals(operator_lt(argument_reporter_string_number("v"), argument_reporter_string_number("i")), operator_gt(argument_reporter_string_number("v"), argument_reporter_string_number("j")))) {
+                    data_setvariableto("re_e782b9e587bb79e5818f", "0");
+                } else {
+                    data_setvariableto("re_e782b9e587bb79e5818f", "-2");
+                }
+            }
+        }
+    }
+}
