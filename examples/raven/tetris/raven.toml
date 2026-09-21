@@ -1,0 +1,10 @@
+[project]
+name = "tetris"
+output = "dist"
+extensions = []
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/board.rav",
+]

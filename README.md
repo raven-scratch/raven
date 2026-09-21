@@ -220,6 +220,10 @@ raven check       # parse, resolve, type check, expand
 raven build       # dist/hello.sb3
 ```
 
+[`examples/raven/tetris`](examples/raven/tetris) is the worked example: a complete
+game, drawn with the pen by one sprite, whose README explains the same ideas at
+the size of a real program.
+
 ## Documentation
 
 The full guide for both languages is in [`docs/`](docs/) and is published with

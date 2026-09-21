@@ -1,0 +1,43 @@
+// Tetris — the stage owns the board, and every value has exactly one home.
+//
+// The playfield is one Scratch list of 200 cells: 0 is empty, 1..7 is the piece
+// that filled it. `shapes` is the whole rotation table — seven pieces, four
+// rotations, four cells each, as offsets inside a 4x4 box — so rotating is an
+// index change rather than arithmetic on a matrix. `bag` is the seven-bag
+// randomiser, and `queue` is spare.
+//
+// `score`, `lines`, `level` and `drop` are ordinary `pub var` cells; `watch`
+// puts the first three on the stage as monitors, and `drop` is how long one row
+// of gravity takes.
+
+stage {
+    costume "field" = "assets/field.svg";
+
+    /// 0 ready, 1 playing, 2 over.
+    pub var state: num = 0;
+    /// The falling piece and the one after it, its rotation and its origin.
+    pub var piece: num = 1;
+    pub var nextone: num = 1;
+    pub var rot: num = 0;
+    pub var px: num = 3;
+    pub var py: num = 0;
+    /// Score, cleared lines, level, and seconds per gravity step.
+    pub var score: num = 0;
+    pub var lines: num = 0;
+    pub var level: num = 1;
+    pub var drop: num = 0.6;
+
+    pub var board: list<num> = [];
+    pub var shapes: list<num> = [
+        1, 5, 9, 13, 8, 9, 10, 11, 2, 6, 10, 14, 4, 5, 6, 7,
+        4, 8, 5, 9, 4, 8, 5, 9, 4, 8, 5, 9, 4, 8, 5, 9,
+        4, 1, 5, 9, 4, 5, 9, 6, 1, 5, 9, 6, 4, 1, 5, 6,
+        4, 8, 1, 5, 4, 5, 9, 10, 5, 9, 2, 6, 0, 1, 5, 6,
+        0, 4, 5, 9, 8, 5, 9, 6, 1, 5, 6, 10, 4, 1, 5, 2,
+        0, 1, 5, 9, 4, 8, 5, 6, 1, 5, 9, 10, 4, 5, 2, 6,
+        8, 1, 5, 9, 4, 5, 6, 10, 1, 5, 9, 2, 0, 4, 5, 6
+    ];
+    pub var bag: list<num> = [];
+
+    watch score, lines, level;
+}

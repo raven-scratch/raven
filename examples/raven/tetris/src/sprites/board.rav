@@ -1,0 +1,351 @@
+// The playfield. One sprite draws all 200 cells with the pen: point at a cell,
+// switch to that cell's costume, stamp. A redraw is ~205 stamps inside a `warp`
+// procedure, so it lands in one frame, and there is no clone to leak state.
+//
+// Controls are Scratch's own key hats: left/right move, up rotates with a
+// one-step wall kick, down drops a row, space hard-drops, R restarts.
+
+sprite "Board" {
+    costume "tile" = "assets/tile.svg";
+    costume "empty" = "assets/empty.svg";
+    costume "i" = "assets/i.svg";
+    costume "o" = "assets/o.svg";
+    costume "t" = "assets/t.svg";
+    costume "s" = "assets/s.svg";
+    costume "z" = "assets/z.svg";
+    costume "j" = "assets/j.svg";
+    costume "l" = "assets/l.svg";
+
+    sound "move" = "assets/move.wav";
+    sound "rotate" = "assets/rotate.wav";
+    sound "drop" = "assets/drop.wav";
+    sound "clear" = "assets/clear.wav";
+    sound "tetris" = "assets/tetris.wav";
+    sound "over" = "assets/over.wav";
+
+    /// Where a cell sits. The field is 10 columns by 20 rows of 16 pixels.
+    fn cell_x(col: num) -> num {
+        col * 16 - 72
+    }
+
+    fn cell_y(row: num) -> num {
+        152 - row * 16
+    }
+
+    /// The offset inside the 4x4 box of cell `k` of `p` in rotation `r`.
+    fn offset(p: num, r: num, k: num) -> num {
+        shapes[(p - 1) * 16 + r * 4 + k + 1]
+    }
+
+    fn col_of(o: num) -> num {
+        operators::mathop(MathOp::Floor, o / 4)
+    }
+
+    fn row_of(o: num) -> num {
+        o % 4
+    }
+
+    /// Whether the piece would fit at this position: inside the walls, above
+    /// the floor, and over empty cells. Above the top row is allowed, so a
+    /// piece can spawn with cells off the field.
+    proc fits(p: num, r: num, x: num, y: num) -> bool warp {
+        let ok = 1;
+        for k in 0..4 {
+            let c = x + col_of(offset(p, r, k));
+            let row = y + row_of(offset(p, r, k));
+            if c < 0 || c > 9 || row > 19 {
+                ok = 0;
+            } else {
+                if row >= 0 {
+                    if board[row * 10 + c + 1] != 0 {
+                        ok = 0;
+                    }
+                }
+            }
+        }
+        return ok == 1;
+    }
+
+    /// The seven-bag: every piece once before any piece twice.
+    proc refill_bag() warp {
+        bag.clear();
+        for i in 1..8 {
+            bag.push(i);
+        }
+        for i in 1..7 {
+            let j = operators::random(i, 7);
+            let held = bag[i];
+            bag[i] = bag[j];
+            bag[j] = held;
+        }
+    }
+
+    proc next_piece() -> num warp {
+        if bag.is_empty() {
+            refill_bag();
+        }
+        let held = bag.last();
+        bag.pop();
+        return held;
+    }
+
+    /// Put the piece into the field, clear what that completed, and bring in the
+    /// next one. A piece that does not fit at the spawn is the end of the run.
+    proc lock() warp {
+        for k in 0..4 {
+            let c = px + col_of(offset(piece, rot, k));
+            let row = py + row_of(offset(piece, rot, k));
+            if row >= 0 {
+                board[row * 10 + c + 1] = piece;
+            }
+        }
+        sound::play(Sound::Drop);
+        clear_lines();
+        spawn();
+    }
+
+    /// Delete every full row, pulling the rows above it down, and score the
+    /// clear. The scan stays on a row after a shift, because that row has a new
+    /// occupant.
+    proc clear_lines() warp {
+        let cleared = 0;
+        let row = 19;
+        repeat_until row < 0 {
+            let full = 1;
+            for c in 0..10 {
+                if board[row * 10 + c + 1] == 0 {
+                    full = 0;
+                }
+            }
+            if full == 1 {
+                let above = row;
+                repeat_until above <= 0 {
+                    for c in 0..10 {
+                        board[above * 10 + c + 1] = board[(above - 1) * 10 + c + 1];
+                    }
+                    above -= 1;
+                }
+                for c in 0..10 {
+                    board[c + 1] = 0;
+                }
+                cleared += 1;
+            } else {
+                row -= 1;
+            }
+        }
+        if cleared == 1 {
+            score += 100 * level;
+            sound::play(Sound::Clear);
+        } else {
+            if cleared == 2 {
+                score += 300 * level;
+                sound::play(Sound::Clear);
+            } else {
+                if cleared == 3 {
+                    score += 500 * level;
+                    sound::play(Sound::Clear);
+                } else {
+                    if cleared >= 4 {
+                        score += 800 * level;
+                        sound::play(Sound::Tetris);
+                    }
+                }
+            }
+        }
+        if cleared > 0 {
+            lines += cleared;
+            level = operators::mathop(MathOp::Floor, lines / 10) + 1;
+            drop = 0.6 - level * 0.05;
+            if drop < 0.1 {
+                drop = 0.1;
+            }
+        }
+    }
+
+    proc spawn() warp {
+        piece = nextone;
+        nextone = next_piece();
+        rot = 0;
+        px = 3;
+        py = 0;
+        if !fits(piece, rot, px, py) {
+            state = 2;
+            sound::play(Sound::Over);
+            console::log(f"game over, {score} points, {lines} lines");
+        }
+    }
+
+    /// One row of gravity: fall, or land.
+    proc step_down() warp {
+        if fits(piece, rot, px, py + 1) {
+            py += 1;
+        } else {
+            lock();
+        }
+    }
+
+    proc move(dx: num) warp {
+        if state == 1 {
+            if fits(piece, rot, px + dx, py) {
+                px += dx;
+                sound::play(Sound::Move);
+                redraw();
+            }
+        }
+    }
+
+    /// Rotate, with a one-cell nudge to either side when the wall is in the way.
+    proc turn() warp {
+        if state == 1 {
+            let next = rot + 1;
+            if next > 3 {
+                next = 0;
+            }
+            if fits(piece, next, px, py) {
+                rot = next;
+                sound::play(Sound::Rotate);
+                redraw();
+            } else {
+                if fits(piece, next, px - 1, py) {
+                    px -= 1;
+                    rot = next;
+                    sound::play(Sound::Rotate);
+                    redraw();
+                } else {
+                    if fits(piece, next, px + 1, py) {
+                        px += 1;
+                        rot = next;
+                        sound::play(Sound::Rotate);
+                        redraw();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Space: fall until it lands, then lock. One point a row, as usual.
+    proc hard_drop() warp {
+        if state == 1 {
+            repeat_until !fits(piece, rot, px, py + 1) {
+                py += 1;
+                score += 1;
+            }
+            lock();
+            redraw();
+        }
+    }
+
+    proc paint(p: num, r: num, x: num, y: num) warp {
+        for k in 0..4 {
+            let c = x + col_of(offset(p, r, k));
+            let row = y + row_of(offset(p, r, k));
+            if row >= 0 {
+                motion::go_to_xy(cell_x(c), cell_y(row));
+                paint_piece(p);
+                pen::stamp();
+            }
+        }
+    }
+
+    /// A value is a costume: `match` picks it, one `if` per arm.
+    proc paint_piece(p: num) warp {
+        match p {
+            1 => { looks::switch_costume_to(Costume::I); },
+            2 => { looks::switch_costume_to(Costume::O); },
+            3 => { looks::switch_costume_to(Costume::T); },
+            4 => { looks::switch_costume_to(Costume::S); },
+            5 => { looks::switch_costume_to(Costume::Z); },
+            6 => { looks::switch_costume_to(Costume::J); },
+            7 => { looks::switch_costume_to(Costume::L); },
+            _ => { looks::switch_costume_to(Costume::Empty); }
+        }
+    }
+
+    proc paint_cell(i: num) warp {
+        let row = operators::mathop(MathOp::Floor, i / 10);
+        let col = i % 10;
+        motion::go_to_xy(cell_x(col), cell_y(row));
+        paint_piece(board[i + 1]);
+        pen::stamp();
+    }
+
+    /// The whole field, the falling piece and the next-piece preview, in one
+    /// frame, then back to the invisible tile.
+    proc redraw() warp {
+        pen::clear();
+        for i in 0..200 {
+            paint_cell(i);
+        }
+        if state == 1 {
+            paint(piece, rot, px, py);
+        }
+        paint(nextone, 0, 12, 2);
+        looks::switch_costume_to(Costume::Tile);
+    }
+
+    proc new_game() warp {
+        board.clear();
+        for i in 1..201 {
+            board.push(0);
+        }
+        bag.clear();
+        score = 0;
+        lines = 0;
+        level = 1;
+        drop = 0.6;
+        refill_bag();
+        piece = next_piece();
+        nextone = next_piece();
+        rot = 0;
+        px = 3;
+        py = 0;
+        state = 1;
+        redraw();
+        console::log("tetris ready");
+    }
+
+    on flag_clicked {
+        new_game();
+        forever {
+            if state == 1 {
+                control::wait(drop);
+                if state == 1 {
+                    step_down();
+                    redraw();
+                }
+            } else {
+                control::wait(0.25);
+            }
+        }
+    }
+
+    on key_pressed(Key::LeftArrow) {
+        move(-1);
+    }
+
+    on key_pressed(Key::RightArrow) {
+        move(1);
+    }
+
+    on key_pressed(Key::UpArrow) {
+        turn();
+    }
+
+    on key_pressed(Key::DownArrow) {
+        if state == 1 {
+            if fits(piece, rot, px, py + 1) {
+                py += 1;
+                score += 1;
+                redraw();
+            }
+        }
+    }
+
+    on key_pressed(Key::Space) {
+        hard_drop();
+    }
+
+    on key_pressed(Key::R) {
+        new_game();
+    }
+}
