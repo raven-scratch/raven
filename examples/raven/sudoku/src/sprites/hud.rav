@@ -1,0 +1,177 @@
+// The HUD: every piece of text in the game, stamped with the pen.
+//
+// This sprite owns one costume per character of a 3x5 font and nothing else. A
+// character's costume is found by counting from the first one, so `alphabet`
+// below and the costume list above it are the same list written twice: the
+// `fspace` costume is first, and `alphabet`'s first item is a space. Change one
+// and the other has to change with it. Counting is four blocks and no table,
+// where a `match` over forty characters would be forty arms.
+//
+// The board owns the left of the stage and clears the pen layer; this sprite only
+// stamps on top of it. When the board has nothing to draw — the menu, the wait
+// while a puzzle is generated, and the two cards at the end of a run — the layer
+// is empty and the text is centred on the whole stage instead of the column.
+//
+// Nothing here is a Scratch variable: `state`, `sel`, `clues`, `tries`,
+// `mistakes` and `seconds` live on the stage.
+
+sprite "Hud" {
+    costume "dot" = "assets/dot.svg";
+    costume "fspace" = "assets/fspace.svg";
+    costume "fA" = "assets/fA.svg";
+    costume "fB" = "assets/fB.svg";
+    costume "fC" = "assets/fC.svg";
+    costume "fD" = "assets/fD.svg";
+    costume "fE" = "assets/fE.svg";
+    costume "fF" = "assets/fF.svg";
+    costume "fG" = "assets/fG.svg";
+    costume "fH" = "assets/fH.svg";
+    costume "fI" = "assets/fI.svg";
+    costume "fJ" = "assets/fJ.svg";
+    costume "fK" = "assets/fK.svg";
+    costume "fL" = "assets/fL.svg";
+    costume "fM" = "assets/fM.svg";
+    costume "fN" = "assets/fN.svg";
+    costume "fO" = "assets/fO.svg";
+    costume "fP" = "assets/fP.svg";
+    costume "fQ" = "assets/fQ.svg";
+    costume "fR" = "assets/fR.svg";
+    costume "fS" = "assets/fS.svg";
+    costume "fT" = "assets/fT.svg";
+    costume "fU" = "assets/fU.svg";
+    costume "fV" = "assets/fV.svg";
+    costume "fW" = "assets/fW.svg";
+    costume "fX" = "assets/fX.svg";
+    costume "fY" = "assets/fY.svg";
+    costume "fZ" = "assets/fZ.svg";
+    costume "f0" = "assets/f0.svg";
+    costume "f1" = "assets/f1.svg";
+    costume "f2" = "assets/f2.svg";
+    costume "f3" = "assets/f3.svg";
+    costume "f4" = "assets/f4.svg";
+    costume "f5" = "assets/f5.svg";
+    costume "f6" = "assets/f6.svg";
+    costume "f7" = "assets/f7.svg";
+    costume "f8" = "assets/f8.svg";
+    costume "f9" = "assets/f9.svg";
+    costume "fdash" = "assets/fdash.svg";
+    costume "fcolon" = "assets/fcolon.svg";
+    costume "fslash" = "assets/fslash.svg";
+    costume "fgt" = "assets/fgt.svg";
+
+    /// One glyph box plus its air, in stage units: a glyph is 12 wide and 20
+    /// tall, so a character advances 16 and a ten-character line is 172 wide.
+    const PITCH: num = 16;
+
+    /// The right column: the readout during play is centred on it. The board
+    /// ends at x = 6 and the stage at 240, so the column is the middle of what
+    /// is left.
+    const COLUMN: num = 129;
+
+    /// Where the menu's three entries sit, in the order the levels are numbered.
+    var menu_y: list<num> = [40, 0, -40];
+    var menu_label: list<str> = ["EASY", "MEDIUM", "HARD"];
+
+    /// The characters, in the order the costumes above declare them.
+    var alphabet: list<str> = [
+        " ",
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        "-", ":", "/", ">"
+    ];
+
+    /// One character, centred on `x` at row `y`.
+    ///
+    /// Scratch reads a string comparison case-insensitively, so a lower-case
+    /// character finds its capital without this caring.
+    proc stamp_char(character: str, x: num, y: num) warp {
+        let code = alphabet.index_of(character);
+        if code == 0 {
+            code = 1;
+        }
+        motion::go_to_xy(x, y);
+        looks::switch_costume_to(Costume::Fspace);
+        repeat code - 1 {
+            looks::next_costume();
+        }
+        pen::stamp();
+    }
+
+    /// A line of text, centred on `x` at row `y`. The first character sits half
+    /// a line's width to the left, so a word grows in both directions.
+    proc stamp_text(text: str, x: num, y: num) warp {
+        let count = operators::length(text);
+        let left = x - (count - 1) * PITCH / 2;
+        for i in 1..=count {
+            stamp_char(operators::letter_of(i, text), left + (i - 1) * PITCH, y);
+        }
+    }
+
+    /// A label with its value under it, both centred in the column. The value
+    /// sits 34 below the label, which clears a 20-unit glyph twice over.
+    proc stamp_row(label: str, value: num, row: num) warp {
+        stamp_text(label, COLUMN, row);
+        stamp_text(str(value), COLUMN, row - 34);
+    }
+
+    /// The menu: the title, the three difficulties with a marker on the chosen
+    /// one, and how to choose. The board draws nothing while this is up.
+    proc menu() warp {
+        stamp_text("SUDOKU", 0, 120);
+        stamp_text("ARROWS TO CHOOSE", 0, 76);
+        for level in 1..=3 {
+            if level == sel {
+                stamp_text(">", -74, menu_y[level]);
+            }
+            stamp_text(menu_label[level], 0, menu_y[level]);
+        }
+        stamp_text("ENTER TO START", 0, -110);
+    }
+
+    /// The readout during play: what is left to do, in the right column.
+    proc readout() warp {
+        stamp_row("CLUES", clues, 96);
+        stamp_row("TRIES", tries, 34);
+        stamp_text("ARROWS MOVE", COLUMN, -50);
+        stamp_text("1 TO 9 FILL", COLUMN, -74);
+        stamp_text("0 CLEARS", COLUMN, -98);
+    }
+
+    /// The two cards a run ends on. The board has been cleared, so these are
+    /// centred on the stage.
+    proc card() warp {
+        if state == 2 {
+            stamp_text("SOLVED", 0, 80);
+            stamp_text(f"TIME {seconds} SECONDS", 0, 36);
+        } else {
+            stamp_text("OUT OF TRIES", 0, 80);
+            stamp_text(f"CLUES {clues}", 0, 36);
+        }
+        stamp_text(f"MISTAKES {mistakes}", 0, 0);
+        stamp_text("ENTER FOR THE MENU", 0, -70);
+    }
+
+    /// The whole display for the state the game is in.
+    proc paint() warp {
+        if state == 0 {
+            menu();
+        } else {
+            if state == 1 {
+                readout();
+            } else {
+                if state == 4 {
+                    stamp_text("GENERATING", 0, 0);
+                } else {
+                    card();
+                }
+            }
+        }
+        motion::go_to_xy(-235, 175);
+        looks::switch_costume_to(Costume::Dot);
+    }
+
+    on broadcast_received("hud") {
+        paint();
+    }
+}

@@ -7,14 +7,13 @@
  * and a claim like that is worth nothing unless something outside the project
  * verifies it. This script does three things:
  *
- *   * it runs the project, asks for a puzzle at each difficulty, and reads the
- *     `puzzle` and `solution` lists straight out of the VM;
+ *   * it drives the real key hats through the menu, deals a puzzle at each
+ *     difficulty, and reads the `puzzle` and `solution` lists out of the VM;
  *   * it solves each puzzle with its own singles-only solver, written here and
  *     sharing no code with the generator, and fails if any puzzle needs a guess
  *     or comes out with more than one answer;
- *   * it plays a whole game through the real key hats — including a full win and
- *     a run that loses on three mistakes — and fails if the project does not
- *     react.
+ *   * it plays whole games — one to a win, one to a loss — and fails if the
+ *     project does not react.
  *
  * It needs a checkout of the Scratch VM, like `tools/validate-sb3.js`:
  *
@@ -140,9 +139,9 @@ function solveBySingles(givens) {
 
 const ROUNDS = Number(process.env.ROUNDS || 3);
 const DIFFICULTY = [
-  { key: '1', level: 'easy', target: 50 },
-  { key: '2', level: 'medium', target: 44 },
-  { key: '3', level: 'hard', target: 40 },
+  { level: 1, name: 'easy', target: 50 },
+  { level: 2, name: 'medium', target: 44 },
+  { level: 3, name: 'hard', target: 40 },
 ];
 
 const failures = [];
@@ -156,7 +155,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   const sb3 = join(root, 'dist', 'sudoku.sb3');
   const vm = new VirtualMachine();
-  const says = [];
   const errors = [];
 
   const originalError = console.error;
@@ -170,7 +168,6 @@ async function main() {
 
   const bytes = readFileSync(sb3);
   await vm.loadProject(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  vm.runtime.on('SAY', (target, type, text) => says.push(String(text)));
   // The VM only steps its threads while it is running.
   vm.start();
 
@@ -180,6 +177,44 @@ async function main() {
     return variable ? variable.value.map(Number) : null;
   };
   const press = (key) => vm.runtime.startHats('event_whenkeypressed', { KEY_OPTION: key });
+
+  // The HUD finds a character's costume by counting from the first glyph, so the
+  // costume order and the `alphabet` list have to be the same list written
+  // twice. Nothing else in the project would notice if they drifted: the text
+  // would simply come out as the wrong letters. This notices.
+  const hud = vm.runtime.targets.find((t) => t.getName() === 'Hud');
+  const costumes = hud.sprite.costumes.map((costume) => costume.name);
+  const alphabetVariable = hud.lookupVariableByNameAndType('alphabet', 'list');
+  const alphabet = alphabetVariable ? alphabetVariable.value.map(String) : [];
+  const glyphName = (character) => {
+    if (character === ' ') return 'fspace';
+    if (character === '-') return 'fdash';
+    if (character === ':') return 'fcolon';
+    if (character === '/') return 'fslash';
+    if (character === '>') return 'fgt';
+    return `f${character}`;
+  };
+  check(costumes[0] === 'dot', `the HUD's first costume is \`${costumes[0]}\`, not the pixel it parks on`);
+  check(
+    alphabet.length === costumes.length - 1,
+    `the HUD has ${costumes.length - 1} glyphs but an alphabet of ${alphabet.length}`,
+  );
+  alphabet.forEach((character, i) => {
+    check(
+      glyphName(character) === costumes[i + 1],
+      `the HUD's alphabet is out of step at \`${character}\`: costume ${i + 1} is \`${costumes[i + 1]}\``,
+    );
+  });
+
+  /** Run the VM until `ready` holds, or give up. */
+  const until = async (ready, budgetMs = 40000) => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      if (ready()) return true;
+      await sleep(25);
+    }
+    return false;
+  };
 
   // `cursor` is a raven `var`, so it is a cell of the target's arena rather than
   // a Scratch variable a test could look up by name. Its slot is found instead
@@ -199,8 +234,7 @@ async function main() {
     };
     const right = await see('right arrow');
     const down = await see('down arrow');
-    const slot = right.findIndex((delta, i) => delta === 1 && down[i] === 9);
-    return slot;
+    return right.findIndex((delta, i) => delta === 1 && down[i] === 9);
   };
   let cursorSlot = -1;
   const cursorCell = () => vms()[cursorSlot] - 1; // 0-based
@@ -219,51 +253,46 @@ async function main() {
     return cursorSlot >= 0 && cursorCell() === 0;
   };
 
-  /** Run the VM until `ready` holds, or give up. */
-  const until = async (ready, budgetMs = 20000) => {
-    const deadline = Date.now() + budgetMs;
-    while (Date.now() < deadline) {
-      if (ready()) return true;
-      await sleep(25);
-    }
-    return false;
-  };
+  /** The menu, once the flag script has built the tables and cleared the board. */
+  const atMenu = () =>
+    (list('cells') || []).length === 81 &&
+    (list('cells') || []).every((v) => v === 0) &&
+    (list('puzzle') || []).length === 0;
 
-  vm.greenFlag();
-  await until(() => says.some((s) => s.includes('SUDOKU')), 40000);
-  check(
-    says.some((s) => s.includes('SUDOKU')),
-    'the menu message never appeared, so the tables were never built',
-  );
-  check((list('cells') || []).length === 81, 'the green flag never built the board');
-  vm.stopAll();
-
-  const deal = async (difficulty) => {
-    says.length = 0;
+  /**
+   * Deal a puzzle by walking the menu: the flag always leaves the marker on
+   * easy, so a level is `level - 1` presses of down and then Enter.
+   */
+  const deal = async (level) => {
     vm.greenFlag();
-    // The menu is said at the end of the flag script, after the lookup tables
-    // are built. Pressing a difficulty before that would run `start` while
-    // `build_tables` is still writing them.
-    if (!(await until(() => says.some((s) => s.includes('SUDOKU')), 40000))) return false;
-    vm.stopAll();
-    says.length = 0;
-    press(difficulty.key);
-    // `start` finishes by saying the clue count, which is the only signal that
-    // the deal is over — the lists themselves still hold the last puzzle.
-    return until(
-      () => says.some((s) => / clues, \d+ tries$/.test(s)),
-      90000,
-    );
+    if (!(await until(atMenu))) return false;
+    const before = (list('puzzle') || []).join(',');
+    for (let i = 1; i < level; i += 1) {
+      press('down arrow');
+      await sleep(90);
+    }
+    press('enter');
+    return until(() => {
+      const puzzle = list('puzzle') || [];
+      const cells = list('cells') || [];
+      return (
+        cells.length === 81 &&
+        puzzle.length === 81 &&
+        puzzle.join(',') !== before &&
+        cells.join(',') === puzzle.join(',') &&
+        puzzle.some((v) => v !== 0)
+      );
+    }, 90000);
   };
 
-  // --- generation, and the no-guessing claim -----------------------------
+  // --- the menu, and generation ------------------------------------------
 
-  const clueCounts = new Map(DIFFICULTY.map((d) => [d.level, []]));
+  const clueCounts = new Map(DIFFICULTY.map((d) => [d.name, []]));
   for (const difficulty of DIFFICULTY) {
     for (let round = 0; round < ROUNDS; round += 1) {
-      const label = `${difficulty.level} ${round + 1}`;
-      const dealt = await deal(difficulty);
-      if (!check(dealt, `${label}: no puzzle was dealt`)) continue;
+      const label = `${difficulty.name} ${round + 1}`;
+      const dealt = await deal(difficulty.level);
+      if (!check(dealt, `${label}: the menu did not deal a puzzle`)) continue;
 
       const puzzle = list('puzzle');
       const solution = list('solution');
@@ -306,17 +335,15 @@ async function main() {
         `${label}: the puzzle solves to something other than the generated grid`,
       );
 
-      console.log(
-        `  ${label.padEnd(9)} ${clues} clues, solved by singles alone`,
-      );
-      clueCounts.get(difficulty.level).push(clues);
+      console.log(`  ${label.padEnd(9)} ${clues} clues, solved by singles alone`);
+      clueCounts.get(difficulty.name).push(clues);
     }
   }
 
-  // The three keys have to actually mean something: the easiest deal is never
-  // sparser than the hardest one.
-  const widest = (level) => Math.max(...clueCounts.get(level));
-  const sharpest = (level) => Math.min(...clueCounts.get(level));
+  // The three menu entries have to actually mean something: the easiest deal is
+  // never sparser than the hardest one.
+  const widest = (name) => Math.max(...clueCounts.get(name));
+  const sharpest = (name) => Math.min(...clueCounts.get(name));
   check(
     sharpest('easy') >= widest('medium') && sharpest('medium') >= widest('hard'),
     `the difficulties overlap: easy ${sharpest('easy')}..${widest('easy')}, ` +
@@ -327,7 +354,7 @@ async function main() {
   // --- a whole game, played through the real key hats --------------------
 
   console.log('  playing a game through to a win');
-  const dealt = await deal(DIFFICULTY[0]);
+  const dealt = await deal(1);
   // Calibration drives a cell that can move both right and down, so the cursor
   // goes home first.
   press('up arrow');
@@ -336,6 +363,7 @@ async function main() {
   cursorSlot = await calibrateCursor();
   check(cursorSlot >= 0, 'could not find the cursor cell in the arena');
   check(await clampToFirst(), `the clamped cursor is on cell ${cursorCell() + 1}, not the first`);
+
   if (check(dealt, 'the game could not be dealt for the playthrough')) {
     const puzzle = list('puzzle');
     const solution = list('solution');
@@ -350,10 +378,10 @@ async function main() {
     // player cannot outrun that, and neither does this.
     const goTo = async (target) => {
       for (let guard = 0; guard < 40; guard += 1) {
-        const here = cursorCell();
-        if (here === target) return true;
-        if (row(here) < row(target)) await step('down arrow');
-        else if (col(here) > col(target)) await step('left arrow');
+        const cell = cursorCell();
+        if (cell === target) return true;
+        if (row(cell) < row(target)) await step('down arrow');
+        else if (col(cell) > col(target)) await step('left arrow');
         else await step('right arrow');
       }
       return false;
@@ -361,7 +389,6 @@ async function main() {
 
     const empty = [];
     for (let i = 0; i < 81; i += 1) if (puzzle[i] === 0) empty.push(i);
-    says.length = 0;
     let missed = 0;
 
     for (const cell of empty) {
@@ -374,36 +401,42 @@ async function main() {
     vm.stopAll();
 
     const filled = list('cells') || [];
-    const rejected = says.filter((s) => /^not \d/.test(s));
     const stillEmpty = filled.map((v, i) => (v === 0 ? i : -1)).filter((i) => i >= 0);
     check(
       filled.every((v) => v !== 0),
       `the playthrough left ${stillEmpty.length} cells empty ` +
-        `(first ${stillEmpty.slice(0, 8).join(',')}; ${missed} placements did not land; ` +
-        `${rejected.length} refused)`,
-    );
-    check(
-      says.some((s) => s.includes('solved in')),
-      'winning did not announce the puzzle as solved',
+        `(first ${stillEmpty.slice(0, 8).join(',')}; ${missed} placements did not land)`,
     );
 
-    // Enter goes back to the menu, and a new difficulty deals a new puzzle.
-    const won = (list('puzzle') || []).slice().join(',');
+    // Enter goes back to the menu, and the marker walks again: two downs and
+    // Enter must deal the hardest puzzle, which is a different one again. That
+    // is also what proves Enter left the card — the menu is the only state where
+    // the arrows and Enter do anything.
+    const won = (list('puzzle') || []).join(',');
     press('enter');
-    await sleep(200);
-    press('2');
-    const regrew = await until(() => {
+    await sleep(250);
+    press('down arrow');
+    await sleep(90);
+    press('down arrow');
+    await sleep(90);
+    press('enter');
+    const harder = await until(() => {
       const next = list('puzzle') || [];
-      return next.length === 81 && next.some((v) => v !== 0) && next.join(',') !== won;
-    }, 60000);
+      return (
+        next.length === 81 &&
+        next.some((v) => v !== 0) &&
+        next.join(',') !== won &&
+        next.filter((v) => v !== 0).length <= DIFFICULTY[2].target
+      );
+    }, 90000);
     vm.stopAll();
-    check(regrew, 'after a win, Enter and a difficulty did not deal a new puzzle');
+    check(harder, 'after a win, Enter and the menu did not deal hard');
   }
 
   // --- three mistakes ends the run ---------------------------------------
 
   console.log('  playing a game through to a loss');
-  const again = await deal(DIFFICULTY[0]);
+  const again = await deal(1);
   if (check(again, 'the game could not be dealt for the loss')) {
     const puzzle = list('puzzle');
     const solution = list('solution');
@@ -416,23 +449,18 @@ async function main() {
     const wrong = String((solution[at] % 9) + 1);
     check(wrong !== String(solution[at]), 'the wrong digit was the right digit');
 
-    says.length = 0;
     for (let i = 0; i < 3; i += 1) {
       press(wrong);
-      await sleep(60);
+      await sleep(80);
     }
-    await sleep(120);
     const after = list('cells') || [];
     check(
       after.every((v, i) => v === before[i]),
       'a wrong digit was written to the board',
     );
-    check(
-      says.some((s) => s.includes('out of tries')),
-      'three mistakes did not end the run',
-    );
 
-    // Once the run is over the board stops taking digits, and Enter restarts.
+    // Once the run is over the board stops taking digits, and Enter twice —
+    // card, then menu — deals another puzzle of the same difficulty.
     press(String(solution[at]));
     await sleep(120);
     check(
@@ -440,14 +468,19 @@ async function main() {
       'the board kept taking digits after the run ended',
     );
     press('enter');
-    await sleep(120);
-    press('1');
+    await sleep(250);
+    press('enter');
     const restarted = await until(() => {
       const next = list('puzzle') || [];
-      return next.length === 81 && next.some((v) => v !== 0);
-    }, 60000);
+      return (
+        next.length === 81 &&
+        next.some((v) => v !== 0) &&
+        (list('cells') || []).join(',') === next.join(',') &&
+        next.filter((v) => v !== 0).length <= DIFFICULTY[0].target
+      );
+    }, 90000);
     vm.stopAll();
-    check(restarted, 'after a loss, Enter and a difficulty did not deal a new puzzle');
+    check(restarted, 'after a loss, Enter and the menu did not deal a puzzle');
   }
 
   console.error = originalError;

@@ -28,6 +28,7 @@
 sprite "Board" {
     costume "dot" = "assets/dot.svg";
     costume "cursor" = "assets/cursor.svg";
+    costume "match" = "assets/match.svg";
     costume "given1" = "assets/given1.svg";
     costume "given2" = "assets/given2.svg";
     costume "given3" = "assets/given3.svg";
@@ -48,26 +49,24 @@ sprite "Board" {
     costume "user9" = "assets/user9.svg";
 
     /// One cell, and the grid, in stage units.
-    const CELL: num = 28;
+    ///
+    /// The stage is 480 by 360 and the board takes the left of it: 9 cells of 26
+    /// is 234, so the grid runs from -228 to 6 and leaves 12 units of margin on
+    /// the left, 234 of column on the right, and 63 above and below. The board
+    /// stays vertically centred, which is what lets the HUD use the right-hand
+    /// column without the two ever meeting.
+    const CELL: num = 26;
 
     /// Where the top-left corner of the grid sits.
-    const LEFT: num = -126;
-    const TOP: num = 126;
+    const LEFT: num = -228;
+    const TOP: num = 117;
 
-    /// How many wrong entries a run survives.
+    /// How many wrong entries a run survives. The remaining count lives on the
+    /// stage as `tries`, because the HUD prints it.
     const TRIES: num = 3;
-
-    // 0 the menu, 1 playing, 2 solved, 3 out of tries, 4 generating.
-    var state: num = 0;
 
     /// The cell the player is on, 1..81.
     var cursor: num = 1;
-
-    /// Wrong entries so far.
-    var mistakes: num = 0;
-
-    /// How many cells the puzzle starts with, which is its difficulty.
-    var clues: num = 81;
 
     /// The finished grid the puzzle was cut from, and the puzzle itself.
     var solution: list<num> = [];
@@ -77,9 +76,8 @@ sprite "Board" {
     var cells: list<num> = [];
     var locked: list<num> = [];
 
-    /// The clue count each difficulty aims for, indexed by the key that chose
-    /// it: the first item is easy, so `targets[level]` is the key the player
-    /// pressed.
+    /// The clue count each difficulty aims for, indexed by the level the menu
+    /// chose: the first item is easy, so `targets[level]` is the entry's number.
     ///
     /// The aim is not a promise. A pass stops when no cell left in it is forced,
     /// which the randomness of the order decides, so a deal can come out a few
@@ -417,25 +415,39 @@ sprite "Board" {
     // The game
     // ---------------------------------------------------------------------
 
-    /// The menu, which is also what a finished run comes back to.
+    /// The menu, which is what the project opens on and what a finished run
+    /// comes back to. Nothing is drawn on the pen layer but the HUD's text.
     proc menu() warp {
         state = 0;
-        mistakes = 0;
-        looks::say("SUDOKU   1 easy   2 medium   3 hard");
+        sel = 1;
         redraw();
+    }
+
+    /// Move the menu's marker, stopping at the ends rather than wrapping.
+    proc move_sel(step: num) warp {
+        if state != 0 {
+            return;
+        }
+        let next = sel + step;
+        if next >= 1 && next <= 3 {
+            sel = next;
+            redraw();
+        }
     }
 
     /// Deal a puzzle at `level` and start playing it.
     ///
     /// The state leaves the menu before the work starts, so a second key press
     /// during a deal cannot begin a second one: two passes over the same lists
-    /// would interleave, and the generator's scratch lists are shared.
+    /// would interleave, and the generator's scratch lists are shared. It also
+    /// takes the board off the screen, which is what makes the wait look like
+    /// something happening rather than a frozen puzzle.
     proc start(level: num) {
         if state != 0 {
             return;
         }
         state = 4;
-        looks::say("generating a puzzle...");
+        redraw();
         build_solution();
         dig(targets[level]);
 
@@ -463,10 +475,10 @@ sprite "Board" {
         }
 
         mistakes = 0;
+        tries = TRIES;
         state = 1;
         sensing::reset_timer();
         redraw();
-        looks::say(f"{clues} clues, {TRIES} tries");
     }
 
     /// Whether every cell is filled. Only a correct entry is ever written, so a
@@ -482,13 +494,13 @@ sprite "Board" {
 
     proc win() warp {
         state = 2;
-        let seconds = floor(sensing::timer());
-        looks::say(f"solved in {seconds}s with {mistakes} wrong - Enter for the menu");
+        seconds = floor(sensing::timer());
+        redraw();
     }
 
     proc lose() warp {
         state = 3;
-        looks::say("out of tries - Enter for the menu");
+        redraw();
     }
 
     /// Put a digit in the current cell.
@@ -505,18 +517,18 @@ sprite "Board" {
         }
         if solution[cursor] == d {
             cells[cursor] = d;
-            redraw();
             if solved() {
                 win();
             } else {
-                looks::say(f"{clues} clues, {TRIES - mistakes} tries");
+                redraw();
             }
         } else {
             mistakes += 1;
+            tries -= 1;
             if mistakes >= TRIES {
                 lose();
             } else {
-                looks::say(f"not {d} - {TRIES - mistakes} tries left");
+                redraw();
             }
         }
     }
@@ -599,18 +611,40 @@ sprite "Board" {
         }
     }
 
-    /// The whole frame: the grid, the highlight, the digits, and then the sprite
-    /// parks on a transparent pixel at the foot of the stage where its speech
-    /// bubble is out of the way.
+    /// The whole frame.
+    ///
+    /// The board is drawn only while a puzzle is being played. At the menu, while
+    /// one is being generated, and on the two cards a run ends on, the pen layer
+    /// is cleared and left empty for the HUD to write on.
+    ///
+    /// Three layers go down in order: the grid, the tint under every cell that
+    /// holds the same digit as the cell the cursor is on, the cursor's own
+    /// outline, and then the digits themselves. The tint is the solving aid —
+    /// with the cursor on a 7, every other 7 on the board reads as one group —
+    /// and it is stamped under the digits so it never sits on top of them.
     proc redraw() warp {
         pen::clear();
+        if state != 1 {
+            broadcast_hud();
+            return;
+        }
+
         draw_grid();
 
-        if state == 1 {
-            motion::go_to_xy(cell_x(col_of(cursor)), cell_y(row_of(cursor)));
-            looks::switch_costume_to(Costume::Cursor);
-            pen::stamp();
+        let focus = cells[cursor];
+        if focus != 0 {
+            for i in 1..=81 {
+                if cells[i] == focus {
+                    motion::go_to_xy(cell_x(col_of(i)), cell_y(row_of(i)));
+                    looks::switch_costume_to(Costume::Match);
+                    pen::stamp();
+                }
+            }
         }
+
+        motion::go_to_xy(cell_x(col_of(cursor)), cell_y(row_of(cursor)));
+        looks::switch_costume_to(Costume::Cursor);
+        pen::stamp();
 
         for i in 1..=81 {
             let value = cells[i];
@@ -625,8 +659,15 @@ sprite "Board" {
             }
         }
 
-        motion::go_to_xy(0, -172);
+        broadcast_hud();
+    }
+
+    /// Park on a transparent pixel in the corner and ask the HUD to paint. Both
+    /// sprites park on the same pixel: nothing of either is ever visible.
+    proc broadcast_hud() warp {
+        motion::go_to_xy(-235, 175);
         looks::switch_costume_to(Costume::Dot);
+        events::broadcast("hud");
     }
 
     // ---------------------------------------------------------------------
@@ -635,6 +676,10 @@ sprite "Board" {
 
     on flag_clicked {
         build_tables();
+        // The menu holds no puzzle at all: nothing is drawn for one and nothing
+        // is left in memory for one until a difficulty is chosen.
+        solution.clear();
+        puzzle.clear();
         cells.clear();
         locked.clear();
         for i in 1..=81 {
@@ -644,12 +689,23 @@ sprite "Board" {
         menu();
     }
 
+    /// Up and down do one of two jobs, and the state decides which: they walk
+    /// the menu's marker when nothing is being played, and move the cursor when
+    /// something is.
     on key_pressed(Key::UpArrow) {
-        move_cursor(-1, 0);
+        if state == 0 {
+            move_sel(-1);
+        } else {
+            move_cursor(-1, 0);
+        }
     }
 
     on key_pressed(Key::DownArrow) {
-        move_cursor(1, 0);
+        if state == 0 {
+            move_sel(1);
+        } else {
+            move_cursor(1, 0);
+        }
     }
 
     on key_pressed(Key::LeftArrow) {
@@ -660,30 +716,18 @@ sprite "Board" {
         move_cursor(0, 1);
     }
 
-    /// 1, 2 and 3 choose a difficulty in the menu and place that digit in play,
-    /// so one key has both jobs and the state decides which one it is.
+    /// 1 to 9 fill the current cell. The menu is the arrows and Enter, so a
+    /// digit does nothing until a puzzle is on the board.
     on key_pressed(Key::Digit1) {
-        if state == 0 {
-            start(1);
-        } else {
-            place(1);
-        }
+        place(1);
     }
 
     on key_pressed(Key::Digit2) {
-        if state == 0 {
-            start(2);
-        } else {
-            place(2);
-        }
+        place(2);
     }
 
     on key_pressed(Key::Digit3) {
-        if state == 0 {
-            start(3);
-        } else {
-            place(3);
-        }
+        place(3);
     }
 
     on key_pressed(Key::Digit4) {
@@ -715,9 +759,15 @@ sprite "Board" {
         clear_cell();
     }
 
+    /// Enter starts the difficulty the menu is on, and returns to the menu from
+    /// either card.
     on key_pressed(Key::Enter) {
-        if state == 2 || state == 3 {
-            menu();
+        if state == 0 {
+            start(sel);
+        } else {
+            if state == 2 || state == 3 {
+                menu();
+            }
         }
     }
 }

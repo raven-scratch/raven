@@ -12,23 +12,30 @@ node examples/raven/sudoku/tools/assets.mjs    # regenerate the costumes
 node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
 ```
 
-The project is one sprite and one stage. The stage holds a backdrop and no state
-at all, so the whole game is `src/sprites/board.rav`.
+The project is one stage and two sprites. `src/sprites/board.rav` is the puzzle:
+the generator, the play, and the grid it draws with the pen.
+`src/sprites/hud.rav` is every word and number in the game. They share one pen
+layer, so the board clears it, draws, and then broadcasts `hud` for the HUD to
+write on top; the HUD never clears anything.
 
 ## Controls
 
 | Key | What it does |
 | --- | --- |
-| `1`, `2`, `3` | In the menu, deal an easy, medium or hard puzzle. In play, put that digit in the current cell. |
-| Arrow keys | Move the highlight. It stops at the edges rather than wrapping. |
-| `4`–`9` | Put that digit in the current cell. |
+| Up, Down | Move the menu's marker, or the board's cursor. The state decides which. |
+| Left, Right | Move the board's cursor. Every move stops at the edge rather than wrapping. |
+| `Enter` | Start the difficulty the menu is on, or leave a result card for the menu. |
+| `1`–`9` | Put that digit in the current cell. |
 | `0` | Rub the current cell out. Sudoku never uses a zero, so the key is free. |
-| `Enter` | After a win or a loss, go back to the menu. |
 
 A cell that the puzzle started with cannot be changed or cleared. A wrong digit is
 **refused** rather than written, and costs one of three tries; three of them end
 the run. Because only a correct entry is ever written, a full board is always the
 right board, and there is nothing to check at the end.
+
+The board highlights every cell that holds the same digit as the cell the cursor
+is on. With the cursor on a 7, every other 7 reads as one group, which is most of
+how a person scans a grid.
 
 The three difficulties are clue counts: easy aims for 50, medium for 44, hard for
 40. The number is an aim, not a promise — a pass stops when nothing left in it is
@@ -37,6 +44,22 @@ than the number. The generator never removes a cell it cannot justify, so it tak
 what it can get. Measured over a few thousand deals, the construction bottoms out
 between 29 and 38 clues, which is why the aims sit where they do: asking for
 fewer would only mean asking for something the last pass did not reach.
+
+## The screen
+
+The stage is 480 by 360, and the two halves are worked out from that rather than
+guessed. The board is 9 cells of 26, which is 234, and it runs from x = -228 to
+x = 6: 12 units of margin at the left edge, and the grid centred vertically in the
+63 units of margin above and below it. What is left on the right — from x = 18 to
+the edge — is the HUD's column, and the play readout is centred on x = 129, which
+is the middle of it. A twelve-character line is 172 wide, so it fits the column
+with room to spare and never reaches the board.
+
+The HUD writes at one size: a glyph is 12 by 20 and a character advances 16, so a
+long line is 384 wide and still fits the full stage when one is centred on it. The
+menu, the wait for a puzzle and the two cards a run ends on are centred on the
+stage, because the board is not drawn on any of them — the pen layer is cleared
+and left empty for the text. Nothing in the game uses a speech bubble.
 
 ## Why the puzzles never need a guess
 
@@ -86,10 +109,11 @@ one deal in a thousand, which is exactly the kind of thing a check that solves
 thousands of dealt puzzles is for.
 
 **This is checked, not asserted.** `tools/check.mjs` runs the project in a real
-Scratch VM, asks it for puzzles at all three difficulties, and solves each one
-with its own singles-only solver, written separately and sharing no code with the
-generator. It also plays a whole game through the real key hats — a full win and a
-full loss — and fails if the project does not react.
+Scratch VM, walks the menu with the arrow keys and Enter to ask for a puzzle at
+each difficulty, and solves each one with its own singles-only solver, written
+separately and sharing no code with the generator. It also plays whole games
+through the real key hats — one to a win, one to a loss — and fails if the project
+does not react.
 
 ```sh
 SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
@@ -108,19 +132,18 @@ twenty in a row, and `units` holds the nine cells of each of the twenty-seven
 units, so the solver's inner loops are list reads and nothing else. The tables are
 built once per run, in `build_tables`.
 
-Candidate masks are one number per cell — nine bits, one per digit — and `bits[d]`
-is the bit for digit `d`. Taking a digit away from a cell is a subtraction, and
-"this cell has only one candidate left" is a membership test against that same
-list, so there is no bit arithmetic to get wrong.
+The board draws with the pen in one `warp` procedure: `draw_grid` rules the lines,
+with every third one thick for a box; the tint goes down under every cell holding
+the cursor's digit; the cursor's outline goes over that; and the digits go last, so
+nothing is ever stamped on top of them. Both sprites then park on the same
+transparent pixel, so neither is ever visible on the stage.
 
-The drawing is one sprite and the pen. `draw_grid` rules the lines, with every
-third one thick for a box; then the highlight is stamped under the digits, one
-stamp per filled cell, and the sprite parks on a transparent pixel at the foot of
-the stage so its speech bubble is out of the way. The whole frame is one `warp`
-procedure.
-
-`assets.mjs` writes the twenty-three costumes: a backdrop, the highlight, the
-parking pixel, and a seven-segment digit in two faces — `given` for a clue, `user`
-for a value the player entered. A digit is drawn as segments rather than as text
-because Scratch deletes `<text>` elements from an SVG, and segments need no font.
-Regenerate them rather than editing them.
+`assets.mjs` writes every costume. The board's are a backdrop, the parking pixel,
+the cursor outline, the tint, and a seven-segment digit in two faces — `given` for
+a clue, `user` for a value the player entered. The HUD's are one per character of a
+3x5 font: a digit is drawn as segments and a character as pixels, rather than as
+text, because Scratch deletes `<text>` elements from an SVG, and neither needs a
+font installed on the machine. The font's costumes are written in the order the
+HUD's `alphabet` list reads, because the HUD finds a character by counting from the
+first glyph — `check.mjs` compares the two lists and fails if they drift apart.
+Regenerate the costumes rather than editing them.

@@ -1,10 +1,33 @@
-// Sudoku — the stage owns the backdrop and nothing else.
+// Sudoku — the stage owns the backdrop and the few values both sprites read.
 //
-// The game is one sprite, because the board, the generator and the input all
-// belong to the same thing: a single pen layer that one sprite redraws. The
-// stage holds no state, so there is no `pub` variable and no monitor anywhere
-// in this project.
+// The board and the HUD are two sprites on one pen layer, so they cannot share a
+// sprite-local variable: the board clears the layer and draws the grid, then
+// broadcasts `hud`, and the HUD stamps its text on top of what the board left.
+// Everything the HUD has to read is declared here, where projects put state that
+// more than one target sees.
+//
+// None of these is a Scratch variable a program can name — a `pub var` is a cell
+// of the project's arena — so nothing here appears in the editor's variable list
+// and no monitor is declared.
 
 stage {
     costume "backdrop" = "assets/backdrop.svg";
+
+    /// 0 the menu, 1 playing, 2 solved, 3 out of tries, 4 generating.
+    pub var state: num = 0;
+
+    /// Which difficulty the menu is on, 1 to 3.
+    pub var sel: num = 1;
+
+    /// How many cells the puzzle started with, and how many wrong entries are
+    /// left before the run is over.
+    pub var clues: num = 81;
+    pub var tries: num = 3;
+    pub var mistakes: num = 0;
+
+    /// How long the winning run took, in whole seconds.
+    pub var seconds: num = 0;
+
+    /// The board clears the pen layer and draws, then asks for the text.
+    broadcast "hud";
 }
