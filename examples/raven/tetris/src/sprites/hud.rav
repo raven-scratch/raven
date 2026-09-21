@@ -63,17 +63,17 @@ sprite "Hud" {
     proc stamp_word(w: num, x: num, y: num) warp {
         motion::go_to_xy(x, y);
         match w {
-            1 => { looks::switch_costume_to(Costume::TETRIS); },
-            2 => { looks::switch_costume_to(Costume::SCORE); },
-            3 => { looks::switch_costume_to(Costume::LINES); },
-            4 => { looks::switch_costume_to(Costume::LEVEL); },
-            5 => { looks::switch_costume_to(Costume::PRESS); },
-            6 => { looks::switch_costume_to(Costume::SPACE); },
-            7 => { looks::switch_costume_to(Costume::GAME); },
-            8 => { looks::switch_costume_to(Costume::OVER); },
-            9 => { looks::switch_costume_to(Costume::PAUSED); },
-            10 => { looks::switch_costume_to(Costume::RESTART); },
-            _ => { looks::switch_costume_to(Costume::R); }
+            1 => { looks::switch_costume_to("tetris"); },
+            2 => { looks::switch_costume_to("score"); },
+            3 => { looks::switch_costume_to("lines"); },
+            4 => { looks::switch_costume_to("level"); },
+            5 => { looks::switch_costume_to("press"); },
+            6 => { looks::switch_costume_to("space"); },
+            7 => { looks::switch_costume_to("game"); },
+            8 => { looks::switch_costume_to("over"); },
+            9 => { looks::switch_costume_to("paused"); },
+            10 => { looks::switch_costume_to("restart"); },
+            _ => { looks::switch_costume_to("r"); }
         }
         pen::stamp();
     }
@@ -81,16 +81,16 @@ sprite "Hud" {
     proc stamp_digit(d: num, x: num, y: num) warp {
         motion::go_to_xy(x, y);
         match d {
-            0 => { looks::switch_costume_to(Costume::D_0); },
-            1 => { looks::switch_costume_to(Costume::D_1); },
-            2 => { looks::switch_costume_to(Costume::D_2); },
-            3 => { looks::switch_costume_to(Costume::D_3); },
-            4 => { looks::switch_costume_to(Costume::D_4); },
-            5 => { looks::switch_costume_to(Costume::D_5); },
-            6 => { looks::switch_costume_to(Costume::D_6); },
-            7 => { looks::switch_costume_to(Costume::D_7); },
-            8 => { looks::switch_costume_to(Costume::D_8); },
-            _ => { looks::switch_costume_to(Costume::D_9); }
+            0 => { looks::switch_costume_to("d0"); },
+            1 => { looks::switch_costume_to("d1"); },
+            2 => { looks::switch_costume_to("d2"); },
+            3 => { looks::switch_costume_to("d3"); },
+            4 => { looks::switch_costume_to("d4"); },
+            5 => { looks::switch_costume_to("d5"); },
+            6 => { looks::switch_costume_to("d6"); },
+            7 => { looks::switch_costume_to("d7"); },
+            8 => { looks::switch_costume_to("d8"); },
+            _ => { looks::switch_costume_to("d9"); }
         }
         pen::stamp();
     }
@@ -169,7 +169,7 @@ sprite "Hud" {
                 }
             }
         }
-        looks::switch_costume_to(Costume::TILE);
+        looks::switch_costume_to("tile");
     }
 
     on flag_clicked {

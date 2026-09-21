@@ -308,6 +308,12 @@ resolves it against the declarations of that kind. The one thing a block may
 never take is an expression where it wants a mention, or the reverse, and the
 checker enforces the distinction from the catalog's own `Wire` field.
 
+That name is written as the literal the project declared it as —
+`looks::switch_costume_to("idle")` — rather than as an invented variant, because
+the name is the author's and any second spelling of it is both confusing and
+lossy. A dropdown whose values Scratch defines is the other case and is an enum,
+`Goto::MousePointer`. See [the standard library](/raven/std#menu-types).
+
 ## 11. A diagnostic points at the line you wrote
 
 Every diagnostic carries the source line and a caret, plus `= note:` lines that

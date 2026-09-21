@@ -2330,7 +2330,7 @@ fn a_keyword_module_name_still_calls() {
             sound "beep" = "assets/beep.wav";
 
             on flag_clicked {
-                sound::play(Sound::BEEP);
+                sound::play("beep");
             }
         }"#,
     );
@@ -2340,6 +2340,74 @@ fn a_keyword_module_name_still_calls() {
     assert!(asm.contains("sound_play(\"beep\")"), "{asm}");
 }
 
+/// A menu is written as a variant when raven knows its values, and as the name's
+/// A menu is written as a variant when raven knows its values, and as the name's
+/// own literal when the project declares them.
+#[test]
+fn a_declared_name_is_a_literal_and_a_known_value_is_a_variant() {
+    let project = Project::new("menu-spelling").sprite(
+        "Player",
+        r#"sprite "Player" {
+            costume "blank" = "assets/blank.svg";
+            sound "beep" = "assets/beep.wav";
+
+            on flag_clicked {
+                looks::switch_costume_to("blank");
+                sound::play("beep");
+                motion::goto(Goto::MousePointer);
+                control::wait_until(sensing::touching_object(TouchingObject::EdgeOfStage));
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    // A declared name reaches the project as the string it was declared as.
+    assert!(asm.contains("looks_switchcostumeto(\"blank\")"), "{asm}");
+    assert!(asm.contains("sound_play(\"beep\")"), "{asm}");
+    // A value Scratch defines stays a variant, and becomes the Scratch string.
+    assert!(asm.contains("motion_goto(\"_mouse_\")"), "{asm}");
+    assert!(asm.contains("sensing_touchingobject(\"_edge_\")"), "{asm}");
+}
+
+/// The literal is checked, so a typo in a name is still a compile error.
+#[test]
+fn a_declared_name_that_is_not_declared_is_an_error() {
+    let project = Project::new("menu-typo").sprite(
+        "Player",
+        r#"sprite "Player" {
+            costume "blank" = "assets/blank.svg";
+
+            on flag_clicked {
+                looks::switch_costume_to("blenk");
+            }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(rendered.contains("no Costume called `blenk`"), "{rendered}");
+    assert!(rendered.contains("did you mean `blank`?"), "{rendered}");
+}
+
+/// A name the project declares is not a variant, which is what makes the two
+/// spellings different rather than two ways to write one thing.
+#[test]
+fn a_declared_name_written_as_a_variant_says_how_to_write_it() {
+    let project = Project::new("menu-variant").sprite(
+        "Player",
+        r#"sprite "Player" {
+            costume "blank" = "assets/blank.svg";
+            sound "beep" = "assets/beep.wav";
+
+            on flag_clicked {
+                sound::play(Sound::BEEP);
+            }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(
+        rendered.contains("is not a value of this menu"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("write one of \"beep\""), "{rendered}");
+}
 /// A condition that needs statements of its own — a value-returning `proc` call
 /// — has to run again for every test of the loop, not once before it.
 #[test]

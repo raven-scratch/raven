@@ -217,7 +217,7 @@ on clicked { }
 on stage_clicked { }
 on clone_start { }
 on broadcast_received("reset") { }
-on backdrop_switches_to(Backdrop::Sky) { }
+on backdrop_switches_to("sky") { }
 on greater_than(GreaterThan::Timer, 5) { }
 ```
 

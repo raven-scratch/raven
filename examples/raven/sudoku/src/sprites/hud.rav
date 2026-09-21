@@ -98,7 +98,7 @@ sprite "Hud" {
             code = 1;
         }
         motion::go_to_xy(x, y);
-        looks::switch_costume_to(Costume::FSPACE);
+        looks::switch_costume_to("fspace");
         repeat code - 1 {
             looks::next_costume();
         }
@@ -184,7 +184,7 @@ sprite "Hud" {
             }
         }
         motion::go_to_xy(-235, 175);
-        looks::switch_costume_to(Costume::DOT);
+        looks::switch_costume_to("dot");
     }
 
     on broadcast_received("hud") {

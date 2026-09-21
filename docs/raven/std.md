@@ -56,20 +56,21 @@ item holding `score 3`.
 
 ## Menu types
 
-Every dropdown is a type, and its variants are the values Scratch accepts. The
+Every dropdown is a type, and what its values are decides how it is written. The
 type name is the catalog's menu id in `PascalCase`, with the short names in the
-table below; variants are the Scratch value in `PascalCase`, with the special
-targets named.
+table below; a value Scratch defines is a variant, in `PascalCase`, with the
+special targets named. A menu whose values are names the project declares is
+written as those names, in quotes, which is described further down.
 
 | Menu | raven type | Variants (excerpt) |
 | --- | --- | --- |
-| `motion_goto`, `motion_glideto` | `Goto` | `RandomPosition`, `MousePointer`, or a sprite name |
-| `motion_pointtowards` | `PointTowards` | `MousePointer`, `RandomPosition`, or a sprite name |
-| `sensing_touchingobject` | `TouchingObject` | `MousePointer`, `EdgeOfStage`, or a sprite name |
+| `motion_goto`, `motion_glideto` | `Goto` | `RandomPosition`, `MousePointer` (a sprite is `"Player"`) |
+| `motion_pointtowards` | `PointTowards` | `MousePointer`, `RandomPosition` (a sprite is `"Player"`) |
+| `sensing_touchingobject` | `TouchingObject` | `MousePointer`, `EdgeOfStage` (a sprite is `"Player"`) |
 | `sensing_keyoptions` | `Key` | `Space`, `UpArrow`, `A`, `Digit1`, … |
-| `looks_costume` | `Costume` | the target's costume names |
-| `looks_backdrops` | `Backdrop` | the stage's backdrop names |
-| `sound_sounds` | `Sound` | the target's sound names |
+| `looks_costume` | `Costume` | *the target's names*, written as literals |
+| `looks_backdrops` | `Backdrop` | *the stage's names*, written as literals |
+| `sound_sounds` | `Sound` | *the target's names*, written as literals |
 | `looks_effect` | `Effect` | `Color`, `Fisheye`, `Whirl`, `Pixelate`, `Mosaic`, `Brightness`, `Ghost` |
 | `rotation_style` | `RotationStyle` | `AllAround`, `LeftRight`, `DontRotate` |
 | `front_back` | `FrontBack` | `Front`, `Back` |
@@ -78,50 +79,50 @@ targets named.
 | `drag_mode` | `DragMode` | `Draggable`, `NotDraggable` |
 | `math_op` | `MathOp` | `Abs`, `Floor`, `Ceiling`, `Sqrt`, `Sin`, … |
 | `greater_than` | `GreaterThan` | `Timer`, `Loudness` |
-| `sensing_of_object` | `OfObject` | `Stage`, or a sprite name |
+| `sensing_of_object` | `OfObject` | `Stage` (a sprite is `"Player"`) |
 
 A variant that names a project entity — a costume, a backdrop, a sound, a sprite —
 is checked against the project, exactly as raven-asm checks the dropdown. A typo
 in a sprite name is a compile error listing the names that do exist.
 
-Those three menus are spelled differently from the fixed ones, and the difference
-is which name is whose. A fixed value is a Scratch identifier — `draggable`,
-`up arrow` — so it is written the way Rust writes an enum variant: PascalCase,
-and the raven name is the readable form of the Scratch one. A costume, a backdrop
-or a sound is named by the *project's author*, and folding that name into
-PascalCase invents a name that appears nowhere: a sound declared as `theme` would
-be called `Sound::Theme`, which is not the declaration, not the file and not the
-asset. So a project name is written the way Rust writes a constant:
+A menu that can name a costume, a backdrop, a sound or a sprite is different,
+because the value is the *author's* name rather than one Scratch defines. Inventing
+a variant for it means spelling that name a second way, and the second spelling is
+the confusing one: a sound declared as `theme` has no `Sound::Theme` anywhere in the
+project, and any scheme that builds one is lossy — `my_sound` and `mySound` are two
+names that have to fold together.
 
-| Declared | Variant |
-| --- | --- |
-| `sound "theme"` | `Sound::THEME` |
-| `costume "idle"` | `Costume::IDLE` |
-| `costume "d0"` | `Costume::D_0` |
-| `sound "mySound"` | `Sound::MY_SOUND` |
-| `sound "laser 2"` | `Sound::LASER_2` |
-
-Upper-case letters, digits and `_` are kept; a run of anything that cannot be in
-an identifier becomes one `_`; a lower-case word that runs into an upper-case one
-gets a `_` between them; and a name that would begin with a digit gets a leading
-`_`. A name written in this form has exactly one lower-case spelling that maps
-back to it, which is how the compiler finds the declared name behind a variant.
-Two distinct names can still fold together — `my_sound` and `mySound` — and a
-target that declares both is refused rather than quietly served one of them.
+So a name the project declares is written as the literal of that name, and checked
+against what the target declares. A value raven knows is a variant; a value only
+the project knows is the project's own text:
 
 ```rav
-motion::goto(Goto::MousePointer);
-looks::switch_costume_to(Costume::IDLE);
-sound::play(Sound::BEEP);
-looks::switch_backdrop_to(Backdrop::SKY);
-control::stop(StopOption::OtherScriptsInSprite);
-sensing::of("x position", OfObject::Stage);
-sensing::current(Current::Year);
+sound::play("theme");                            // this target declares it
+looks::switch_costume_to("idle");                // or this is a spelling error
+motion::goto(Goto::MousePointer);                // Scratch defines this one
+motion::goto("Player");                          // and this one is yours
+control::wait_until(sensing::touching_object(TouchingObject::EdgeOfStage));
 ```
 
-`sensing_of_property` is an **open** menu — Scratch accepts any property name
-there, so raven takes a string literal rather than inventing an enum. Every other
-menu in the table is closed, and a value outside it is a compile error.
+The check that used to be the enum's job is the checker's: a name that is not
+declared is an error, with the closest match when there is one.
+
+```text
+error: there is no Costume called `idel`
+  = note: did you mean `idle`?
+```
+
+Writing a declared name as a variant is refused too, so there is one way to write
+each thing rather than two:
+
+```text
+error: `BEEP` is not a value of this menu
+  = note: write one of "beep"
+```
+
+`sensing_of_property` is an *open* menu: Scratch accepts any property name there,
+so raven takes a string literal rather than inventing an enum. A value outside a
+closed menu is a compile error.
 
 ## Coverage: which blocks need raven syntax
 

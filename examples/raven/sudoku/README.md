@@ -219,7 +219,7 @@ sound "ambient" = "assets/ambient.wav";
 
 on flag_clicked {
     forever {
-        sound::play_until_done(Sound::AMBIENT);
+        sound::play_until_done("ambient");
     }
 }
 ```

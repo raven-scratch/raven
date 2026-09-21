@@ -389,37 +389,6 @@ fn call_is_console(path: &ast::Path) -> bool {
 /// A file that declares a target may still declare items beside it — a
 /// `struct`, or a `proc` shared by the target's scripts — and they belong to
 /// that target. Before this, they were parsed and then silently ignored.
-/// Claim a costume or sound name for the target being lowered.
-///
-/// Two names may be different Scratch names and still be written the same way: a
-/// project name becomes a variant with `menu::constant_variant`, and that folds
-/// `my_sound` and `mySound` together. The menu checker answers a variant by
-/// looking for a declaration whose written form matches, so without this the
-/// second name would be quietly served as the first. It is reported at the
-/// declaration instead.
-fn claim_asset(
-    declared: &mut HashMap<String, String>,
-    name: &str,
-    pos: Pos,
-    source: &Rc<Source>,
-) -> Result<()> {
-    let variant = menu::constant_variant(name);
-    if let Some(first) = declared.get(&variant) {
-        if first != name {
-            return Err(Error::new(
-                source
-                    .error(
-                        pos,
-                        format!("`{name}` and `{first}` are the same name to raven"),
-                    )
-                    .note(format!("both are written `{variant}`"))
-                    .note("rename one of them: an identifier cannot tell them apart"),
-            ));
-        }
-    }
-    declared.insert(variant, name.to_string());
-    Ok(())
-}
 fn items_of(unit: &FileUnit) -> Vec<Item> {
     match unit.file.target() {
         Some(target) => unit
@@ -1268,19 +1237,12 @@ impl<'a> Unit<'a> {
         }
         let mut out: Vec<rasm::Item> = Vec::new();
 
-        // Costumes and sounds first: a script may mention either by name, and
-        // the menu checker resolves names against what the target declares.
-        //
-        // Each name is claimed here rather than at the end, because the menu
-        // checker finds a variant by looking for the declaration whose written
-        // variant matches — so two names that fold to the same variant would be
-        // served silently as whichever was declared first. That is a name the
-        // project did not write, so it is an error rather than a coin toss.
-        let mut declared: HashMap<String, String> = HashMap::new();
+        // Costumes and sounds first: a script may mention either by name, and the
+        // menu checker resolves a name written as a literal against what the
+        // target declares, so the declarations have to be known before the body.
         for item in &body {
             match item {
                 Item::Costume(decl) => {
-                    claim_asset(&mut declared, &decl.name, decl.span.pos, &source)?;
                     self.costumes.push(decl.name.clone());
                     out.push(rasm::Item::Costume(rasm::CostumeDecl {
                         name: decl.name.clone(),
@@ -1294,7 +1256,6 @@ impl<'a> Unit<'a> {
                     }));
                 }
                 Item::Sound(decl) => {
-                    claim_asset(&mut declared, &decl.name, decl.span.pos, &source)?;
                     self.sounds.push(decl.name.clone());
                     out.push(rasm::Item::Sound(rasm::SoundDecl {
                         name: decl.name.clone(),
@@ -3648,6 +3609,9 @@ impl<'a> Unit<'a> {
         params: &[(String, Scalar)],
     ) -> Result<rasm::Expr> {
         let type_name = menu::type_name(menu_id);
+        let domain = menu::domain(menu_id);
+
+        // A variant names a value raven knows: `Goto::MousePointer`.
         if let Expr::Name(path) = expr {
             if path.segments.len() >= 2 {
                 let prefix = &path.segments[path.segments.len() - 2].name;
@@ -3666,8 +3630,37 @@ impl<'a> Unit<'a> {
                 return Ok(mk_str(value));
             }
         }
+
+        // A name the project declares is written as the literal of the name, and
+        // checked against what this target declares. There is no second spelling
+        // of an author's name to get wrong.
+        if domain.declares_names() {
+            if let Expr::Str { text, .. } = expr {
+                let name = text.clone();
+                self.declared_name(menu_id, &name, expr, source)?;
+                return Ok(mk_str(name));
+            }
+            return Err(Error::new(
+                source
+                    .error(
+                        expr.span().pos,
+                        format!(
+                            "this input takes the name of a {}",
+                            menu::type_name(menu_id)
+                        ),
+                    )
+                    .span(expr.span().len)
+                    .note(format!(
+                        "write it as a string: {}",
+                        self.declared_list(menu_id)
+                    ))
+                    .note(
+                        "a value raven knows is written as a variant, as in `Goto::MousePointer`",
+                    ),
+            ));
+        }
+
         // An open menu takes a literal or, in an input slot, any expression.
-        let domain = menu::domain(menu_id);
         if !domain.is_enumerable() {
             let value = self.expr(expr, source, params)?;
             if matches!(value.ty, Ty::Num | Ty::Str) {
@@ -3685,24 +3678,77 @@ impl<'a> Unit<'a> {
         ))
     }
 
+    /// Check a name written as a literal against what the target declares.
+    fn declared_name(
+        &self,
+        menu_id: &str,
+        name: &str,
+        expr: &Expr,
+        source: &Rc<Source>,
+    ) -> Result<()> {
+        if self.declared_names(menu_id).iter().any(|n| n == name) {
+            return Ok(());
+        }
+        let mut error = Error::new(
+            source
+                .error(
+                    expr.span().pos,
+                    format!("there is no {} called `{name}`", menu::type_name(menu_id)),
+                )
+                .span(expr.span().len),
+        );
+        let names = self.declared_names(menu_id);
+        if let Some(near) = closest(name, &names.iter().map(String::as_str).collect::<Vec<_>>()) {
+            error = error.note(format!("did you mean `{near}`?"));
+        }
+        Err(error)
+    }
+
+    /// Every name this target declares for a menu that names project things.
+    fn declared_names(&self, menu_id: &str) -> Vec<String> {
+        match menu::domain(menu_id) {
+            menu::Domain::Costumes => self.costumes.clone(),
+            menu::Domain::Backdrops => self.globals.stage_costumes.clone(),
+            menu::Domain::Sounds => self.sounds.clone(),
+            menu::Domain::Sprites(_) => self.globals.sprite_names.clone(),
+            menu::Domain::Fixed(_) | menu::Domain::Open => Vec::new(),
+        }
+    }
+
+    /// The names declared for a menu, as the literals a program writes.
+    fn declared_list(&self, menu_id: &str) -> String {
+        let names = self.declared_names(menu_id);
+        if names.is_empty() {
+            "this target declares none".to_string()
+        } else {
+            names
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    }
+
     /// The Scratch string a variant names.
     fn variant(&self, menu_id: &str, variant: &str, span: Span, source: &Source) -> Result<String> {
         let domain = menu::domain(menu_id);
         let names: Vec<&str> = match domain {
             menu::Domain::Fixed(values) => values.to_vec(),
             menu::Domain::Sprites(extras) => extras.to_vec(),
-            menu::Domain::Costumes => self.costumes.iter().map(String::as_str).collect(),
-            menu::Domain::Backdrops => self
-                .globals
-                .stage_costumes
-                .iter()
-                .map(String::as_str)
-                .collect(),
-            menu::Domain::Sounds => self.sounds.iter().map(String::as_str).collect(),
+            // A name the project declares is a literal, not a variant, so there
+            // is nothing here to find.
+            menu::Domain::Costumes | menu::Domain::Backdrops | menu::Domain::Sounds => {
+                return Err(Error::new(
+                    source
+                        .error(span.pos, format!("`{variant}` is not a value of this menu"))
+                        .span(span.len)
+                        .note(format!("write one of {}", self.declared_list(menu_id))),
+                ));
+            }
             menu::Domain::Open => Vec::new(),
         };
         for value in names {
-            if menu::menu_variant(domain, value) == variant {
+            if menu::variant(value) == variant {
                 return Ok(value.to_string());
             }
         }
@@ -3723,14 +3769,6 @@ impl<'a> Unit<'a> {
             // A sprite name is also a valid target in a sprite menu.
             if matches!(domain, menu::Domain::Sprites(_)) {
                 return Ok(value.to_string());
-            }
-        }
-        // A sprite declared in the project is a valid target.
-        if matches!(domain, menu::Domain::Sprites(_)) {
-            for sprite in &self.globals.sprite_names {
-                if menu::variant(sprite) == variant {
-                    return Ok(sprite.clone());
-                }
             }
         }
         Err(Error::new(
@@ -3764,22 +3802,9 @@ impl<'a> Unit<'a> {
                 );
                 names
             }
-            menu::Domain::Costumes => self
-                .costumes
-                .iter()
-                .map(|c| menu::constant_variant(c))
-                .collect(),
-            menu::Domain::Backdrops => self
-                .globals
-                .stage_costumes
-                .iter()
-                .map(|c| menu::constant_variant(c))
-                .collect(),
-            menu::Domain::Sounds => self
-                .sounds
-                .iter()
-                .map(|c| menu::constant_variant(c))
-                .collect(),
+            // A name the project declares is a literal rather than a variant, so
+            // the variants are only the values Scratch itself defines.
+            menu::Domain::Costumes | menu::Domain::Backdrops | menu::Domain::Sounds => Vec::new(),
             menu::Domain::Open => Vec::new(),
         };
         if names.is_empty() {

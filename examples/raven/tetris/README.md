@@ -108,7 +108,7 @@ sound "theme" = "assets/theme.wav";
 
 on flag_clicked {
     forever {
-        sound::play_until_done(Sound::THEME);
+        sound::play_until_done("theme");
     }
 }
 ```
