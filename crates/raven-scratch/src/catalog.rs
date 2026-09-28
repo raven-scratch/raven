@@ -121,7 +121,7 @@ pub enum Shape {
     Angle,
     /// `text` shadow.
     Text,
-    /// `colour_picker` shadow; written as `"#rrggbb"`.
+    /// `colour_picker` shadow; written as `"#rrggbb"` or as a `0xrrggbb` number.
     Color,
     /// A `data_variable` reporter (an input) or a `VARIABLE` field.
     Variable,

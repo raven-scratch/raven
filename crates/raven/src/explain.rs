@@ -256,7 +256,7 @@ fn types() -> String {
 #   Number, Positive, Whole, Integer, Angle  <- num
 #   Text                                     <- str and num
 #   Bool                                     <- bool only
-#   Color                                    <- \"#rrggbb\"
+#   Color                                    <- \"#rrggbb\" or num, read as 0xrrggbb
 #   Broadcast                                <- a declared broadcast name
 #   Menu(id)                                 <- the RavenType the menu table names
 #   Variable, List                           <- not expression slots; use the declaration
@@ -406,7 +406,7 @@ fn shape_name(shape: Shape) -> String {
         }
         Shape::Text => "str|num".to_string(),
         Shape::Bool => "bool".to_string(),
-        Shape::Color => "#rrggbb".to_string(),
+        Shape::Color => "colour".to_string(),
         Shape::Variable => "variable-name".to_string(),
         Shape::List => "list-name".to_string(),
         Shape::Broadcast => "broadcast-name".to_string(),

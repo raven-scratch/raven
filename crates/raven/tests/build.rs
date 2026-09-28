@@ -363,6 +363,56 @@ fn sugar_lowers_to_the_blocks_the_documentation_promises() {
 }
 
 #[test]
+fn a_colour_input_takes_a_literal_or_a_number() {
+    let project = Project::new("colour").sprite(
+        "A",
+        r##"sprite "A" {
+            var c: num = 0;
+            on flag_clicked {
+                pen::set_pen_color_to_color("#ff8800");
+                c = 255;
+                pen::set_pen_color_to_color(c);
+                pen::set_pen_color_to_color(c * 65536 + 1);
+            }
+        }"##,
+    );
+    let asm = project.expand();
+    // A `"#rrggbb"` literal stays the `colour_picker` shadow.
+    assert!(asm.contains("pen_setPenColorToColor(\"#ff8800\")"), "{asm}");
+    // A number arrives as a reporter; Scratch reads it as 0xrrggbb. A pen that
+    // can only be told literal colours cannot draw a picture it computed.
+    assert!(
+        asm.contains("pen_setPenColorToColor(data_itemoflist("),
+        "{asm}"
+    );
+    assert!(
+        asm.contains("pen_setPenColorToColor(operator_add("),
+        "{asm}"
+    );
+
+    let named = Project::new("colour-name").sprite(
+        "A",
+        r#"sprite "A" {
+            on flag_clicked {
+                pen::set_pen_color_to_color("red");
+            }
+        }"#,
+    );
+    expect_error_contains(&named, "a colour is written");
+
+    let text = Project::new("colour-text").sprite(
+        "A",
+        r#"sprite "A" {
+            var s: str = "";
+            on flag_clicked {
+                pen::set_pen_color_to_color(s);
+            }
+        }"#,
+    );
+    expect_error_contains(&text, "a colour must be `num`");
+}
+
+#[test]
 fn an_fn_is_inlined_and_a_proc_is_not() {
     let project = Project::new("callables").sprite(
         "A",

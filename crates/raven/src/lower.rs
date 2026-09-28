@@ -3583,11 +3583,19 @@ impl<'a> Unit<'a> {
                     let value = self.expr(expr, source, params)?;
                     match &value.expr {
                         rasm::Expr::Str(text, _) if text.starts_with('#') => value.expr,
-                        _ => {
+                        // A string that is not a colour is a mistake worth its own
+                        // message: Scratch would read `"red"` as black.
+                        rasm::Expr::Str(_, _) => {
                             return Err(Error::new(source.error(
                                 value.span.pos,
-                                "a colour is written as a `\"#rrggbb\"` string",
+                                "a colour is written as a `\"#rrggbb\"` string, or as a number \
+                                 counted as `0xrrggbb`",
                             )))
+                        }
+                        // Anything else has to be that number.
+                        _ => {
+                            expect(&value, Ty::Num, "a colour", source)?;
+                            value.expr
                         }
                     }
                 }

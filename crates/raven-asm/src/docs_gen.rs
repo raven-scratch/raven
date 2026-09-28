@@ -366,7 +366,7 @@ fn shape_name(shape: Shape) -> String {
         Shape::Integer => "integer".into(),
         Shape::Angle => "angle".into(),
         Shape::Text => "text".into(),
-        Shape::Color => "colour `\"#rrggbb\"`".into(),
+        Shape::Color => "colour `\"#rrggbb\"`, or a number".into(),
         Shape::Variable => "variable name".into(),
         Shape::List => "list name".into(),
         Shape::Broadcast => "broadcast message".into(),

@@ -1658,10 +1658,12 @@ impl<'a> Emitter<'a> {
             Shape::Angle => prim::ANGLE,
             Shape::Text => prim::TEXT,
             Shape::Color => {
-                if !is_color(&text) {
+                // Scratch takes either a `"#rrggbb"` literal or a number it
+                // reads as 0xrrggbb.
+                if !is_color(&text) && text.parse::<f64>().is_err() {
                     return Err(Error::new(
                         src.error(expr.pos(), format!("`{text}` is not a colour"))
-                            .note("write colours as `\"#rrggbb\"`, for example `\"#ff8800\"`"),
+                            .note("write colours as `\"#rrggbb\"`, for example `\"#ff8800\"`, or as a number counted as `0xrrggbb`"),
                     ));
                 }
                 prim::COLOR

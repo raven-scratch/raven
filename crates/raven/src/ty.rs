@@ -184,9 +184,9 @@ pub fn fits(shape: Shape, ty: Ty) -> bool {
         }
         Shape::Text => matches!(ty, Ty::Num | Ty::Str),
         Shape::Bool => ty == Ty::Bool,
-        // A colour is a `"#rrggbb"` literal; `str` is the closest type, and the
-        // literal form is checked separately.
-        Shape::Color => ty == Ty::Str,
+        // A colour is a `"#rrggbb"` literal or a number counted as `0xrrggbb`;
+        // Scratch reads either. The literal form is checked separately.
+        Shape::Color => matches!(ty, Ty::Num | Ty::Str),
         Shape::Variable | Shape::List | Shape::Broadcast | Shape::Menu(_) | Shape::ParamName => {
             false
         }

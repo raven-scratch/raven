@@ -109,7 +109,8 @@ table into the rule set:
 * `Number`, `Whole`, `Integer`, `Angle`, `Positive` accept `num`.
 * `Text` accepts `str` and `num`.
 * `Bool` accepts only `bool`.
-* `Color` accepts a `"#rrggbb"` string literal.
+* `Color` accepts a `"#rrggbb"` string literal or a `num`, which Scratch reads as
+  `0xrrggbb` — that is how a colour the program computed reaches the pen.
 * `Broadcast` accepts the name of a declared broadcast.
 * `Menu(…)` accepts the matching menu type (see [standard library](/raven/std)).
 * `Variable` and `List` are not value slots at all — they are covered by core

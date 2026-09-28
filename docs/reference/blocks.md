@@ -2039,7 +2039,7 @@ sensing_touchingcolor(color)
 
 | # | argument | Scratch name | kind | type |
 | --- | --- | --- | --- | --- |
-| 1 | `color` | `COLOR` | input | colour `"#rrggbb"` |
+| 1 | `color` | `COLOR` | input | colour `"#rrggbb"`, or a number |
 
 ### `sensing_coloristouchingcolor`
 
@@ -2066,8 +2066,8 @@ sensing_coloristouchingcolor(color, color2)
 
 | # | argument | Scratch name | kind | type |
 | --- | --- | --- | --- | --- |
-| 1 | `color` | `COLOR` | input | colour `"#rrggbb"` |
-| 2 | `color2` | `COLOR2` | input | colour `"#rrggbb"` |
+| 1 | `color` | `COLOR` | input | colour `"#rrggbb"`, or a number |
+| 2 | `color2` | `COLOR2` | input | colour `"#rrggbb"`, or a number |
 
 ### `sensing_distanceto`
 
@@ -3630,7 +3630,7 @@ pen_setPenColorToColor(color);
 
 | # | argument | Scratch name | kind | type |
 | --- | --- | --- | --- | --- |
-| 1 | `color` | `COLOR` | input | colour `"#rrggbb"` |
+| 1 | `color` | `COLOR` | input | colour `"#rrggbb"`, or a number |
 
 ### `pen_changePenColorParamBy`
 
