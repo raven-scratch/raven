@@ -136,7 +136,7 @@ for (const test of cases.filter((c) => c.perft)) {
 function nameOf(value) {
   const m = unpack(value);
   const name = (cell) => "abcdefgh"[(cell % 10) - 1] + (Math.floor(cell / 10) - 1);
-  return name(m.from) + name(m.to) + " nbrq"[m.promo];
+  return name(m.from) + name(m.to) + (m.promo ? " nbrq"[m.promo] : "");
 }
 
 // ---------------------------------------------------------------------------
@@ -328,8 +328,9 @@ for (const how of ["click", "drag"]) {
 
 // Pick the 1100 network for white by pressing its seat on the menu, play, and
 // check that the pointer cannot move a bot's piece and that the board moves
-// itself. The ten seats of a card run from M_SEAT_X0, -140, on a pitch of 30,
-// so seat 1 -- 1100 -- is centred at -110.
+// itself with the move `maia.py --dump` gives for the start position. The ten
+// seats of a card run from M_SEAT_X0, -140, on a pitch of 30, so seat 1 -- 1100
+// -- is centred at -110.
 vm.greenFlag();
 await sleep(600);
 await click(-110, 52);
@@ -349,8 +350,11 @@ for (;;) {
   if (list("log").value.length > 0 || Date.now() > until) break;
 }
 const opened = list("log").value.slice();
+const start = cases.find((c) => c.name === "start" && c.elo === 0);
 if (opened.length !== 1) {
   fail("bot against bot", `the log says ${JSON.stringify(opened)}`);
+} else if (opened[0] !== nameOf(start.move)) {
+  fail("the bot's first move", `${opened[0]} vs ${nameOf(start.move)}`);
 } else {
   console.log(`ok   bot against bot plays ${opened[0]} by itself`);
 }

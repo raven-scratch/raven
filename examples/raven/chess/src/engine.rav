@@ -95,9 +95,6 @@ pub var bestt: num = 0;
 pub var bestp: num = 0;
 pub var bestscore: num = 0;
 
-/// The score of each legal move, while a move is being drawn.
-pub var pscore: list<num> = [];
-
 /// One row per remaining ply, for the perft walk: the moves it still has to
 /// try, which one it is on, and how many leaves it has counted.
 pub var pf_from: list<num> = [];
@@ -1025,8 +1022,10 @@ pub proc policy_index(f: num, t: num, p: num) -> num warp {
 }
 
 /// Run the network on the position on the board and pick the legal move its
-/// policy head likes best: the move lc0 without a search plays, and the one the
-/// check compares against the Python. A game plays [`sample_move`] instead.
+/// policy head likes best: the move lc0 without a search plays, the one the
+/// check compares against the Python, and the one a game plays. It is how maia
+/// is meant to be played — `go nodes 1` with no temperature — and a model
+/// answers the same position with the same move every time.
 pub proc best_move() warp {
     encode();
     forward();
@@ -1067,51 +1066,6 @@ pub proc move_score(i: num) -> num warp {
     let plane = floor(at / 64);
     let sq = at % 64;
     return bufl2[plane * 100 + floor(sq / 8) * 10 + sq % 8 + 12];
-}
-
-/// How much of the network's own distribution the bot plays: one is the
-/// distribution the net was trained to predict, and a smaller number is the same
-/// move more often.
-pub const TEMP: num = 1;
-
-/// Run the network and play a move drawn from its policy head rather than taken
-/// from the top of it. The head is the distribution over the moves a human of
-/// that rating plays, so a draw from it is that human on a different day: the
-/// same position is not the same game twice, which is what a bot that always
-/// plays the single most likely move gives.
-///
-/// It costs one exponent per legal move and the same forward pass, and `wdl` is
-/// left where `best_move` leaves it for the evaluation bar.
-pub proc sample_move() warp {
-    encode();
-    forward();
-    let top = -1000;
-    for i in 0..nok {
-        pscore[i + 1] = move_score(i) / TEMP;
-        if pscore[i + 1] > top { top = pscore[i + 1]; }
-    }
-    let total = 0;
-    for i in 0..nok {
-        pscore[i + 1] = exp(pscore[i + 1] - top);
-        total += pscore[i + 1];
-    }
-    // The draw is a whole number of millionths, which is finer than any two of
-    // the moves here are apart from each other once they are normalised.
-    let want = operators::random(0, 1000000) * total / 1000000;
-    bestf = okf[1];
-    bestt = okt[1];
-    bestp = okp[1];
-    let seen = 0;
-    for i in 0..nok {
-        seen += pscore[i + 1];
-        if seen >= want {
-            bestf = okf[i + 1];
-            bestt = okt[i + 1];
-            bestp = okp[i + 1];
-            bestscore = move_score(i);
-            return;
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

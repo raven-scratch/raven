@@ -126,8 +126,9 @@ agree with something outside it. It is a game against the nine `maia` networks â
 menu offers all nine. `tools/maia.py` is the engine in Python: lc0 weights in,
 the classical 112 input planes, six SE residual blocks, both heads, and the legal
 move the policy likes best. `src/engine.rav` is the same engine again in raven,
-and a game draws from the policy rather than taking the top of it, so the same
-position is not the same game twice; the check still compares the argmax.
+and a game plays that same move, which is how maia is meant to be played: lc0 with
+`go nodes 1` and no temperature answers the same position with the same move every
+time.
 
 Nine networks are 7.8 million weights, which is 104 MiB written as decimals. They
 fit in 42 MiB because lc0 stores each weight as two bytes read as a fraction of a

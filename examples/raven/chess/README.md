@@ -85,11 +85,14 @@ and the two heads are all there.
 
 `best_move` is the one the Python does — the legal move with the highest policy,
 which is the move lc0 without a search plays and the move `tools/check.mjs`
-compares against `maia.py --dump`. What a game plays is `sample_move`, which draws
-from the same numbers instead: the policy head is the distribution over the moves
-a human of that rating plays, so a draw from it is that human on a different day
-and not the same game every time. It costs one exponent per legal move and the
-same forward pass, and the value head is left where it was for the evaluation bar.
+compares against `maia.py --dump` — and it is what a game plays. That is how maia
+is meant to be played: `go nodes 1` with no temperature, a body with the search
+switched off. The models answer the same position with the same move every time,
+and they play the *average* move of the rating they were trained on, which is why
+they come out a little stronger than their name. A draw from the policy is not
+that player: the head is a distribution over what the rating *might* play, so
+sampling it hands the game the rare moves far too often, and a 1% move every
+seventy plies is a lost position the value head already had at 75%.
 
 ## Nine bots in one project
 
@@ -337,8 +340,9 @@ came out:
   1,955 biases, against what `maia.py` folds,
 * the 112 input planes, cell for cell,
 * the whole policy head and the value, for 1100 and for 1900, to about 1e-13,
-* the move `best_move` picks — the drawn game is not checked move for move,
-  because a draw is not a choice,
+* the move `best_move` picks, which is the move a game plays too — the first move
+  of a game between two bots is read back and has to be the one `maia.py --dump`
+  says,
 * three games: one moved by clicking e2 and then e4, one by dragging e2 to e4,
   and one where the white row's second chip is pressed, where the pointer must
   do nothing and the board must move itself.

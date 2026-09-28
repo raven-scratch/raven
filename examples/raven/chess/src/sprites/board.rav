@@ -2729,7 +2729,7 @@ sprite "Board" {
             return;
         }
         wdlside = side;
-        sample_move();
+        best_move();
         if page != 1 { return; }
         etarget = wdl[1] + wdl[2] / 2;
         if wdlside == 1 { etarget = 1 - etarget; }
