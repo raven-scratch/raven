@@ -17,6 +17,10 @@ node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 
+# Python tooling, the examples' generators
+__pycache__/
+*.pyc
+
 # Editors and OS
 .vscode/
 .idea/

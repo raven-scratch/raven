@@ -1,0 +1,149 @@
+// Where everything is, for both sprites at once.
+//
+// A target cannot read another target's names, so the numbers the board stamps
+// from and the numbers a click is tested against would otherwise be two copies
+// of the same list, free to drift. They live here instead.
+//
+// The stage is 480 by 360. A square is 36 units, so the board is 288 wide and
+// 288 tall and its bottom left corner is (-222, -144); the centre of the square
+// at file `c` and rank `r` is (-204 + 36c, -126 + 36r). Everything that is not
+// the board is the panel beside it: 150 wide from x = 78, the height of the
+// stage, with the two players' cards at its ends and the game's state between
+// them.
+
+pub const SQUARE: num = 36;
+/// The centre of file a and of rank 1.
+pub const LEFT: num = -204;
+pub const BOTTOM: num = -126;
+/// The board's bottom left corner.
+pub const EDGE_X: num = -222;
+pub const EDGE_Y: num = -144;
+/// The middle of the board, which is also the middle of a menu card.
+pub const BOARD_CX: num = -78;
+
+/// The middle of the panel, which is 150 wide and runs the height of the stage.
+pub const PANEL: num = 153;
+
+/// The x of a file's centre, and the y of a rank's centre.
+pub fn col_x(c: num) -> num { LEFT + c * SQUARE }
+pub fn row_y(r: num) -> num { BOTTOM + r * SQUARE }
+
+/// The panel's rows, from the top down: one player's card, the pieces they have
+/// taken and their score of them, then the evaluation, the last moves, the
+/// state of the game, and the other player's card at the foot.
+pub const P_SEAT_A: num = 148;
+pub const P_CAP_A: num = 118;
+pub const P_RULE_A: num = 100;
+pub const P_EVAL: num = 86;
+pub const P_EVAL_T: num = 70;
+pub const P_RULE_B: num = 58;
+pub const P_MOVE: num = 44;
+pub const P_MOVE_DY: num = 14;
+pub const P_RULE_C: num = -38;
+pub const P_HINT: num = -54;
+pub const P_CLOCK: num = -72;
+pub const P_CAP_B: num = -92;
+pub const P_SEAT_B: num = -120;
+pub const P_BTN: num = -150;
+
+/// The panel's three buttons — NEW, FLIP and the way back to the menu — across
+/// the foot of the panel: 44 units wide on a 8 unit gap, centred on the panel,
+/// which is 150 wide. A button's half width and half height are its click box,
+/// and BTN_W is the widest a label is drawn so it stays inside one.
+pub const NEW_X: num = 105;
+pub const FLIP_X: num = 153;
+pub const MENU_X: num = 201;
+pub const BTN_SIZE: num = 73.333333333333336;
+pub const BTN_HW: num = 22;
+pub const BTN_HH: num = 11;
+pub const BTN_W: num = 36;
+
+/// The evaluation bar: 26 cells of 5, so cell 0 is centred at 90.5.
+pub const EVAL_X0: num = 90.5;
+pub const EVAL_DX: num = 5;
+
+/// A row of captured pieces: how wide it is, where it is centred — which leaves
+/// the right of the panel for the side's score of them — how big one is, and the
+/// widest pitch it is drawn at before the icons start to close up.
+pub const CAP_CX: num = 143;
+pub const CAP_W: num = 118;
+pub const CAP_STEP: num = 21;
+
+/// Every size a piece is ever drawn at, in stage units, and the costume that is
+/// exactly that size: a piece fills a square of the board, the one the pointer is
+/// holding is a shade larger, one icon in the capture row, and one knight in a
+/// cell of the settings grid. `tools/assets.mjs` bakes one PNG per size per piece
+/// (`p`, `d`, `c` and `s` before the set and the piece), so a costume is the size
+/// it is drawn at and every piece is stamped at size 100.
+pub const P_SQUARE: num = 36;
+pub const P_HELD: num = 40;
+pub const P_ICON: num = 24;
+pub const P_CELL: num = 22;
+
+/// The menu, which covers the stage: a title, one card per side with its ten
+/// seats on it, and the buttons under them.
+pub const M_TITLE: num = 136;
+pub const M_SUB: num = 100;
+pub const M_CARD_A: num = 52;
+pub const M_CARD_B: num = 6;
+pub const M_PLAY: num = -70;
+pub const M_HINT: num = -110;
+
+/// The buttons at the foot of the menu and of the settings page.
+pub const M_PLAY_X: num = -60;
+pub const M_SET_X: num = 60;
+pub const M_BACK_X: num = 0;
+pub const M_BACK_Y: num = -162;
+
+/// One side's card on the menu, and the ten seats along it: seat 0 is you and
+/// seats 1..9 are the nine networks, which is the same numbering a seat has. A
+/// seat is a cell, one cell costume across, on a pitch that leaves a gap
+/// between two of them, and the ten of them start at M_SEAT_X0, clear of the
+/// side written at the card's left end. The card's half width and height are
+/// the click box, so the whole card answers a press and the seat under the
+/// pointer is what it means.
+pub const M_CARD_HW: num = 220;
+pub const M_CARD_HH: num = 19;
+pub const M_SEAT_N: num = 10;
+pub const M_SEAT_X0: num = -140;
+pub const M_SEAT_DX: num = 30;
+pub const M_SEAT_HALF: num = 15;
+pub const M_SEAT_CELL: num = 70;
+pub const M_SEAT_TEXT: num = 6.6;
+/// The widest a seat's name is drawn: its cell less a hair, so a name never
+/// runs into the cell beside it.
+pub const M_SEAT_W: num = 26;
+/// The left end of the card, where the side is written.
+pub const M_SEAT_LABEL_X: num = -190;
+
+/// The two buttons at the foot of the menu share one width; the play button is
+/// wide and the one beside it is not.
+pub const M_PLAY_HW: num = 52;
+pub const M_PLAY_HH: num = 17;
+
+/// The settings page: a grid of the piece sets, and a row of board styles. The
+/// grid is five rows of eight -- 39 sets -- and every cell shows the set's own
+/// knight, so the page is a preview as well as a choice. The name of the set
+/// that is on sits under the grid, and the two rows under that are the board
+/// styles and the way back.
+pub const S_COLS: num = 8;
+pub const S_GRID_X: num = -112;
+pub const S_GRID_Y: num = 58;
+pub const S_STEP: num = 32;
+pub const S_HALF: num = 15;
+pub const S_CELL: num = 76;
+pub const S_TITLE_Y: num = 120;
+/// The "PIECE SET" label over the grid.
+pub const S_SUB_Y: num = 88;
+pub const S_NAME_Y: num = -92;
+pub const B_ROW_X: num = -60;
+pub const B_ROW_Y: num = -130;
+pub const B_ROW_DX: num = 40;
+pub const B_ROW_W: num = 36;
+pub const B_ROW_CELL: num = 90;
+pub const B_TITLE_Y: num = -106;
+
+/// The panel's usable width: the panel is 150 wide, and a line of text is kept
+/// this far across so it never runs off the panel's edge.
+pub const P_W: num = 138;
+

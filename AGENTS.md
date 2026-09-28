@@ -120,6 +120,59 @@ SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
 node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
 ```
 
+`examples/raven/chess` is the third, and the one to read when a program has to
+agree with something outside it. It is a game against the nine `maia` networks —
+1100 to 1900, each trained to predict what a human of that rating would play. The
+menu offers all nine. `tools/maia.py` is the engine in Python: lc0 weights in,
+the classical 112 input planes, six SE residual blocks, both heads, and the legal
+move the policy likes best. `src/engine.rav` is the same engine again in raven,
+and a game draws from the policy rather than taking the top of it, so the same
+position is not the same game twice; the check still compares the argmax.
+
+Nine networks are 7.8 million weights, which is 104 MiB written as decimals. They
+fit in 42 MiB because lc0 stores each weight as two bytes read as a fraction of a
+layer's range, three of those go in one Scratch number exactly, and `load_bot`
+unpacks the one being played and folds its batch norm in. The 863,616 long
+working list is written out as a literal rather than appended to, because Scratch
+refuses to `add to list` past 200,000 items.
+
+Either side of the board can be you or any of the nine bots, which is what makes
+bot against bot a mode rather than a second program. A piece is moved by dragging
+it or by clicking it and then its square, and either way it travels on a second
+order spring — the state is the position and the velocity, so it can be
+retargeted mid-flight, and a frame too long to be stable is subdivided — rather
+than on a curve. The pen has one layer for the whole stage and the panel is
+stamped on the same one, so a piece in flight is the sprite itself rather than a
+stamp: a frame of it costs no pen work, and the board is restamped once, when it
+lands.
+
+The Python engine checks its own move generator against the published perft
+counts of six standard positions, and `tools/check.mjs` is what keeps the raven
+port honest: it loads the built project into a real Scratch VM and compares the
+legal move list, every perft count, every one of the nine bots' weights, the
+input planes, the whole policy head, the value, the move it picks, and three
+games moved by the mouse, against `maia.py --dump`. `tools/hud.mjs` is the same
+trick for the drawn interface: the same project with a stand-in renderer, every
+stamp of every page recorded, and a check that each run of text is stamped at the
+pitch its own font metrics give it and that no two runs are stamped over each
+other, and that nothing is stamped after the card that ends a game. Its costumes
+and its sounds are generated, its board and its panel are laid out from the
+numbers in `src/layout.rav` rather than tuned by eye, and the board is drawn with
+the pen rather than with clones.
+
+```sh
+python examples/raven/chess/tools/maia.py          # the engine, and its perft checks
+python examples/raven/chess/tools/maia.py --dump   # what check.mjs compares against
+python examples/raven/chess/tools/maia.py --export # regenerate src/net.rav
+node examples/raven/chess/tools/assets.mjs         # the pieces (PNGs, through a browser) and the tiles
+python examples/raven/chess/tools/glyphs.py        # the font, one costume per character
+node examples/raven/chess/tools/sounds.mjs         # the effects
+cargo run -p raven -- check -m examples/raven/chess/raven.toml
+cargo run -p raven -- build -m examples/raven/chess/raven.toml
+SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/check.mjs
+SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/hud.mjs --svg examples/raven/chess/dist/hud
+```
+
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
 raven-asm, not raven, and it is the example to read when a reversal has to encode

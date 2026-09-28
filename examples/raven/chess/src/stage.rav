@@ -1,0 +1,130 @@
+// Chess against the maia networks: the stage keeps what both sprites read.
+//
+// The board, the rules and the networks are in `engine.rav`, which this file and
+// `sprites/board.rav` both import. Everything a second target has to see lives
+// here, because a sprite-local variable is invisible to the other sprite and a
+// `pub var` is the one shared place raven offers. None of them is a Scratch
+// variable a program can name, so none appears in the editor's variable list
+// and no monitor is declared.
+
+stage {
+    costume "backdrop" = "assets/backdrop.svg";
+
+    /// Which page the stage is showing. A page draws itself and answers its own
+    /// clicks; `mode` below is the state of the game and only means anything
+    /// while the board is the page.
+    pub var page: num = 0;
+
+    /// What the board and the pieces are drawn with: which set of piece
+    /// costumes, which colours for the squares, and which accent for the
+    /// interface.
+    pub var pset: num = 0;
+    pub var bstyle: num = 0;
+    pub var accent: num = 0;
+
+    /// 0 the game, 1 waiting for a move, 2 a bot is thinking, 3 over.
+    pub var mode: num = 0;
+
+    /// Who plays each side: 0 is you, and 1..9 is one of the nine bots, an index
+    /// into `elos` one higher than the index into the packed weights.
+    pub var wseat: num = 0;
+    pub var bseat: num = 1;
+
+    /// Which side is at the bottom of the screen, and which side is yours when
+    /// either of them is.
+    pub var flipped: num = 0;
+    pub var human: num = 0;
+
+    /// -1 a draw, 0 white won, 1 black won.
+    pub var winner: num = -1;
+
+    /// 0 none, 1 checkmate, 2 stalemate, 3 the fifty move rule, 4 repetition.
+    pub var reason: num = 0;
+
+    /// The square the player has picked up, or 0.
+    pub var sel: num = 0;
+
+    /// The square a promotion is being chosen on, or 0.
+    pub var promosq: num = 0;
+
+    /// The two squares of the last move, for the highlight.
+    pub var lastf: num = 0;
+    pub var lastt: num = 0;
+
+    /// The cell of a king in check, or 0.
+    pub var checking: num = 0;
+
+    /// How often the position now on the board has repeated.
+    pub var curreps: num = 0;
+
+    /// The pieces each side has taken, as the piece codes they were. White's
+    /// captures are black pieces and the other way round, which is what makes
+    /// each row read as the other player's loss.
+    pub var capw: list<num> = [];
+    pub var capb: list<num> = [];
+
+    /// Coordinate notation, one move to an entry.
+    pub var log: list<str> = [];
+
+    /// The line the panel shows under its heading.
+    pub var hint: str = "PICK A SEAT AND PLAY";
+
+    /// Which side is to move, published with every redraw: the panel puts the
+    /// dot on that side's card, and it is the board's variable and not the
+    /// panel's.
+    pub var turn: num = 0;
+
+    /// When the clock was set to zero, in `timer()` seconds, and how long the
+    /// game has run since, in whole seconds, which the panel prints. The board
+    /// sets both; the counting is `engine::clock_tick`, which the board's loop,
+    /// the search and the unpacking of a network all call, because the loop
+    /// hears nothing of a second while either of those is running. The panel
+    /// reads `secs` for itself rather than being told.
+    pub var t0: num = 0;
+    pub var secs: num = 0;
+
+    /// White's share of the game, 0 to 1, which is what the bar draws. It is
+    /// animated towards what a bot thinks rather than jumping there.
+    pub var eshare: num = 0.5;
+
+    /// Which side the last value is from. A bot answers for the side that was to
+    /// move, and by the time the bar is drawn that is not the side to move any
+    /// more.
+    pub var wdlside: num = 0;
+
+    /// The board, the panel and the menu are all pen, and the panel has to be
+    /// stamped after the board cleared the layer, so the board asks for it.
+    broadcast "hud";
+
+    /// The bar's fill moves on its own, and the track under it is opaque, so
+    /// restamping the two is all a frame of it needs.
+    broadcast "eval";
+
+    /// A click, left here by the stage for the board to act on: where it was, and
+    /// a count that goes up with each one so the board can tell a new press from
+    /// the last.
+    ///
+    /// The panel's buttons have to work while a bot is thinking, and a bot's turn
+    /// runs inside a single frame of the board's loop. The loop is not sampling
+    /// the mouse during that, and a press that comes and goes inside the window
+    /// would be missed by anything that samples the mouse: a click is an event,
+    /// so the hat below hears it whatever the board is doing and leaves it here.
+    pub var click_x: num = 0;
+    pub var click_y: num = 0;
+    pub var click_at: num = 0;
+
+    /// What `tools/check.mjs` talks to the engine through: `load` is the
+    /// position it writes and `test` is the list that comes back. Nothing in the
+    /// game reads either of them.
+    pub var load: list<num> = [];
+    pub var test: list<num> = [];
+
+    /// A press on the stage that is not on a sprite: the board is hidden between
+    /// moves, so that is every press on the panel. This is the stage's hat
+    /// because the stage is the target a click on nothing is given to.
+    on stage_clicked {
+        click_x = sensing::mouse_x();
+        click_y = sensing::mouse_y();
+        click_at += 1;
+    }
+}
