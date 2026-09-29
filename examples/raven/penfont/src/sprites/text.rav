@@ -1,0 +1,257 @@
+// The demo: the penfont library, wired to a stage.
+//
+// Everything that draws is in `src/penfont/` — `engine.rav` is the library and
+// `font.rav` is the table `font2vm.py` generated for it. This file is only the
+// page around it: which line, how big, what colour, which mode, and the keys.
+//
+// There are two things to look at, and B turns between them. One is the page of
+// text, laid out and wrapped. The other is the sheet: every glyph the font has,
+// twelve by eight to a page and 162 pages of them, with a find that searches the
+// table and turns to the page the character is on.
+
+use penfont::engine;
+
+sprite "Text" {
+    costume "blank" = "assets/blank.svg";
+
+    /// The page: the block starts here, and the first baseline sits `CAP` ems
+    /// under the top. The stage is 480 by 360 and the pen may only be moved
+    /// inside `EDGE_X` by `EDGE_Y`, so this leaves room for the descender of a
+    /// line at the very top.
+    const LEFT: num = -224;
+    const TOP: num = 152;
+    const CAP: num = 0.9;
+
+    /// The line being drawn, in the escape language the engine reads — `\c` for
+    /// a capital, `\\` for a backslash, `\n` or a real newline for a break.
+    var text: str = "\\cThe quick brown fox\n简体中文：通用规范汉字\n繁體中文：常用國字標準字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ①";
+
+    /// The em size in stage units, the ink, and how wide a line may get before
+    /// it wraps. The wrap counts a glyph's whole advance, so no character is put
+    /// where its ink would leave the box.
+    var size: num = 34;
+    var ink: str = "#1f2430";
+    var limit: num = 448;
+
+    /// The stock lines, cycled with Enter. Between them they are every script
+    /// the font carries. The later ones are longer than the stage, so they wrap
+    /// and the tail of the page is cut at the box — which is what the engine
+    /// does with a line that does not fit, rather than drawing it elsewhere.
+    var samples: list<str> = [
+        "\\cThe quick brown fox\n简体中文：通用规范汉字\n繁體中文：常用國字標準字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ①",
+        "简体中文：通用规范汉字，一二三四五六七八九十，天地人和，風雲龍鳳。",
+        "繁體中文：常用國字標準字體，壹貳參肆伍陸柒捌玖拾，臺灣香港。",
+        "日本語：ひらがな カタカナ 常用漢字、東京大阪名古屋。",
+        "한국어: 가나다라마바사 아자차카타파하 서울 부산 제주",
+        "記号: ← ↑ → ↓ ⇒ ∞ ≠ ≤ ≥ ∑ ∏ √ ∫ ≈ ° ※ ★ ☆ ♠ ♥ ♦ ♣ ① ② ③ ⓐ ⓑ ㈠ ㈡",
+        "\\cA capital starts with \\c\\c, a backslash is \\\\, and \\n breaks the line."
+    ];
+
+    /// The inks, chosen with the number keys.
+    var inks: list<str> = [
+        "#1f2430", "#b02a2a", "#a86500", "#1f7a3d", "#1f5fb0", "#7b3fa0"
+    ];
+
+    var pick: num = 0;
+
+    /// 0 the page of text, 1 the sheet of every glyph the font has.
+    var mode: num = 0;
+
+    /// The sheet's state: which page is up, which glyph a find landed on, and
+    /// what was asked for. The engine draws a sheet page from these and keeps
+    /// none of them itself.
+    var page: num = 1;
+    var found: num = 0;
+    var query: str = "";
+
+    /// The ink a found glyph is marked in.
+    var accent: str = "#b02a2a";
+
+    /// Every key that changes something hands the redraw to a thread of its own
+    /// rather than drawing inside the key handler: a key hat that is still
+    /// running swallows the next press of the same key.
+    broadcast "draw";
+
+    // ------------------------------------------------------------------
+    // The page
+    // ------------------------------------------------------------------
+
+    proc paint() warp {
+        if mode == 1 {
+            if found > 0 {
+                draw_sheet(page, found, f"found {query} at {found}", ink, accent);
+            } else {
+                draw_sheet(page, 0, "", ink, accent);
+            }
+        } else {
+            pen::clear();
+            draw_text(text, LEFT, TOP - size * CAP, size, ink, limit);
+        }
+    }
+
+    proc redraw() warp {
+        events::broadcast("draw");
+    }
+
+    proc ask() {
+        sensing::ask_and_wait("Type a line. \\c marks a capital, \\n a break, \\\\ a backslash:");
+        text = sensing::answer();
+        redraw();
+    }
+
+    /// A find: type a character and the sheet turns to the page it is on and
+    /// rings it. It is the engine's search, the same one the text goes through.
+    proc seek() {
+        sensing::ask_and_wait("Find a character: the sheet turns to its page.");
+        query = sensing::answer();
+        found = glyph_of(query);
+        if found > 0 {
+            page = glyph_page(found);
+        }
+        mode = 1;
+        redraw();
+    }
+
+    proc next_sample() warp {
+        pick = pick % samples.len() + 1;
+        text = samples[pick];
+        redraw();
+    }
+
+    proc tint(n: num) warp {
+        ink = inks[n];
+        redraw();
+    }
+
+    /// Left and right: the next or the previous page of the sheet, or a wider or
+    /// a narrower measure of the text.
+    proc turn(delta: num) warp {
+        if mode == 1 {
+            page = page + delta;
+            if page < 1 {
+                page = 1;
+            }
+            if page > sheet_pages() {
+                page = sheet_pages();
+            }
+        } else {
+            limit = limit + delta * 40;
+            if limit < 96 {
+                limit = 96;
+            }
+            if limit > 456 {
+                limit = 456;
+            }
+        }
+        redraw();
+    }
+
+    /// Up and down: ten pages at a time through the sheet, or a larger and a
+    /// smaller text.
+    proc scale_by(delta: num) warp {
+        if mode == 1 {
+            page = page + delta * 10;
+            if page < 1 {
+                page = 1;
+            }
+            if page > sheet_pages() {
+                page = sheet_pages();
+            }
+        } else {
+            size = size + delta;
+            if size < 16 {
+                size = 16;
+            }
+            if size > 96 {
+                size = 96;
+            }
+        }
+        redraw();
+    }
+
+    proc sheet() warp {
+        if mode == 1 {
+            mode = 0;
+        } else {
+            mode = 1;
+            page = 1;
+            found = 0;
+        }
+        redraw();
+    }
+
+    // ------------------------------------------------------------------
+    // Controls
+    // ------------------------------------------------------------------
+
+    on flag_clicked {
+        looks::hide();
+        looks::set_size_to(100);
+        paint();
+    }
+
+    on broadcast_received("draw") {
+        paint();
+    }
+
+    /// Clicking the stage asks for a line, which is the only way to get text
+    /// into the project: Scratch has no text input other than this one. On the
+    /// sheet the same question is a find.
+    on stage_clicked {
+        if mode == 1 {
+            seek();
+        } else {
+            ask();
+        }
+    }
+
+    on key_pressed(Key::Space) {
+        if mode == 1 {
+            seek();
+        } else {
+            ask();
+        }
+    }
+    on key_pressed(Key::B) {
+        sheet();
+    }
+    on key_pressed(Key::Enter) {
+        if mode == 1 {
+            page = 1;
+            found = 0;
+            redraw();
+        } else {
+            next_sample();
+        }
+    }
+    on key_pressed(Key::UpArrow) {
+        scale_by(8);
+    }
+    on key_pressed(Key::DownArrow) {
+        scale_by(-8);
+    }
+    on key_pressed(Key::RightArrow) {
+        turn(1);
+    }
+    on key_pressed(Key::LeftArrow) {
+        turn(-1);
+    }
+    on key_pressed(Key::Digit1) {
+        tint(1);
+    }
+    on key_pressed(Key::Digit2) {
+        tint(2);
+    }
+    on key_pressed(Key::Digit3) {
+        tint(3);
+    }
+    on key_pressed(Key::Digit4) {
+        tint(4);
+    }
+    on key_pressed(Key::Digit5) {
+        tint(5);
+    }
+    on key_pressed(Key::Digit6) {
+        tint(6);
+    }
+}

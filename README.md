@@ -261,6 +261,20 @@ for it, by a construction that makes the result solvable with naked and hidden
 singles alone, so a player never has to guess — and a check that runs the project
 in a real Scratch VM solves what it deals with a solver written outside it.
 
+[`lib/penfont`](lib/penfont) is a library rather than an example, and the one to
+reach for when a project needs something Scratch does not have. Scratch's pen
+draws a line and has no fill block, and a costume cannot carry `<text>`, so there
+is no text primitive at all; this draws characters as ink — 15,496 glyphs of
+Chinese, Japanese, Korean, Latin and icons, filled in one line per scan row —
+from tables a Python tool generates into the project's own arena, with a glyph
+sheet you can page through and search. One command installs it into any project:
+
+```sh
+python lib/penfont/font2vm.py --project path/to/your/project
+```
+
+[`examples/raven/penfont`](examples/raven/penfont) is its demo.
+
 ## Documentation
 
 The full guide for both languages is in [`docs/`](docs/) and is published with

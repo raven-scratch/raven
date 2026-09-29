@@ -1,0 +1,15 @@
+// penfont — text drawn with the pen, from a font that lives in the project.
+//
+// Scratch has no text primitive: `<text>` is stripped out of an SVG on import,
+// so a costume cannot carry a character and the display has to be shapes. This
+// project draws them as shapes the pen can actually make — a run of horizontal
+// lines, one per scan row of the glyph — from tables in `src/sprites/font.rav`
+// that `tools/font2vm.py` read out of Microsoft YaHei.
+//
+// The stage owns the paper and nothing else. Everything the reader can change —
+// the line, its size, its colour, how wide it wraps — is a variable of the text
+// sprite, because that is the only target that draws.
+
+stage {
+    costume "paper" = "assets/backdrop.svg";
+}

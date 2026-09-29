@@ -174,6 +174,42 @@ SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/hud.mjs --svg examples/raven/chess/dist/hud
 ```
 
+`lib/penfont` is a library rather than an example, and the one to read when a
+project has to stand in for something Scratch does not have. Scratch's pen draws
+a line, has no fill block, and will not let a sprite leave the stage — it moves it
+back rather than clipping it — so text is a page of pre-computed scanline runs,
+and the whole job is proving they land where the font says. `font2vm.py` converts
+a font set into runs once — Maple Mono NF CN by default, Microsoft YaHei under
+`--set yahei`, and either way Malgun Gothic behind it, which is where the Hangul
+is because neither has any — and one run installs both halves into a project:
+
+```sh
+python lib/penfont/font2vm.py --project examples/raven/penfont   # the tables and the engine
+python lib/penfont/font2vm.py --project examples/raven/penfont --stats
+cargo run -p raven -- check -m examples/raven/penfont/raven.toml
+cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
+python lib/penfont/font2vm.py --project examples/raven/penfont \
+  --stage examples/raven/penfont/dist/page
+SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/penfont/tools/check.mjs
+```
+
+`engine.rav` is a binary search over the keys, the rows as pen lines cut at the
+box the pen may move inside, and the layout; Scratch compares two strings
+case-insensitively, so a capital is marked in the text as `\cH` and keyed that
+way in the table, and the table is sorted in the order that comparison puts it
+in, which is what makes the search valid. The table is also an inventory: B turns
+to the sheet, every glyph twelve by eight to a page and 162 pages of them, drawn
+by index and not looked up at all, and a find sends one character through the
+same search and turns to its page. The order of the checks is the order that
+finds things: `--stage` renders the page twice, from the tables and through
+FreeType, and refuses to pass if the ink leaves the box; `tools/check.mjs` then
+drives the built project through every mode with the renderer's own fence rule,
+rasterises the strokes the VM actually made, and holds the stage against that
+page — which is 1.000 when every link in the chain agrees — checks the sheet's
+ninety-six cells and the ring a find draws, and fails if the sprite stamped.
+`examples/raven/penfont` is only the demo: a stage, a mode switch and some keys
+over that engine.
+
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
 raven-asm, not raven, and it is the example to read when a reversal has to encode
@@ -250,7 +286,14 @@ generated from the binding table, and the docs are checked against the code.
 * `for x in items` takes the list's *name*, not an expression: the macro reads the
   list's length through an `ident` parameter, so `items.at(2)` is refused.
 * A `costume`, a `sound` or a non-`pub` `var` written in a *module* file is
-  accepted and then ignored. Modules export items, not target content.
+  accepted and then ignored. So is a non-`pub` `proc`, `fn`, `const` or `macro`,
+  with no diagnostic at all — `lib/penfont/engine.rav` is `pub` everywhere for
+  that reason.
+* A module is compiled into each target that uses it, and a procedure parameter
+  does not survive that as a local: if the target has a variable of the same
+  name, the *target's* wins inside the procedure, silently. `lib/penfont` spells
+  every parameter `pf_something` rather than find out what its callers called
+  things.
 * `control_while`, `control_for_each`, the counter blocks and `sensing_online`
   are extended (TurboWarp-only): reachable, warned about, refused under
   `--strict`.

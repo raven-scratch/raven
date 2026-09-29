@@ -1,0 +1,905 @@
+"""A font's outlines -> the pen-span tables a raven project draws text from.
+
+This is the generator half of `lib/penfont`. The other half is `engine.rav`,
+which is the raven module that reads what this writes.
+
+    python lib/penfont/font2vm.py --out myproject/src/penfont
+    python lib/penfont/font2vm.py --out myproject/src/penfont --font myfont.ttf
+    python lib/penfont/font2vm.py --out myproject/src/penfont --charset latin
+    python lib/penfont/font2vm.py --out myproject/src/penfont --text "Hello 世界"
+
+`--out` is the module directory to install into. One run writes `font.rav` there
+and copies `engine.rav` beside it, so installing the library in a project is one
+command and updating it is the same command again. Nothing is read from this
+repository, so the tool can be copied anywhere and run from anywhere.
+
+Why spans and not outlines: Scratch's pen draws a line and has no fill block at
+all, so a glyph is filled the way any concave polygon is filled on a raster --
+one horizontal line per scan row, from where a ray enters the ink to where it
+leaves it. `examples/raven-asm/poly` does that geometry inside Scratch for a
+polygon dragged on the stage; doing it there for every row of every glyph of a
+line of text means scanning every edge of the glyph once per row, so it happens
+here instead, once per glyph, and the program is left with the drawing.
+
+The raster is one glyph box: `REF_ROWS` scan rows to the em, one unit per row. A
+row is sampled on its centre line (y = k + 0.5) and a column is inked when its
+centre (x = j + 0.5) is inside the outline, so a run is a pixel span of that
+reference raster and drawing it at size S scales by S / REF_ROWS. Winding is
+non-zero, which is what TrueType means and what makes the hole in `o` a hole.
+
+Which characters: the default inventory is the standard that defines it, read
+out of Python's own codecs rather than off a web page, so the tool needs no
+network and "why this character" has a standard's name as its answer.
+
+    ASCII and Latin-1, and the punctuation, currency, letterlike, arrow, maths,
+    technical, geometric, box-drawing, dingbat, CJK-punctuation, kana, Bopomofo,
+    enclosed and fullwidth blocks the font actually has;
+    GB 2312 level 1 (3755) -- the simplified Chinese common set;
+    Big5 level 1 (5401) -- the traditional Chinese common set;
+    JIS X 0208 level 1 (2965) -- the Japanese common kanji, and its kana;
+    KS X 1001's hangul (2350) and hanja -- the Korean common set;
+    and, for Maple, the Nerd Font icons in the basic private use area.
+
+`--charset` takes a comma-separated subset of `latin`, `cjk`, `icons`, and
+`--text` or `--chars-file` adds characters of your own. ASCII is always in, so a
+table always has a space, a digit and a full stop however narrow it is.
+
+Case: Scratch compares two strings case-insensitively, so `A` and `a` are one
+string to the only lookup there is and a table cannot be keyed on the character.
+A capital is keyed as the two characters `\\c` and the lowercase letter, and the
+text marks it the same way, as `\\cHello`. The keys are sorted by their lowercased
+form -- the order Scratch's `<` compares in -- so `engine.rav` binary-searches the
+list: a lookup by value (`index_of`) is a generated procedure that walks the
+list, far too slow to run for every character of every line.
+
+Output, in the `--out` directory:
+
+    font.rav     the table: `font_chars` the keys, `font_at`/`font_runs`/
+                 `font_adv` a glyph each, and `font_run` the runs, three
+                 numbers each (row, first column, past the last column).
+    engine.rav   a copy of this repository's library module.
+
+Two things read the project back rather than assuming it, and both are optional:
+
+    --stats      rasterise a sample of glyphs from the runs and again through
+                 FreeType, and report how much of the two shapes is the same.
+    --stage P    render the page the project opens on, from the tables and
+                 through FreeType, and refuse to pass if the ink leaves the box
+                 Scratch will let the pen be moved inside. This is the check
+                 that has to pass before raven is built at all.
+    --preview P  just draw the page from the runs, to look at.
+
+Those three need `--lay`, a raven file holding the project's page layout, and
+the engine module for the constants the two share.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import sys
+from pathlib import Path
+
+from fontTools.pens.basePen import BasePen
+from fontTools.ttLib import TTCollection
+
+HERE = Path(__file__).resolve().parent
+ENGINE = HERE / "engine.rav"
+
+# Where a project put the two files, by default: `src/penfont`, beside whatever
+# else its raven sources are.
+DEFAULT_OUT = Path("src") / "penfont"
+# The demo's page layout, which `--stats`/`--stage`/`--preview` read so that the
+# page they check is the page the project draws rather than a copy of the numbers.
+DEFAULT_LAY = Path("src") / "sprites" / "text.rav"
+
+# A font set is a first font and the fonts behind it. The first font that has a
+# character draws it, so the chain is what covers a gap rather than what mixes
+# two designs on purpose.
+#
+# Neither of these has Hangul, so Malgun Gothic is behind both and Korean comes
+# from there. Both paths are this machine's; `--fonts` replaces the chain.
+SETS = {
+    "maple": {
+        "fonts": [
+            (r"C:\Users\Dilem\AppData\Local\Microsoft\Windows\Fonts\MapleMono-NF-CN-Regular.ttf", 0),
+            (r"C:\Windows\Fonts\malgun.ttf", 0),
+        ],
+        "extra": [(0xE000, 0xF8FF, "Nerd Font icons", "icons")],
+    },
+    "yahei": {
+        "fonts": [(r"C:\Windows\Fonts\msyh.ttc", 0), (r"C:\Windows\Fonts\malgun.ttf", 0)],
+        "extra": [],
+    },
+}
+
+REF_ROWS = 48  # scan rows to the em, and the units one row is
+TOL = 0.2  # how far a curve may leave its chord before it is split, in rows
+CAP = "\\c"
+BIG5_TAIL = list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))
+EUC_TAIL = list(range(0xA1, 0xFF))
+
+UNICODE_RANGES = [
+    (0x0020, 0x007E, "ASCII", "latin"),
+    (0x00A0, 0x00FF, "Latin-1", "latin"),
+    (0x2000, 0x206F, "general punctuation", "latin"),
+    (0x2070, 0x209F, "super/subscripts", "latin"),
+    (0x20A0, 0x20BF, "currency", "latin"),
+    (0x2100, 0x214F, "letterlike", "latin"),
+    (0x2150, 0x218F, "number forms", "latin"),
+    (0x2190, 0x21FF, "arrows", "latin"),
+    (0x2200, 0x22FF, "maths", "latin"),
+    (0x2300, 0x23FF, "misc technical", "latin"),
+    (0x2460, 0x24FF, "enclosed alphanumerics", "latin"),
+    (0x2500, 0x257F, "box drawing", "latin"),
+    (0x2580, 0x259F, "block elements", "latin"),
+    (0x25A0, 0x25FF, "geometric shapes", "latin"),
+    (0x2600, 0x26FF, "misc symbols", "latin"),
+    (0x2700, 0x27BF, "dingbats", "latin"),
+    (0x3000, 0x303F, "CJK punctuation", "cjk"),
+    (0x3040, 0x309F, "hiragana", "cjk"),
+    (0x30A0, 0x30FF, "katakana", "cjk"),
+    (0x3100, 0x312F, "bopomofo", "cjk"),
+    (0x3130, 0x318F, "hangul jamo", "cjk"),
+    (0x3200, 0x32FF, "enclosed CJK", "cjk"),
+    (0x3300, 0x33FF, "CJK compatibility", "cjk"),
+    (0xFE30, 0xFE4F, "CJK forms", "cjk"),
+    (0xFE50, 0xFE6F, "small forms", "cjk"),
+    (0xFF00, 0xFFEF, "halfwidth/fullwidth", "cjk"),
+]
+
+STANDARDS = [
+    ("GB 2312 level 1", "gb2312", range(0xB0, 0xD8), EUC_TAIL),
+    ("GB 2312 symbols", "gb2312", range(0xA1, 0xAA), EUC_TAIL),
+    ("Big5 level 1", "big5", range(0xA4, 0xC7), BIG5_TAIL),
+    ("JIS X 0208 level 1", "euc_jp", range(0xB0, 0xD0), EUC_TAIL),
+    ("JIS X 0208 symbols", "euc_jp", range(0xA1, 0xB0), EUC_TAIL),
+    ("KS X 1001 hangul", "euc_kr", range(0xB0, 0xC9), EUC_TAIL),
+    ("KS X 1001 symbols", "euc_kr", range(0xA1, 0xAB), EUC_TAIL),
+    ("KS X 1001 hanja", "euc_kr", range(0xCA, 0xFE), EUC_TAIL),
+]
+
+CHARSETS = ("all", "latin", "cjk", "icons")
+
+
+# --------------------------------------------------------------- inventory --
+
+
+def two_byte_codec(enc: str, first, second) -> list[str]:
+    """Every character a two-byte codec decodes in those byte ranges."""
+    out = []
+    for b1 in first:
+        for b2 in second:
+            try:
+                ch = bytes([b1, b2]).decode(enc)
+            except UnicodeDecodeError:
+                continue
+            if len(ch) == 1:
+                out.append(ch)
+    return out
+
+
+def key_of(ch: str) -> str:
+    """The string the font table is keyed on, and the one the text is read with."""
+    low = ch.lower()
+    return ch if low == ch else CAP + low
+
+
+def load_font(path: str, face: int):
+    """A font from either a plain file or a collection, by face index."""
+    from fontTools.ttLib import TTFont
+
+    try:
+        return TTCollection(path, lazy=True).fonts[face]
+    except Exception:
+        return TTFont(path, fontNumber=face, lazy=True)
+
+
+def inventory(cmaps, extra=(), charset=("all",), only=None):
+    """The characters to draw, keyed and sorted, and the census that found them."""
+    def have(cp: int) -> bool:
+        # A character outside the basic plane is two UTF-16 code units, and the
+        # one lookup the engine has reads one. Leaving it out is the same
+        # refusal Scratch makes, made here where it is visible.
+        return cp <= 0xFFFF and any(cp in cm for cm in cmaps)
+
+    whole = "all" in charset
+    census: list[tuple[str, int]] = []
+    chars: set[str] = set()
+    for lo, hi, name, group in list(UNICODE_RANGES) + list(extra):
+        # ASCII is always in: a table with no space, no digit and no full stop
+        # cannot set a line however narrow it was asked to be.
+        if name != "ASCII" and not (whole or group in charset):
+            continue
+        take = [chr(c) for c in range(lo, hi + 1) if have(c)]
+        chars.update(take)
+        census.append((name, len(take)))
+    if whole or "cjk" in charset:
+        for name, enc, first, second in STANDARDS:
+            take = [c for c in two_byte_codec(enc, first, second) if have(ord(c))]
+            chars.update(take)
+            census.append((name, len(take)))
+    if only:
+        take = [c for c in only if have(ord(c))]
+        chars.update(take)
+        census.append(("--text", len(take)))
+
+    by_key: dict[str, str] = {}
+    for ch in sorted(chars):
+        cp = ord(ch)
+        # A control code cannot stand in a line of text, and a case mapping that
+        # is not one character has no key the reader could build.
+        if cp < 0x20 or cp == 0x7F or len(ch.lower()) != 1:
+            continue
+        by_key.setdefault(key_of(ch).lower(), ch)
+    return sorted(by_key, key=str.lower), census
+
+
+# ------------------------------------------------------------- outline -> ink --
+
+
+def decompose(font, glyph_name: str, tol_font: float):
+    """The glyph's contours as polylines in font units, curves flattened.
+
+    `BasePen` is what turns a recorded glyph into one call per segment and, more
+    to the point, resolves TrueType's implied on-curve points -- the midpoint
+    between two off-curve points, and the contour that has no on-curve point at
+    all -- which a raw recording leaves for the caller.
+    """
+    contours: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+
+    class Flatten(BasePen):
+        def _moveTo(self, pt):
+            if len(current) > 2:
+                contours.append(current[:])
+            current[:] = [pt]
+
+        def _lineTo(self, pt):
+            current.append(pt)
+
+        def _qCurveToOne(self, p1, p2):
+            quad(current[-1], p1, p2, 0)
+
+        def _curveToOne(self, *pts):
+            raise SystemExit("this font is cubic; only quadratic is flattened")
+
+        def _closePath(self):
+            if len(current) > 2:
+                contours.append(current[:])
+            current.clear()
+
+        def _endPath(self):
+            self._closePath()
+
+    def quad(p0, p1, p2, depth):
+        dx, dy = p2[0] - p0[0], p2[1] - p0[1]
+        span = math.hypot(dx, dy)
+        if depth >= 12 or span == 0:
+            current.append(p2)
+            return
+        if abs((p1[0] - p0[0]) * dy - (p1[1] - p0[1]) * dx) / span <= tol_font:
+            current.append(p2)
+            return
+        a = ((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)
+        b = ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+        m = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        quad(p0, a, m, depth + 1)
+        quad(m, b, p2, depth + 1)
+
+    font.getGlyphSet()[glyph_name].draw(Flatten(font.getGlyphSet()))
+    if len(current) > 2:
+        contours.append(current[:])
+    return contours
+
+
+def spans(contours, upem: int) -> list[tuple[int, int, int]]:
+    """Scan rows over the contours -> (row, first column, past the last column)."""
+    if not contours:
+        return []
+    s = REF_ROWS / upem
+    scaled = [[(x * s, y * s) for x, y in c] for c in contours]
+    ys = [y for c in scaled for _, y in c]
+    out: list[tuple[int, int, int]] = []
+    for k in range(math.floor(min(ys) - 0.5), math.ceil(max(ys) - 0.5) + 1):
+        y = k + 0.5
+        crossings: list[tuple[float, int]] = []
+        for c in scaled:
+            for i in range(len(c)):
+                x0, y0 = c[i]
+                x1, y1 = c[(i + 1) % len(c)]
+                # Half-open in y, so a vertex crossed at is counted once.
+                if (y0 <= y < y1) or (y1 <= y < y0):
+                    t = (y - y0) / (y1 - y0)
+                    crossings.append((x0 + t * (x1 - x0), 1 if y1 > y0 else -1))
+        if len(crossings) < 2:
+            continue
+        crossings.sort()
+        wind = 0
+        run = 0.0
+        for x, d in crossings:
+            if wind == 0:
+                run = x
+            wind += d
+            if wind == 0:
+                a = math.ceil(run - 0.5)
+                b = math.floor(x - 0.5)
+                if b >= a:
+                    out.append((k, a, b + 1))
+    return out
+
+
+class Glyph:
+    __slots__ = ("key", "char", "runs", "adv", "src")
+
+    def __init__(self, key: str, char: str, runs, adv: int, src: int):
+        self.key, self.char, self.runs, self.adv, self.src = key, char, runs, adv, src
+
+
+def build(fonts, keys: list[str]) -> list[Glyph]:
+    glyphs = []
+    for key in keys:
+        char = key[len(CAP):] if key.startswith(CAP) else key
+        if key.startswith(CAP):
+            # The key is `\c` and the lowercase letter, so the glyph it names is
+            # the capital: reading it back as the lowercase letter would draw
+            # every capital as a small one.
+            char = char.upper()
+        for which, font in enumerate(fonts):
+            cmap = font.getBestCmap()
+            name = cmap.get(ord(char))
+            if name is None:
+                continue
+            upem = font["head"].unitsPerEm
+            tol_font = TOL * upem / REF_ROWS
+            runs = spans(decompose(font, name, tol_font), upem)
+            adv = round(font["hmtx"][name][0] * REF_ROWS / upem)
+            glyphs.append(Glyph(key, char, runs, adv, which))
+            break
+    return glyphs
+
+
+# ------------------------------------------------------------------- output --
+
+
+def rav_string(s: str) -> str:
+    """A raven string literal for any key: every character as `\\u{…}`."""
+    return '"' + "".join(f"\\u{{{ord(ch):04X}}}" for ch in s) + '"'
+
+
+def wrap(items: list[str], width: int = 108, indent: int = 4) -> str:
+    pad = " " * indent
+    lines, line = [], pad
+    for i, item in enumerate(items):
+        piece = item + ("," if i + 1 < len(items) else "")
+        if line.strip() and len(line) + len(piece) > width:
+            lines.append(line.rstrip())
+            line = pad
+        line += piece + " "
+    if line.strip():
+        lines.append(line.rstrip())
+    return "\n".join(lines)
+
+
+def emit(glyphs: list[Glyph], path: Path, name: str) -> None:
+    chars = [g.key for g in glyphs]
+    ats, counts, advs, flat = [], [], [], []
+    # `font_at` is where a glyph's runs start *in `font_run`*, which is three
+    # numbers a run, not a run count. The engine reads `font_run[at + 3k]`, so
+    # counting runs here instead of numbers puts every glyph on the third of the
+    # table that its own index lands in -- which draws, and draws nothing at all
+    # like the font.
+    cursor = 0
+    for g in glyphs:
+        ats.append(cursor + 1)
+        counts.append(len(g.runs))
+        advs.append(g.adv)
+        for row, a, b in g.runs:
+            flat.extend((row, a, b))
+        cursor += 3 * len(g.runs)
+
+    # Read every glyph back out of the numbers alone, with the indexing the
+    # engine uses, and refuse to write a table that does not come back. An
+    # `font_at` that counts runs instead of numbers is a table that still
+    # compiles, still draws, and draws something that is not the font, so the
+    # only place it can be caught is here.
+    for i, g in enumerate(glyphs):
+        got = [
+            tuple(flat[ats[i] - 1 + 3 * k: ats[i] + 2 + 3 * k])
+            for k in range(counts[i])
+        ]
+        assert got == g.runs, f"{g.char!r} does not come back out of font_run"
+
+    total = sum(counts)
+    body = f"""// {name}'s outlines, as the pen spans the engine draws them.
+// Generated by font2vm.py -- do not edit it by hand.
+//
+// {len(glyphs)} glyphs, {total} runs. One unit is one scan row, {REF_ROWS} to the
+// em, so drawing at size S scales every span by S/FONT_ROWS. `font_chars` is
+// keyed the way the text reads: a lowercase character is itself, a capital is
+// `\\c` and its lowercase letter. The list is sorted the way Scratch's `<`
+// compares two strings -- which lowercases them -- and that is what makes the
+// engine's binary search over it correct.
+//
+// A capital's key is two characters, so the backslash that starts it is the
+// character the text reader treats as an escape; a literal backslash is `\\\\`.
+
+/// Scan rows to the em: what a text size is divided by to get the scale.
+pub const FONT_ROWS: num = {REF_ROWS};
+
+/// The key of every glyph, in comparison order.
+pub var font_chars: list<str> = [
+{wrap([rav_string(c) for c in chars])}
+];
+
+/// Where a glyph's runs start in `font_run`, and how many there are.
+pub var font_at: list<num> = [
+{wrap([str(v) for v in ats])}
+];
+pub var font_runs: list<num> = [
+{wrap([str(v) for v in counts])}
+];
+
+/// How far the pen moves after a glyph, in the same units.
+pub var font_adv: list<num> = [
+{wrap([str(v) for v in advs])}
+];
+
+/// Three numbers a run: its scan row, the first column of its ink, and the
+/// column past the last one. The row's line is at row + 0.5.
+pub var font_run: list<num> = [
+{wrap(", ".join(str(v) for v in flat).split(", "))}
+];
+"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # `newline="\n"` and not the platform's: a generated file that changes line
+    # endings with the machine that generated it is a file that diffs as a whole
+    # rewrite for no reason.
+    path.write_text(body, encoding="utf-8", newline="\n")
+    print(f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB)")
+
+
+# ------------------------------------------------------------- self-check --
+
+
+def self_check(glyphs: list[Glyph]) -> None:
+    """Fail loudly if the tables the engine reads could not be read."""
+    for g in glyphs:
+        assert g.adv >= 0, f"{g.char!r} has a negative advance"
+        row_seen, col = None, 0
+        for row, a, b in g.runs:
+            assert b > a, f"{g.char!r} row {row} is empty"
+            assert row_seen is None or row >= row_seen, f"{g.char!r} rows go back"
+            if row != row_seen:
+                col = a
+            assert a >= col, f"{g.char!r} row {row} is out of column order"
+            row_seen, col = row, b
+
+    by_key = {g.key.lower(): g for g in glyphs}
+    keys = [g.key.lower() for g in glyphs]
+    assert keys == sorted(keys), "the keys are not in Scratch's comparison order"
+    assert len(set(keys)) == len(keys), "two glyphs share a key"
+
+    # The hole in `o` is the point of the winding rule: a row through the middle
+    # of it has to be two runs, not one.
+    o = by_key.get("o")
+    assert o is not None, "no `o` in the table"
+    mid = o.runs[len(o.runs) // 2][0]
+    assert len([r for r in o.runs if r[0] == mid]) == 2, "`o` has no hole"
+
+
+def shape_check(glyphs, sources, sample: str) -> int:
+    """The tables against a rasteriser that has nothing to do with them.
+
+    The scanline converter is the part of the tool that could be quietly wrong
+    -- a winding rule, a half-pixel, a scale -- and every structural check would
+    still pass. So a sample of glyphs is rasterised twice: once from the runs,
+    as the pen would fill them, and once by FreeType through PIL, which knows
+    nothing about this file. The overlap says whether they are the same shape.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    pil = [ImageFont.truetype(path, REF_ROWS, index=face) for path, face in sources]
+    by_key = {g.char: g for g in glyphs}
+    worst, total, scored = (1.0, ""), 0.0, 0
+
+    for ch in sample:
+        g = by_key.get(ch)
+        if g is None or not g.runs:
+            continue
+        x0 = min(r[1] for r in g.runs) - 2
+        x1 = max(r[2] for r in g.runs) + 2
+        y0 = min(r[0] for r in g.runs) - 2
+        y1 = max(r[0] for r in g.runs) + 3
+        w, h = x1 - x0, y1 - y0
+        ours = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(ours)
+        for row, a, b in g.runs:
+            draw.rectangle([a - x0, y1 - row - 1, b - x0 - 1, y1 - row - 1], fill=255)
+
+        theirs = Image.new("L", (w, h), 0)
+        # `ls` is the left of the baseline, which is the frame the runs are in.
+        ImageDraw.Draw(theirs).text((-x0, y1), ch, font=pil[g.src], fill=255, anchor="ls")
+        theirs = theirs.point(lambda v: 255 if v >= 128 else 0)
+
+        mine, font_side = ours.tobytes(), theirs.tobytes()
+        both = sum(1 for p, q in zip(mine, font_side) if p and q)
+        either = sum(1 for p, q in zip(mine, font_side) if p or q)
+        iou = both / either if either else 1.0
+        total += iou
+        scored += 1
+        if iou < worst[0]:
+            worst = (iou, ch)
+
+    print(f"  shapes: mean overlap {total / max(scored, 1):.3f} over {scored} glyphs, "
+          f"worst {worst[0]:.3f} {worst[1]!r}")
+    # A thin bar -- a hyphen, an underscore, a CJK horizontal -- is three or four
+    # rows tall, and FreeType's hinting puts it on a row the pixel-centre rule
+    # here does not pick, which costs a quarter of a shape that small. Anything
+    # actually wrong with the converter drops far below this.
+    return 0 if worst[0] >= 0.65 else 1
+
+
+# --------------------------------------------------------------- the page --
+
+STAGE_W, STAGE_H = 480, 360  # Scratch's stage, which is also the pen layer
+
+
+def rav_decode(literal: str) -> str:
+    """A raven string literal's value: the escapes the lexer reads."""
+    out, i = "", 0
+    while i < len(literal):
+        if literal[i] == "\\":
+            n = literal[i + 1]
+            out += {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\", "0": "\0"}.get(n, n)
+            i += 2
+        else:
+            out += literal[i]
+            i += 1
+    return out
+
+
+def read_layout(engine_path: Path, lay_path: Path) -> dict:
+    """What the project says the page is, read from the project.
+
+    The two files between them: the engine owns the leading and the box, because
+    they are what it draws with, and the page owns where the block starts and how
+    big it is, because that is what a project chooses.
+    """
+    engine = engine_path.read_text(encoding="utf-8")
+    src = lay_path.read_text(encoding="utf-8")
+
+    def num(text, pattern, what, where):
+        m = re.search(pattern, text)
+        if not m:
+            raise SystemExit(f"{where} has no {what}")
+        return float(m.group(1))
+
+    return {
+        "left": num(src, r"const LEFT: num = ([\d.eE+-]+);", "LEFT", lay_path.name),
+        "top": num(src, r"const TOP: num = ([\d.eE+-]+);", "TOP", lay_path.name),
+        "cap": num(src, r"const CAP: num = ([\d.eE+-]+);", "CAP", lay_path.name),
+        "size": num(src, r"var size: num = ([\d.eE+-]+);", "size", lay_path.name),
+        "limit": num(src, r"var limit: num = ([\d.eE+-]+);", "limit", lay_path.name),
+        "ink": re.search(r'var ink: str = "([^"]*)";', src).group(1),
+        "text": rav_decode(re.search(r'var text: str = "(.*)";', src).group(1)),
+        "lead": num(engine, r"const LEAD: num = ([\d.eE+-]+);", "LEAD", engine_path.name),
+        "edge_x": num(engine, r"const EDGE_X: num = ([\d.eE+-]+);", "EDGE_X", engine_path.name),
+        "edge_y": num(engine, r"const EDGE_Y: num = ([\d.eE+-]+);", "EDGE_Y", engine_path.name),
+    }
+
+
+def layout_page(glyphs, text: str, lay: dict):
+    """Where every glyph of the page goes, by the rules `draw_text` uses."""
+    by_key: dict[str, Glyph] = {}
+    for g in glyphs:
+        by_key.setdefault(g.key.lower(), g)
+
+    scale = lay["size"] / REF_ROWS
+    pen = max(1, math.ceil(scale))
+    lead = lay["size"] * lay["lead"]
+    left, limit = lay["left"], lay["limit"]
+    px, py = left, lay["top"] - lay["size"] * lay["cap"]
+
+    page, cap, i = [], False, 0
+    while i < len(text):
+        c = text[i]
+        step, show, newline = 1, True, False
+        if c in "\n\r":
+            newline, show = True, False
+        elif c == "\\":
+            d = text[i + 1] if i + 1 < len(text) else ""
+            if d in "cC":
+                cap, show, step = True, False, 2
+            elif d in "nN":
+                newline, show, step = True, False, 2
+            elif d == "\\":
+                step = 2
+        if newline:
+            px, py = left, py - lead
+        elif show:
+            key = ("\\c" + c) if cap else c
+            cap = False
+            g = by_key.get(key.lower())
+            adv = g.adv * scale if g is not None else lay["size"] / 2
+            if limit > 0 and px > left and px + adv > left + limit:
+                px, py = left, py - lead
+            if g is not None:
+                page.append((g, px, py))
+            px += adv
+        i += step
+    return page, scale, pen
+
+
+def blank_canvas() -> bytearray:
+    return bytearray(STAGE_W * STAGE_H)
+
+
+def stamp_run(mask: bytearray, x0: float, x1: float, y: float, pen: float) -> None:
+    """One pen stroke onto the stage: a capsule of diameter `pen`, round caps.
+
+    This is the whole pen. Scratch's renderer draws a line of `penAttributes`
+    diameter between two points and the ends are round, so the ink of a stroke
+    is every pixel whose centre is within `pen / 2` of the segment -- the same
+    rule for a run of a glyph as for a line a reader drew by hand.
+    """
+    r = pen / 2
+    ix0 = max(0, math.floor(x0 + STAGE_W / 2 - r - 1))
+    ix1 = min(STAGE_W - 1, math.ceil(x1 + STAGE_W / 2 + r + 1))
+    iy0 = max(0, math.floor(STAGE_H / 2 - y - r - 1))
+    iy1 = min(STAGE_H - 1, math.ceil(STAGE_H / 2 - y + r + 1))
+    for iy in range(iy0, iy1 + 1):
+        dy = (STAGE_H / 2 - (iy + 0.5)) - y
+        row = iy * STAGE_W
+        for ix in range(ix0, ix1 + 1):
+            dx = (ix + 0.5 - STAGE_W / 2) - min(max(ix + 0.5 - STAGE_W / 2, x0), x1)
+            if dx * dx + dy * dy <= r * r:
+                mask[row + ix] = 255
+
+
+def render_tables(page, scale: float, pen: float) -> bytearray:
+    """The page as the project draws it: the runs of `font.rav`, as pen lines."""
+    mask = blank_canvas()
+    for g, px, py in page:
+        for row, a, b in g.runs:
+            y = py + (row + 0.5) * scale
+            x0 = px + a * scale + pen / 2
+            x1 = px + b * scale - pen / 2
+            if x1 <= x0:
+                x0 = x1 = px + (a + b) * scale / 2
+                x1 = x0 + 0.05
+            stamp_run(mask, x0, x1, y, pen)
+    return mask
+
+
+def render_freetype(page, sources, size: float) -> bytearray:
+    """The page as the font itself draws it, which shares no code with above."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    cache: dict[tuple[int, int], object] = {}
+
+    def face(src: int):
+        key = (src, int(round(size)))
+        if key not in cache:
+            path, index = sources[src]
+            cache[key] = ImageFont.truetype(path, int(round(size)), index=index)
+        return cache[key]
+
+    img = Image.new("L", (STAGE_W, STAGE_H), 0)
+    draw = ImageDraw.Draw(img)
+    for g, px, py in page:
+        # `ls` is the left of the baseline: the pen's own origin.
+        draw.text((px + STAGE_W / 2, STAGE_H / 2 - py), g.char, font=face(g.src),
+                  fill=255, anchor="ls")
+    return bytearray(img.point(lambda v: 255 if v >= 128 else 0).tobytes())
+
+
+def covered(a: bytearray, b: bytearray, within: int = 1) -> float:
+    """How much of `a`'s ink has `b`'s ink within `within` pixels of it.
+
+    A plain overlap is the wrong measure for a pen against FreeType: the pen is
+    a hard capsule and FreeType anti-aliases and hints, so a stroke the font puts
+    on one row and the pen puts on the next counts as two mistakes out of three
+    on a thin bar, and the number says nothing. What does say something is
+    whether each is where the other is, to within the pixel a different
+    rasteriser is allowed to disagree by.
+    """
+    total = hits = 0
+    for i, v in enumerate(a):
+        if not v:
+            continue
+        total += 1
+        x, y = i % STAGE_W, i // STAGE_W
+        for dy in range(-within, within + 1):
+            yy = y + dy
+            if not 0 <= yy < STAGE_H:
+                continue
+            for dx in range(-within, within + 1):
+                xx = x + dx
+                if 0 <= xx < STAGE_W and b[yy * STAGE_W + xx]:
+                    hits += 1
+                    break
+            else:
+                continue
+            break
+    return hits / total if total else 1.0
+
+
+def write_png(mask: bytearray, path: Path) -> None:
+    from PIL import Image
+
+    Image.frombytes("L", (STAGE_W, STAGE_H), bytes(mask)).save(path)
+
+
+def stage_check(glyphs, sources, text: str, lay: dict, prefix: Path) -> int:
+    """The page, twice: the tables as pen lines, and the font through FreeType.
+
+    This is the check that has to pass before raven is built at all. It cannot
+    see the compiler or the VM, and it is not meant to: it answers whether the
+    tables and the layout put a page of text where the font says it goes, at the
+    size and the wrapping the project will use. If the two pictures disagree,
+    nothing downstream can be right.
+    """
+    page, scale, pen = layout_page(glyphs, text, lay)
+    ours = render_tables(page, scale, pen)
+    theirs = render_freetype(page, sources, lay["size"])
+    mine = covered(ours, theirs)
+    font_side = covered(theirs, ours)
+
+    # What the page asks of the pen, against the box Scratch will let it move
+    # inside. This is the measurement that has to come first: a run past the edge
+    # is not clipped by Scratch, it is *moved*, so a page that leaves the box is
+    # not a page with its edge shaved off, it is a page drawn in the wrong place,
+    # and no amount of getting the glyphs right survives it.
+    xs, ys = [], []
+    for g, px, py in page:
+        for row, a, b in g.runs:
+            xs += (px + a * scale + pen / 2, px + b * scale - pen / 2)
+            ys.append(py + (row + 0.5) * scale)
+    inside = all(-lay["edge_x"] - pen / 2 <= v <= lay["edge_x"] + pen / 2 for v in xs) \
+        and all(-lay["edge_y"] - pen / 2 <= v <= lay["edge_y"] + pen / 2 for v in ys)
+
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    write_png(ours, prefix.with_name(prefix.name + "-tables.png"))
+    write_png(theirs, prefix.with_name(prefix.name + "-freetype.png"))
+    # The raw one is what a VM check compares its own stage against.
+    prefix.with_name(prefix.name + ".gray").write_bytes(bytes(ours))
+
+    ink = sum(1 for v in ours if v)
+    print(f"  page: {len(page)} glyphs, {ink} inked pixels at size {lay['size']:g}")
+    print(f"  page: ink x {min(xs):.1f}..{max(xs):.1f}, y {min(ys):.1f}..{max(ys):.1f} "
+          f"in a box of +/-{lay['edge_x']:g} by +/-{lay['edge_y']:g}")
+    print(f"  page: tables against FreeType, {mine:.3f} of the pen's ink on the "
+          f"font's, {font_side:.3f} of the font's on the pen's, within a pixel")
+    if not inside:
+        print("  page: THE PAGE LEAVES THE BOX -- Scratch would move the sprite "
+              "back and smear the ink")
+    return 0 if inside and min(mine, font_side) >= 0.97 else 1
+
+
+def preview(glyphs, text: str, size: float, lay: dict, path: Path) -> None:
+    """The whole page as the project draws it, at the project's own layout."""
+    lay = dict(lay)
+    lay["size"] = float(size)
+    page, scale, pen = layout_page(glyphs, text, lay)
+    write_png(render_tables(page, scale, pen), path)
+    print(f"wrote {path} ({STAGE_W}x{STAGE_H})")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--project", metavar="DIR",
+                    help="the raven project to install into: src/penfont and "
+                         "src/sprites/text.rav under it, which is what a project "
+                         "the tool has not seen before looks like")
+    ap.add_argument("--out", metavar="DIR",
+                    help="the module directory to install into (default src/penfont)")
+    ap.add_argument("--lay", metavar="FILE",
+                    help="a raven file holding the page's own layout, for --stats/--stage/--preview")
+    ap.add_argument("--engine", default=str(ENGINE), metavar="FILE",
+                    help="the engine module to copy in, and to read the box and the leading from")
+    ap.add_argument("--set", default="maple", choices=sorted(SETS),
+                    help="which font set to build the tables from")
+    ap.add_argument("--fonts", metavar="PATH[:FACE],...",
+                    help="the whole font chain, in place of the set's own")
+    ap.add_argument("--font", help="a first font, in place of the set's own")
+    ap.add_argument("--face", type=int, default=0)
+    ap.add_argument("--charset", default="all",
+                    help="comma-separated: all, latin, cjk, icons (default all)")
+    ap.add_argument("--text", metavar="CHARS",
+                    help="add these characters to the inventory")
+    ap.add_argument("--chars-file", metavar="FILE",
+                    help="add every character in this file to the inventory")
+    ap.add_argument("--name", help="what to call the font in the generated header")
+    ap.add_argument("--stats", action="store_true",
+                    help="check a sample of glyphs against FreeType, and write nothing")
+    ap.add_argument("--stage", metavar="PREFIX",
+                    help="render the project's own page and check it against FreeType")
+    ap.add_argument("--preview", metavar="PNG",
+                    help="draw the project's own page from the runs")
+    ap.add_argument("--size", type=float, default=None, help="override the page's size")
+    ap.add_argument("--limit", type=int, help="build only the first N glyphs, to try it out")
+    args = ap.parse_args()
+
+    charset = [c.strip() for c in args.charset.split(",") if c.strip()]
+    bad = [c for c in charset if c not in CHARSETS]
+    if bad:
+        raise SystemExit(f"unknown --charset {', '.join(bad)}; try one of {', '.join(CHARSETS)}")
+
+    project = Path(args.project) if args.project else None
+    out = Path(args.out) if args.out else (project / DEFAULT_OUT if project else DEFAULT_OUT)
+    lay_path = Path(args.lay) if args.lay else (
+        project / DEFAULT_LAY if project else DEFAULT_LAY)
+
+    only = ""
+    if args.text:
+        only += args.text
+    if args.chars_file:
+        only += Path(args.chars_file).read_text(encoding="utf-8")
+
+    chosen = SETS[args.set]
+    if args.fonts:
+        chain = []
+        for part in args.fonts.split(","):
+            # A trailing `:2` is a face index; a drive letter is not.
+            m = re.fullmatch(r"(.*):(\d+)", part.strip())
+            chain.append((m.group(1), int(m.group(2))) if m else (part.strip(), 0))
+    else:
+        chain = list(chosen["fonts"])
+        if args.font:
+            chain[0] = (args.font, args.face)
+
+    fonts, sources = [], []
+    for path, face in chain:
+        sources.append((path, face))
+        fonts.append(load_font(path, face))
+    cmaps = [f.getBestCmap() for f in fonts]
+    keys, census = inventory(cmaps, chosen["extra"], charset, only)
+    if args.limit:
+        keys = keys[: args.limit]
+
+    glyphs = build(fonts, keys)
+    runs = sum(len(g.runs) for g in glyphs)
+    blank = sum(1 for g in glyphs if not g.runs)
+    print(f"{args.name or args.set}: {len(fonts)} fonts, {len(glyphs)} glyphs, {runs} runs")
+    print("  " + ", ".join(f"{n} {c}" for n, c in census if c))
+    print(f"  {blank} glyphs draw nothing (spaces and the like)")
+
+    self_check(glyphs)
+    engine_path = Path(args.engine)
+    if args.preview:
+        lay = read_layout(engine_path, lay_path)
+        preview(glyphs, args.text if args.text else lay["text"],
+                args.size if args.size is not None else lay["size"], lay, Path(args.preview))
+    if args.stats:
+        # A spread over the scripts, plus everything whose shape is easy to get
+        # wrong: the holes, the curves, the CJK whose rows are many and thin.
+        sample = (
+            "AaBbGgOoQqRrSsWwXxZz0123456789"
+            ".,;:!?()[]{}\"'+-=*/\\%@&#$~^_|<> "
+            "的一二三四十口日回国凹凸日月水火山人入八力刀又子女子小"
+            "國語漢字臺灣龍鳳"
+            "ぁあいうえおアイウエオ"
+            "가나다라마바사"
+            "←↑→↓∞≠≤≥★☆①②③"
+        )
+        return shape_check(glyphs, sources, sample)
+    if args.stage:
+        lay = read_layout(engine_path, lay_path)
+        if args.size is not None:
+            lay["size"] = args.size
+        return stage_check(glyphs, sources, lay["text"], lay, Path(args.stage))
+
+    emit(glyphs, out / "font.rav", args.name or args.set)
+    # The engine goes in beside the table, so one command installs both and the
+    # same command updates them.
+    (out / "engine.rav").parent.mkdir(parents=True, exist_ok=True)
+    (out / "engine.rav").write_text(engine_path.read_text(encoding="utf-8"),
+                                    encoding="utf-8", newline="\n")
+    print(f"wrote {out / 'engine.rav'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
