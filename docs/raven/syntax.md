@@ -111,7 +111,7 @@ initializer is only written where a place is being made — the initializer of a
 | `num` | a number | The spelling you wrote is preserved. |
 | `str` | a string | |
 | `bool` | `true` / `false` | Only as a variable's initial value; boolean **inputs** want a boolean expression. |
-| `list<T>` | a list, declared empty or with literal items | |
+| `list<T>` | a run of cells, starting empty or with the literal items | a run of `_vms`, or of `_heap` when it grows |
 
 `pub` puts the declaration on the stage, where every sprite can see it. Without
 it the declaration belongs to the file's target — a sprite-local variable, or, in

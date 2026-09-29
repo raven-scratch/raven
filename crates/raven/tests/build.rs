@@ -233,13 +233,18 @@ fn a_built_project_declares_no_scratch_variables() {
         }
         for list in target["lists"].as_object().expect("lists").values() {
             let list_name = list[0].as_str().expect("a list name");
+            // The only lists a project declares are the arenas, the console,
+            // one stack per script that needs one, and the lists a `watch`
+            // asked to see. `trail` is none of those.
+            let arena = list_name == "_vms"
+                || list_name == "_gvm"
+                || list_name == "_heap"
+                || list_name == "_gheap"
+                || list_name == "_console"
+                || list_name.starts_with("_stack");
             assert!(
-                list_name == "_vms"
-                    || list_name == "_gvm"
-                    || list_name == "_console"
-                    || list_name.starts_with("_stack")
-                    || !list_name.starts_with('_'),
-                "`{list_name}` is not an arena and looks internal"
+                arena || watched.contains(&list_name),
+                "`{list_name}` declares a Scratch list without a `watch`"
             );
         }
     }
@@ -494,6 +499,72 @@ fn menus_become_their_scratch_values() {
     assert!(asm.contains("control_stop(\"this script\")"), "{asm}");
     assert!(asm.contains("sensing_keypressed(\"space\")"), "{asm}");
     assert!(asm.contains("looks_seteffectto(\"GHOST\", 50)"), "{asm}");
+}
+
+/// The key *boolean* is an input slot, so a string the program computed fills
+/// it. A literal has to arrive as a reporter, which is one `join` — and a
+/// literal that names a fixed key stays the clean dropdown.
+#[test]
+fn the_key_boolean_takes_a_string_reporter() {
+    let project = Project::new("key-reporter").sprite(
+        "A",
+        r#"sprite "A" {
+            on flag_clicked {
+                if sensing::key_pressed("backspace") { looks::say("erase"); }
+                if sensing::key_pressed("") { looks::say("none"); }
+                if sensing::key_pressed("space") { looks::say("space"); }
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("sensing_keypressed(operator_join(\"backspace\", \"\"))"),
+        "a custom key is a reporter: {asm}"
+    );
+    assert!(
+        asm.contains("sensing_keypressed(operator_join(\"\", \"\"))"),
+        "the empty string is a key too: {asm}"
+    );
+    assert!(
+        asm.contains("sensing_keypressed(\"space\")"),
+        "a known key stays the dropdown: {asm}"
+    );
+}
+
+#[test]
+fn the_key_boolean_takes_a_computed_string() {
+    let project = Project::new("key-computed").sprite(
+        "A",
+        r#"sprite "A" {
+            var prefix: str = "back";
+            on flag_clicked {
+                let key = f"{prefix}space";
+                if sensing::key_pressed(key) { looks::say(key); }
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("sensing_keypressed(data_itemoflist("),
+        "a computed key is already a reporter, so it is passed as it is: {asm}"
+    );
+}
+
+/// The hat's key is a *field*: a dropdown baked into the block, with no slot
+/// for a reporter. Mouse-wheel scrolling reaches it as an up/down arrow; the
+/// boolean never sees one.
+#[test]
+fn the_key_hat_takes_only_a_variant() {
+    let project = Project::new("key-hat").sprite(
+        "A",
+        r#"sprite "A" {
+            on key_pressed("backspace") { looks::hide(); }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(rendered.contains("this input takes a `Key`"), "{rendered}");
+    assert!(rendered.contains("Key::Space"), "{rendered}");
+    assert!(rendered.contains("Key::Enter"), "{rendered}");
 }
 
 #[test]
@@ -814,10 +885,10 @@ fn a_local_lives_in_the_vms_list_and_nowhere_else() {
 /// Scratch cannot grow a list by replacing into it: `data_replaceitemoflist`
 /// runs `Cast.toListIndex(index, length, false)`, which rejects an index past the
 /// end, so a write into a shorter list is dropped without a word. `_vms` is
-/// therefore declared with one empty item per cell the program uses, and this is
+/// therefore declared with one item per cell the program can reach, and this is
 /// the test that keeps it that way.
 #[test]
-fn the_arena_is_grown_on_demand_and_the_stack_unwinds() {
+fn the_arena_is_declared_one_item_per_cell_and_the_stack_unwinds() {
     let project = Project::new("vms-size").sprite(
         "A",
         r#"sprite "A" {
@@ -835,23 +906,14 @@ fn the_arena_is_grown_on_demand_and_the_stack_unwinds() {
         }"#,
     );
     let asm = project.expand();
-    // Nothing is reserved up front: the arena is an empty list, and the memory
-    // manager grows it to the highest cell the program can reach.
+    // The arena is sized at load time, so nothing has to grow it at run time.
     assert!(
-        asm.contains("list _vms = [];"),
-        "nothing is pre-sized: {asm}"
+        asm.contains("list _vms = [") && !asm.contains("list _vms = [];"),
+        "every cell is an item of the arena: {asm}"
     );
     assert!(
-        asm.contains("proc __vms_reserve() warp"),
-        "the memory manager: {asm}"
-    );
-    assert!(
-        asm.contains("data_addtolist(\"\", \"_vms\")"),
-        "it grows the arena one item at a time: {asm}"
-    );
-    assert!(
-        asm.contains("control_if(operator_lt(data_lengthoflist(\"_vms\"), "),
-        "the manager grows the arena to what the program can reach: {asm}"
+        !asm.contains("__vms_reserve"),
+        "there is no separate grow pass: {asm}"
     );
     // And the script's own cells are popped in the reverse order they were
     // pushed, so the stack unwinds to nothing.
@@ -912,7 +974,7 @@ fn a_for_bound_is_re_evaluated_each_iteration() {
         r#"sprite "A" {
             var xs: list<num> = [];
             on flag_clicked {
-                for i in 0..data::length_of_list(xs) { }
+                for i in 0..xs.len() { }
             }
         }"#,
     );
@@ -921,10 +983,15 @@ fn a_for_bound_is_re_evaluated_each_iteration() {
         asm.contains("control_repeat_until(operator_not(operator_lt("),
         "{asm}"
     );
-    // The bound is read inside the loop's condition, not hoisted above it.
-    assert_eq!(asm.matches("data_lengthoflist(\"xs\")").count(), 1, "{asm}");
+    // The bound is read inside the loop's condition, not hoisted above it. The
+    // length is the handle's own cell, read once.
+    assert_eq!(
+        asm.matches("data_itemoflist(2, \"_vms\")").count(),
+        1,
+        "{asm}"
+    );
     let loop_at = asm.find("control_repeat_until(").expect("the loop");
-    let bound_at = asm.find("data_lengthoflist(\"xs\")").expect("the bound");
+    let bound_at = asm.find("data_itemoflist(2, \"_vms\")").expect("the bound");
     assert!(bound_at > loop_at, "the bound is re-read each turn: {asm}");
 }
 
@@ -1297,10 +1364,17 @@ fn a_for_walks_a_list() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("data_lengthoflist(\"trail\")"), "{asm}");
+    // `for_each` reads the run's length cell and indexes the run.
     assert!(
-        asm.contains("data_itemoflist(data_itemoflist(1, \"_stack1\"), \"trail\")"),
-        "{asm}"
+        asm.contains("data_itemoflist(2, \"_vms\")"),
+        "the length is the handle's own cell: {asm}"
+    );
+    assert!(
+        asm.contains(
+            "data_itemoflist(operator_add(data_itemoflist(1, \"_vms\"), \
+             operator_subtract(data_itemoflist(1, \"_stack1\"), 1)), \"_vms\")"
+        ),
+        "the item is the run's base plus the cursor: {asm}"
     );
 }
 
@@ -1341,7 +1415,11 @@ fn an_index_read_has_the_element_type() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("data_itemoflist(1, \"xs\")"), "{asm}");
+    // `xs[1]` is the run's first item, so the base read is the index.
+    assert!(
+        asm.contains("data_itemoflist(data_itemoflist(1, \"_vms\"), \"_vms\")"),
+        "{asm}"
+    );
 }
 
 #[test]
@@ -1366,8 +1444,11 @@ fn an_index_write_of_the_right_type_is_accepted() {
         }"#,
     );
     let asm = project.expand();
+    // The write makes sure the item exists first, then replaces it. An index
+    // write in place does not need the heap, so the run stays in the arena.
+    assert!(asm.contains("__vm_ensure(1, 1)"), "{asm}");
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"xs\", 3)"),
+        asm.contains("data_replaceitemoflist(data_itemoflist(1, \"_vms\"), \"_vms\", 3)"),
         "{asm}"
     );
 }
@@ -1614,12 +1695,12 @@ fn a_scalar_var_is_a_cell_and_never_a_scratch_variable() {
     );
     let asm = project.expand();
     assert!(
-        asm.contains("list _vms = [];"),
-        "the arena starts empty: {asm}"
+        asm.contains("list _vms = [7];"),
+        "the declaration's value is the cell's: {asm}"
     );
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"_vms\", 7)"),
-        "the memory manager writes the declared starting value: {asm}"
+        asm.contains("data_replaceitemoflist(1, \"_vms\", operator_add("),
+        "`n += 1` rewrites the cell: {asm}"
     );
     assert!(!asm.contains("var n"), "{asm}");
     assert!(!asm.contains("data_variable("), "{asm}");
@@ -1667,10 +1748,9 @@ fn a_project_wide_scalar_lives_in_the_stage_arena() {
             }"#,
         );
     let asm = project.expand();
-    assert!(asm.contains("global list _gvm = [];"), "{asm}");
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"_gvm\", 4)"),
-        "grown and given its value by the memory manager: {asm}"
+        asm.contains("global list _gvm = [4];"),
+        "one cell, holding its declared value: {asm}"
     );
     assert!(asm.contains("data_itemoflist(1, \"_gvm\")"), "{asm}");
     assert!(asm.contains("data_replaceitemoflist(1, \"_gvm\""), "{asm}");
@@ -1691,13 +1771,8 @@ fn a_struct_is_a_frame_of_cells_read_by_constant_index() {
         }"#,
     );
     let asm = project.expand();
-    // Two cells, whose declared values the memory manager writes.
-    assert!(asm.contains("list _vms = [];"), "{asm}");
-    assert!(
-        asm.contains("data_replaceitemoflist(1, \"_vms\", 1)")
-            && asm.contains("data_replaceitemoflist(2, \"_vms\", 2)"),
-        "{asm}"
-    );
+    // Two cells, holding the declaration's values.
+    assert!(asm.contains("list _vms = [1, 2];"), "{asm}");
     // `home.x` is cell 1, `home.y` is cell 2, and each is one block.
     assert!(
         asm.contains(
@@ -1784,13 +1859,24 @@ fn a_list_method_is_the_block_it_says_it_is() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("data_addtolist(1, \"xs\")"), "{asm}");
-    assert!(asm.contains("data_insertatlist(2, 1, \"xs\")"), "{asm}");
-    assert!(asm.contains("data_deleteoflist(1, \"xs\")"), "{asm}");
-    assert!(asm.contains("data_lengthoflist(\"xs\")"), "{asm}");
-    assert!(asm.contains("data_listcontainsitem(\"xs\", 1)"), "{asm}");
-    assert!(asm.contains("data_itemoflist("), "{asm}");
-    assert!(asm.contains("data_deletealloflist(\"xs\")"), "{asm}");
+    // Every mutating method is one call to the memory manager, and every read
+    // is a run of the heap at a computed index.
+    assert!(asm.contains("__vh_push(1, 1)"), "{asm}");
+    assert!(asm.contains("__vh_insert(1, 1, 2)"), "{asm}");
+    assert!(asm.contains("__vh_remove(1, 1)"), "{asm}");
+    assert!(
+        asm.contains("data_itemoflist(2, \"_heap\")"),
+        "`len` is the handle's length cell: {asm}"
+    );
+    assert!(asm.contains("__vh_index(1, 1,"), "`contains`: {asm}");
+    assert!(asm.contains("__vh_text(1,"), "`text`: {asm}");
+    assert!(
+        asm.contains("data_replaceitemoflist(2, \"_heap\", 0)"),
+        "`clear` forgets the length: {asm}"
+    );
+    // There is a Scratch list, but it is the heap, not the raven list.
+    assert!(!asm.contains("list xs ="), "{asm}");
+    let _ = project.build();
 }
 
 #[test]
@@ -1810,27 +1896,24 @@ fn a_map_is_one_list_of_alternating_keys_and_values() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("list scores = [];"), "{asm}");
-    // `set` looks the key up once, then replaces or appends the pair.
-    assert!(
-        asm.contains("data_itemnumoflist(\"a\", \"scores\")"),
-        "{asm}"
-    );
-    assert!(asm.contains("data_addtolist(\"a\", \"scores\")"), "{asm}");
-    assert!(asm.contains("data_addtolist(1, \"scores\")"), "{asm}");
+    // A map is a run of the heap holding alternating keys and values: there is
+    // no Scratch list for it.
+    assert!(!asm.contains("list scores ="), "{asm}");
+    // `set` finds the key once, then replaces the value after it or appends the
+    // pair.
+    assert!(asm.contains("__vh_index(1, \"a\","), "{asm}");
+    assert!(asm.contains("__vh_push(1, \"a\")"), "{asm}");
+    assert!(asm.contains("__vh_push(1, 1)"), "{asm}");
     assert!(asm.contains("control_if_else("), "{asm}");
     // `get` is guarded, so a missing key cannot read the first key's value.
     assert!(asm.contains("control_if(operator_gt("), "{asm}");
     assert!(
-        asm.contains("operator_divide(data_lengthoflist(\"scores\"), 2)"),
-        "{asm}"
+        asm.contains("operator_divide(data_itemoflist(2, \"_heap\"), 2)"),
+        "`len` is half the run: {asm}"
     );
-    // `remove` deletes the key and the value that follows it — two deletes on
-    // the map itself (the rest are the script's stack unwinding).
-    assert!(
-        asm.matches("data_deleteoflist(data_itemoflist(").count() >= 2,
-        "{asm}"
-    );
+    // `remove` removes the key and the value that follows it.
+    assert!(asm.matches("__vh_remove(1,").count() >= 2, "{asm}");
+    let _ = project.build();
 }
 
 #[test]
@@ -1913,6 +1996,116 @@ fn a_debug_build_writes_the_asm_and_the_project_json() {
 // Reading a list, and why a boolean cannot be stored
 // ---------------------------------------------------------------------------
 
+/// A list written in place is a *table*, and stays in the fixed arena. Only a
+/// run that is pushed to or inserted into is a heap object — and the two live in
+/// different lists for Scratch's own reason: `add to list` is refused once a
+/// list holds 200,000 items, so a large table sharing an arena with a growing
+/// run would freeze it.
+#[test]
+fn a_table_written_in_place_stays_out_of_the_heap() {
+    let project = Project::new("table").sprite(
+        "A",
+        r#"sprite "A" {
+            pub var table: list<num> = [1, 2, 3];
+            pub var log: list<num> = [];
+            on flag_clicked {
+                table[1] = table[2];
+                log.push(1);
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("__gm_ensure("),
+        "the table's in-place write stays in `_gvm`: {asm}"
+    );
+    assert!(
+        asm.contains("data_replaceitemoflist(operator_add(data_itemoflist("),
+        "and the write itself names `_gvm`: {asm}"
+    );
+    assert!(
+        asm.contains("__gh_push("),
+        "the growing list is the heap's: {asm}"
+    );
+    assert!(
+        !asm.contains("__gm_push("),
+        "the table is never grown: {asm}"
+    );
+    let _ = project.build();
+}
+
+/// A value-producing helper writes its answer into a cell the caller names, and
+/// a procedure call's arguments are positional — so the answer cell is last in
+/// the declaration and last in the call. The caller copies it into a cell of its
+/// own, so a second call in the same expression cannot overwrite the first.
+#[test]
+fn a_value_helper_takes_the_answer_cell_last() {
+    let project = Project::new("helper-out").sprite(
+        "A",
+        r#"sprite "A" {
+            var xs: list<num> = [];
+            on flag_clicked {
+                let n = xs.index_of(1);
+                let t = xs.text();
+                looks::say(f"{n}{t}");
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("proc __vm_text(h: num, letters: num, out: num) warp"),
+        "the answer cell is declared last: {asm}"
+    );
+    assert!(
+        asm.contains("__vm_text(1, 0, 4)"),
+        "and passed last, after the element rule: {asm}"
+    );
+    assert!(
+        asm.contains("data_addtolist(data_itemoflist(4, \"_vms\"), \"_stack1\")"),
+        "the caller copies the answer into a cell of its own: {asm}"
+    );
+    assert!(asm.contains("__vm_index(1, 1, 4)"), "{asm}");
+    let _ = project.build();
+}
+
+#[test]
+fn a_list_a_macro_pushes_to_is_growable() {
+    // A mutating method inside a macro body names its list directly — a macro
+    // cannot be handed one to push to — so the scan sees it and the run goes to
+    // the heap.
+    let project = Project::new("macro-push").sprite(
+        "A",
+        r#"sprite "A" {
+            var xs: list<num> = [];
+            macro add_one() -> stmts { xs.push(1); }
+            on flag_clicked { add_one(); }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("list _heap = ["),
+        "the run is the heap's: {asm}"
+    );
+    assert!(asm.contains("__vh_push("), "{asm}");
+    assert!(!asm.contains("list xs ="), "{asm}");
+    let _ = project.build();
+}
+
+#[test]
+fn a_list_is_a_place_and_not_a_value() {
+    let project = Project::new("list-value").sprite(
+        "A",
+        r#"sprite "A" {
+            var a: list<num> = [];
+            var b: list<num> = [];
+            on flag_clicked { b = a; }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(rendered.contains("`a` is a list"), "{rendered}");
+    assert!(rendered.contains("read an item with"), "{rendered}");
+}
+
 #[test]
 fn every_way_of_reading_a_list_is_the_block_it_says_it_is() {
     let project = Project::new("list-reads").sprite(
@@ -1933,18 +2126,34 @@ fn every_way_of_reading_a_list_is_the_block_it_says_it_is() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("data_itemoflist(1, \"xs\")"), "{asm}");
-    assert!(asm.contains("data_itemoflist(2, \"xs\")"), "{asm}");
+    // Every read is the run of the arena at an index: a constant index folds
+    // its `- 1`, a computed one does not.
     assert!(
-        asm.contains("data_itemoflist(data_lengthoflist(\"xs\"), \"xs\")"),
-        "`last` is one reporter: {asm}"
+        asm.contains("data_itemoflist(data_itemoflist(1, \"_vms\"), \"_vms\")"),
+        "`xs[1]` and `xs.first()`: {asm}"
     );
-    assert!(asm.contains("data_lengthoflist(\"xs\")"), "{asm}");
-    assert!(asm.contains("data_listcontents(\"xs\")"), "`text`: {asm}");
-    assert!(asm.contains("data_listcontainsitem(\"xs\", 1)"), "{asm}");
-    assert!(asm.contains("data_itemnumoflist(1, \"xs\")"), "{asm}");
-    // `text` is the whole list in one block, not a loop over it.
-    assert_eq!(asm.matches("data_listcontents").count(), 1, "{asm}");
+    assert!(
+        asm.contains("data_itemoflist(operator_add(data_itemoflist(1, \"_vms\"), 1), \"_vms\")"),
+        "`xs.at(2)`: {asm}"
+    );
+    assert!(
+        asm.contains(
+            "operator_add(data_itemoflist(1, \"_vms\"), \
+             operator_subtract(data_itemoflist(2, \"_vms\"), 1))"
+        ),
+        "`last` reads at the length: {asm}"
+    );
+    assert!(
+        asm.contains("data_itemoflist(2, \"_vms\")"),
+        "`len` is the handle's length cell: {asm}"
+    );
+    assert!(asm.contains("__vm_text(1,"), "`text`: {asm}");
+    assert!(asm.contains("__vm_index(1, 1,"), "`index_of`: {asm}");
+    assert!(
+        asm.contains("operator_equals(data_itemoflist(2, \"_vms\"), 0)"),
+        "`is_empty` is a length test: {asm}"
+    );
+    assert!(!asm.contains("data_listcontents"), "{asm}");
 }
 
 #[test]
@@ -1985,13 +2194,8 @@ fn a_boolean_var_round_trips_through_its_cell() {
         }"#,
     );
     let asm = project.expand();
-    // The arena starts empty; the memory manager writes the declared `false`,
-    // which Scratch has no literal for, as the comparison that means it.
-    assert!(asm.contains("list _vms = [];"), "{asm}");
-    assert!(
-        asm.contains("data_replaceitemoflist(1, \"_vms\", operator_equals(1, 0))"),
-        "the declared `false`: {asm}"
-    );
+    // The declared `false` is the cell's own value.
+    assert!(asm.contains("list _vms = [false];"), "{asm}");
     // A write stores the block's value; a read turns it back into a block.
     assert!(
         asm.contains("data_replaceitemoflist(1, \"_vms\", operator_gt(1, 0))"),
@@ -2017,12 +2221,15 @@ fn a_let_can_hold_a_boolean() {
         }"#,
     );
     let asm = project.expand();
+    assert!(asm.contains("__vm_index(1, 2,"), "{asm}");
     assert!(
-        asm.contains("data_addtolist(data_listcontainsitem(\"xs\", 2), \"_stack1\")"),
-        "{asm}"
+        asm.contains(
+            "data_addtolist(operator_gt(data_itemoflist(1, \"_stack1\"), 0), \"_stack1\")"
+        ),
+        "the found flag is the index test: {asm}"
     );
     assert!(
-        asm.contains("control_if(operator_equals(data_itemoflist(1, \"_stack1\"), \"true\"))"),
+        asm.contains("control_if(operator_equals(data_itemoflist(2, \"_stack1\"), \"true\"))"),
         "{asm}"
     );
 }
@@ -2043,22 +2250,20 @@ fn a_list_of_booleans_round_trips() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("list flags = [];"), "{asm}");
+    assert!(!asm.contains("list flags ="), "{asm}");
+    assert!(asm.contains("__vh_push(1, operator_equals(1, 1))"), "{asm}");
+    assert!(asm.contains("__vh_push(1, operator_gt(2, 3))"), "{asm}");
     assert!(
-        asm.contains("data_addtolist(operator_equals(1, 1), \"flags\")"),
-        "{asm}"
-    );
-    assert!(
-        asm.contains("data_addtolist(operator_gt(2, 3), \"flags\")"),
-        "{asm}"
-    );
-    assert!(
-        asm.contains("data_itemoflist(1, \"flags\"), \"true\")"),
+        asm.contains("data_itemoflist(data_itemoflist(1, \"_heap\"), \"_heap\"), \"true\")"),
         "a stored item is turned back into a block: {asm}"
     );
     assert!(
-        asm.contains("data_itemoflist(data_lengthoflist(\"flags\"), \"flags\"), \"true\")"),
+        asm.contains("operator_subtract(data_itemoflist(2, \"_heap\"), 1)), \"_heap\"), \"true\")"),
         "`last` too: {asm}"
+    );
+    assert!(
+        asm.contains("__vh_index(1, operator_equals(1, 1),"),
+        "`contains` finds a stored boolean: {asm}"
     );
     let _ = project.build();
 }
@@ -2078,8 +2283,9 @@ fn a_map_can_hold_booleans() {
         }"#,
     );
     let asm = project.expand();
+    assert!(!asm.contains("list seen ="), "{asm}");
     assert!(
-        asm.contains("data_addtolist(operator_gt(1, 0), \"seen\")"),
+        asm.contains("__vh_push(1, operator_gt(1, 0))"),
         "the value is stored as it is: {asm}"
     );
     assert!(
@@ -2087,6 +2293,7 @@ fn a_map_can_hold_booleans() {
         "the guarded read: {asm}"
     );
     assert!(asm.contains(", \"true\"))"), "and converted back: {asm}");
+    assert!(asm.contains("__vh_index(1, \"b\","), "`has`: {asm}");
     let _ = project.build();
 }
 
@@ -2142,11 +2349,7 @@ fn a_struct_can_have_a_boolean_field() {
         }"#,
     );
     let asm = project.expand();
-    assert!(asm.contains("list _vms = [];"), "{asm}");
-    assert!(
-        asm.contains("data_replaceitemoflist(1, \"_vms\", 7)"),
-        "the frame starts from the declaration: {asm}"
-    );
+    assert!(asm.contains("list _vms = [7, true];"), "{asm}");
     assert!(
         asm.contains(
             "data_replaceitemoflist(2, \"_vms\", operator_gt(data_itemoflist(1, \"_vms\"), 5))"
@@ -2174,10 +2377,10 @@ fn a_project_wide_boolean_lives_in_the_stage_arena() {
             }"#,
         );
     let asm = project.expand();
-    assert!(asm.contains("global list _gvm = [];"), "{asm}");
+    assert!(asm.contains("global list _gvm = [true];"), "{asm}");
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"_gvm\", operator_equals(1, 1))"),
-        "the declared `true`: {asm}"
+        asm.contains("data_replaceitemoflist(1, \"_gvm\", operator_lt(1, 2))"),
+        "{asm}"
     );
     assert!(
         asm.contains("control_if(operator_equals(data_itemoflist(1, \"_gvm\"), \"true\"))"),
@@ -2343,11 +2546,16 @@ fn a_list_literal_becomes_one_item_per_value() {
             .unwrap_or_else(|| panic!("no list called {name}"))[1]
             .clone()
     };
-    assert_eq!(items_of("xs"), serde_json::json!([1, 2, 3]), "three items");
+    // Both lists are runs of `_vms`: a handle of `base, length, capacity`, then
+    // the items themselves. `xs` starts at cell 4 and `words` at cell 10.
     assert_eq!(
-        items_of("words"),
-        serde_json::json!(["a", "b"]),
-        "two string items"
+        items_of("_vms"),
+        serde_json::json!([4, 3, 3, 1, 2, 3, 10, 2, 2, "a", "b"]),
+        "the arena holds both runs"
+    );
+    assert!(
+        lists.values().all(|v| v[0] != "xs" && v[0] != "words"),
+        "neither list is a Scratch list: {lists:?}"
     );
 }
 
@@ -2508,11 +2716,11 @@ fn a_build_error_inside_generated_code_points_at_the_rav() {
     assert!(rendered.contains("generated raven-asm:"), "{rendered}");
 }
 
-/// A target whose only arena cells belong to procs still has to grow the
-/// arena before the first script reaches for one — the size is not known until
-/// every body has been lowered.
+/// A `proc`'s frame is a cell of the arena, and the arena is declared with one
+/// item for every cell the program can reach — a procedure's included, because
+/// the size is not known until every body has been lowered.
 #[test]
-fn a_script_grows_the_arena_before_it_uses_a_proc_frame() {
+fn a_proc_frame_is_a_cell_the_arena_already_has() {
     let project = Project::new("reserve-order").sprite(
         "A",
         r#"sprite "A" {
@@ -2531,8 +2739,12 @@ fn a_script_grows_the_arena_before_it_uses_a_proc_frame() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        script.contains("__vms_reserve;"),
-        "the reserve call comes first: {script}\n{asm}"
+        asm.contains("list _vms = [") && !asm.contains("list _vms = [];"),
+        "the arena is sized before any script runs: {asm}"
+    );
+    assert!(
+        !asm.contains("__vms_reserve"),
+        "and needs no grow pass: {asm}"
     );
     assert!(
         script.contains("\"_console\")"),
@@ -2566,7 +2778,7 @@ fn a_sprite_writing_a_watched_global_keeps_the_mirror_in_step() {
 
 /// `xs[i] = v` on a list that is shorter than `i` must not vanish: Scratch's
 /// `replace item` does nothing at all when there is no such item, so the write
-/// grows the list to reach it.
+/// grows the run to reach it.
 #[test]
 fn a_write_past_the_end_of_a_list_grows_it() {
     let project = Project::new("grow").sprite(
@@ -2581,15 +2793,19 @@ fn a_write_past_the_end_of_a_list_grows_it() {
     );
     let asm = project.expand();
     assert!(
-        asm.contains("data_addtolist(\"\", \"xs\")"),
-        "the list grows to the index: {asm}"
+        asm.contains("__vm_ensure(1, 3)"),
+        "the run grows to the index: {asm}"
     );
     assert!(
-        asm.contains("data_replaceitemoflist(3, \"xs\", 7)"),
+        asm.contains(
+            "data_replaceitemoflist(operator_add(data_itemoflist(1, \"_vms\"), 2), \"_vms\", 7)"
+        ),
         "and the write lands: {asm}"
     );
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"xs\", operator_add("),
+        asm.contains(
+            "data_replaceitemoflist(data_itemoflist(1, \"_vms\"), \"_vms\", operator_add("
+        ),
         "`+=` at an index grows it too: {asm}"
     );
     let _ = project.build();

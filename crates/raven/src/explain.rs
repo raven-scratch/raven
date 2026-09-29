@@ -201,15 +201,15 @@ fn costs() -> String {
 stmt                 blocks   note
 x = e                1        _stackN for a let, _vms for a var, _gvm for a pub var
 p.x = e              1        one cell at the field's constant offset
-l[i] = e             6        a grow to index i (5) then the replace (1)
+l[i] = e             2 + the shared ensure helper (a call, then the replace)
 x += e               3        read, operator, write
-l.push(e)            1        data_addtolist
-l.pop()              2        data_deleteoflist at (length of l)
-l.insert(i, e)       1
-l.remove(i)          1
-l.clear()            1
-m.set(k, v)          6 + cell
-m.remove(k)          5 + cell
+l.push(e)            1        a call to the shared push helper
+l.pop()              1        a call to the shared pop helper
+l.insert(i, e)       1        a call to the shared insert helper
+l.remove(i)          1        a call to the shared remove helper
+l.clear()            1        the length cell is set to zero
+m.set(k, v)          3 + the shared find helper
+m.remove(k)          3 + the shared find helper
 return e             2        arena cell write + control_stop(\"this script\")
 if / if-else         1
 repeat / repeat_until / forever  1
@@ -229,17 +229,20 @@ a == b               1
 a != b, a <= b, a >= b  2   Scratch has no not-equal, no <= and no >=
 a && b, a || b       1        both sides evaluated, always
 !a                   1
-l[i], l.at(i), l.first()     1
-l.last()             2        item (length of l) of l
-l.text()             1        data_listcontents
+l[i], l.at(i), l.first()     1 for the first item, 2 at a computed index
+l.last()             3        item (base + length - 1) of the run
+l.text()             1        a call to the shared text helper
 l.is_empty(), m.is_empty()   2
-m.has(k)             2
-m.len()              2
-m.get(k)             5 + 2 cells  (a guarded read; see docs/raven/lowering)
+l.contains(v), l.index_of(v) 1 call to the shared find helper
+m.has(k)             1 + the shared find helper
+m.len()              2        the length over two
+m.get(k)             2 + the shared find helper (a guarded read)
 f\"…\"                one operator_join per piece after the first
 num(x), str(x)       0        a retype, no block
 fn call              the body's blocks, inlined at the call site
 proc call with ->    the call, then a cell copy and a read (2)
+# The helper procedures above (__vm_*, __vh_*, __gm_*, __gh_*) are emitted once
+# per target that uses them, so a program with ten pushes still pays for one.
 "
     .to_string()
 }
@@ -264,6 +267,13 @@ fn types() -> String {
 # constant comparison <1 = 1>. A boolean may live in a cell, a list or a map.
 # A struct is a place: `let p: Point = Point { x: 0, y: 0 };` makes a frame of
 # cells, `p.x` reads one cell, and a struct cannot be copied or passed.
+# A list or a map is owned, like a struct: one name for the life of the program,
+# no copy and no move. `b = a;` is refused, a list cannot be a `proc` parameter
+# or a result, and a struct cannot be a field of one. Because an owned value has
+# one name, its storage is decided at compile time.
+# A menu Scratch marks acceptReporters is an input slot, so a computed string may
+# fill it: sensing::key_pressed(\"backspace\") works. A field menu (the key hat)
+# takes a variant and nothing else.
 "
     .to_string()
 }
@@ -274,19 +284,26 @@ fn memory() -> String {
 # A raven program declares no Scratch variable a program can name. Every value it
 # stores is a cell of a Scratch list, addressed by a constant index chosen at
 # compile time.
-#   _vms    one per target: its `var`s and every `proc` frame. Grown on demand by
-#           a generated `__vms_reserve` warp procedure.
+#   _vms    one per target: its `var`s, every `proc` frame, and every list or map
+#           that is only ever read or written in place. Declared with one item
+#           per cell, so a table costs nothing to start.
+#   _heap   one per target: the runs that grow. It is a list of its own because
+#           Scratch refuses to add to a list of 200,000 items, so a large table
+#           in `_vms` would stop every list from growing.
 #   _gvm    declared on the stage: every `pub var`, and every stage `var`.
+#   _gheap  declared on the stage: the project-wide runs that grow.
 #   _stackN one per script that keeps block-scoped state. A `let` outside a `proc`
 #           pushes onto it and the matching `data_deleteoflist` pops when the
 #           block ends. Numbering starts at _stack1.
 #   _console the log, declared only when something logs.
 # None of them exists unless used. A `watch` is the one place a real Scratch
-# variable is declared, and it exists to be displayed.
+# variable or list is declared, and it exists to be displayed.
 # Reading a cell is data_itemoflist; writing one is data_replaceitemoflist. A
 # `let` in a script is data_addtolist + data_deleteoflist, not a replace.
-# Lists and maps are Scratch lists: `list<T>` is one list, `map<K,V>` is one list
-# of alternating keys and values.
+# A `list<T>` or a `map<K,V>` is a run of cells: a handle of (base, length,
+# capacity) and the items after it, read and written at a computed index. A
+# `map` stores its entries as alternating keys and values, so its length is
+# twice its entry count.
 "
     .to_string()
 }

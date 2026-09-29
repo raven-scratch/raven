@@ -122,8 +122,8 @@ it to disk as a `.rasm` tree you can feed straight back to `raven-asm`.
 | Variables | `var` is sprite-local or project-wide, declared once, never shadowed |
 | Locals | `let`, `var`, a `for` counter and a `struct` field are all cells — on the script's `_stackN` outside a `proc`, in `_vms` inside one, or `_gvm` for a `pub var` — with lexical shadowing and no nameable Scratch variable anywhere |
 | Structs | `struct Point { x: num, y: num }` — a fixed frame of cells, a *place* rather than a value, so a field is one block at a constant offset |
-| Maps | `map<K, V>` — one Scratch list of alternating keys and values, with `get`, `set`, `has`, `remove`, `len` and `clear` |
-| Lists | `list<T>`, indexed with `l[i]`, with the whole Scratch list vocabulary |
+| Maps | `map<K, V>` — a run of alternating keys and values, with `get`, `set`, `has`, `remove`, `len` and `clear` |
+| Lists | `list<T>` — an owned run of cells, indexed with `l[i]`, with `push`, `pop`, `insert`, `remove`, `len`, `at`, `first`, `last`, `text`, `contains`, `index_of`, `is_empty` and `clear` |
 | Assets | SVG, PNG, JPG, BMP and GIF costumes; WAV and MP3 sounds |
 | Errors | Every diagnostic raven-asm has, plus macro expansion traces |
 

@@ -58,7 +58,55 @@ vm.start();
 console.log(`loaded in ${((Date.now() - started) / 1000).toFixed(1)} s`);
 
 const stage = vm.runtime.targets.find((t) => t.getName() === "Stage");
-const list = (name) => stage.lookupVariableByNameAndType(name, "list");
+
+// A raven `list` is a run of an arena, not a Scratch list with a name, so the
+// build writes down where each one is (`--debug` keeps `dist/layout.json`).
+// This reads a name through that layout, so the rest of the checker can go on
+// saying `list("board").value`.
+let layout;
+try {
+  layout = JSON.parse(readFileSync("examples/raven/chess/dist/layout.json", "utf8"));
+} catch {
+  console.error("no examples/raven/chess/dist/layout.json — build with --debug");
+  process.exit(1);
+}
+const globals = ["_gvm", "_gheap", "_console"];
+const list = (name) => {
+  const where = layout.find((entry) => entry.name === name);
+  if (!where) throw new Error(`the project has no list called ${name}`);
+  const owner = globals.includes(where.list)
+    ? stage
+    : vm.runtime.targets.find((t) => t.getName() === where.target);
+  const variable = owner.lookupVariableByNameAndType(where.list, "list");
+  if (where.handle === 0) return variable;
+  const arena = variable.value;
+  const handle = where.handle;
+  return {
+    get value() {
+      const base = Number(arena[handle - 1]);
+      const length = Number(arena[handle]);
+      return base === 0 || length === 0 ? [] : arena.slice(base - 1, base - 1 + length);
+    },
+    set value(next) {
+      if (next.length === 0) {
+        arena[handle] = 0;
+        return;
+      }
+      let base = Number(arena[handle - 1]);
+      const capacity = Number(arena[handle + 2]);
+      if (base === 0 || capacity < next.length) {
+        // The checker may put more in than the project ever would; the arena is
+        // an ordinary array here, so it grows in place.
+        base = arena.length + 1;
+        for (let i = 0; i < next.length; i += 1) arena.push("");
+        arena[handle - 1] = base;
+        arena[handle + 2] = next.length;
+      }
+      for (let i = 0; i < next.length; i += 1) arena[base - 1 + i] = next[i];
+      arena[handle] = next.length;
+    },
+  };
+};
 
 function press(key) {
   vm.runtime.startHats("event_whenkeypressed", { KEY_OPTION: key });

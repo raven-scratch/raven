@@ -162,6 +162,17 @@ pub fn domain(menu_id: &str) -> Domain {
     }
 }
 
+/// Whether Scratch lets a reporter stand in for this dropdown.
+///
+/// A menu that accepts reporters is an input slot: a value the project computes
+/// fills it, and the shadow menu block keeps a default behind it. A menu baked
+/// into the block as a field has no such slot, so its value is one of the
+/// fixed strings and nothing else.
+#[must_use]
+pub fn accepts_reporters(menu_id: &str) -> bool {
+    catalog::menu(menu_id).is_some_and(|spec| spec.accept_reporters)
+}
+
 /// The Scratch value a fixed name refers to, if it is one of the special targets.
 #[must_use]
 pub fn special_value(name: &str) -> Option<&'static str> {

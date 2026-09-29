@@ -137,6 +137,28 @@ pub fn build(options: &Options) -> Result<BuildResult> {
                 std::fs::create_dir_all(parent)?;
                 std::fs::write(parent.join("project.json"), pretty)?;
             }
+            // A built project carries no name for a `list`: it is a run of an
+            // arena. `layout.json` is where that run is, so a tool that has to
+            // read one by name can — the example checkers do.
+            let layout: Vec<serde_json::Value> = output
+                .layouts
+                .iter()
+                .map(|l| {
+                    serde_json::json!({
+                        "target": l.target,
+                        "name": l.name,
+                        "list": l.list,
+                        "handle": l.handle,
+                        "dynamic": l.dynamic,
+                        "scalar": l.scalar,
+                    })
+                })
+                .collect();
+            let text = serde_json::to_string_pretty(&layout)
+                .map_err(|e| Error::msg(format!("cannot serialize layout.json: {e}")))?;
+            if let Some(parent) = target_path.parent() {
+                std::fs::write(parent.join("layout.json"), text)?;
+            }
         }
     } else {
         // Take back what this build wrote, and the directory too when nothing

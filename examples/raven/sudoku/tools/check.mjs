@@ -22,7 +22,7 @@
  *
  * Then, from the repository root:
  *
- *   cargo run -p raven -- build -m examples/raven/sudoku/raven.toml
+ *   cargo run -p raven -- build -m examples/raven/sudoku/raven.toml --debug
  *   SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
  *
  * Environment:
@@ -172,22 +172,44 @@ async function main() {
   vm.start();
 
   const board = vm.runtime.targets.find((t) => t.getName() === 'Board');
+  // A raven `list` is a run of an arena rather than a Scratch list with a name,
+  // and a `pub var` is a cell of `_gvm` rather than a Scratch variable. The
+  // build (`--debug`) writes down where each one is, so a test can still read it
+  // by name.
+  let layout;
+  try {
+    layout = JSON.parse(readFileSync(join(root, 'dist', 'layout.json'), 'utf8'));
+  } catch {
+    console.error('no dist/layout.json — build the example with --debug');
+    process.exit(1);
+  }
+  const globals = ['_gvm', '_gheap', '_console'];
+  const owner = (where) =>
+    globals.includes(where.list)
+      ? vm.runtime.targets.find((t) => t.getName() === 'Stage')
+      : vm.runtime.targets.find((t) => t.getName() === where.target);
+  const cells = (where) => owner(where).lookupVariableByNameAndType(where.list, 'list').value;
+  const raw = (name) => {
+    const where = layout.find((l) => l.name === name && !l.scalar);
+    if (!where) return null;
+    const arena = cells(where);
+    if (where.handle === 0) return arena.slice();
+    const base = Number(arena[where.handle - 1]);
+    const length = Number(arena[where.handle]);
+    if (base === 0 || length === 0) return [];
+    return arena.slice(base - 1, base - 1 + length);
+  };
   const list = (name) => {
-    const variable = board.lookupVariableByNameAndType(name, 'list');
-    return variable ? variable.value.map(Number) : null;
+    const values = raw(name);
+    return values === null ? null : values.map(Number);
   };
-  // The stage declares the shared scalar cells in a known order, so the arena is
-  // the only way a test can see `state` and the try count: a `pub var` is a cell
-  // of `_gvm`, not a Scratch variable with a name.
-  const arena = () => {
-    const stage = vm.runtime.targets.find((t) => t.getName() === 'Stage');
-    const variable = stage.lookupVariableByNameAndType('_gvm', 'list');
-    return variable ? variable.value : [];
+  const cell = (name) => {
+    const where = layout.find((l) => l.name === name && l.scalar);
+    return where ? Number(cells(where)[where.handle - 1]) : undefined;
   };
-  const where = () => {
-    const [state, sel, clues, tries, mistakes] = arena();
-    return `state=${state} sel=${sel} clues=${clues} tries=${tries} mistakes=${mistakes}`;
-  };
+  const where = () =>
+    `state=${cell('state')} sel=${cell('sel')} clues=${cell('clues')} ` +
+    `tries=${cell('tries')} mistakes=${cell('mistakes')}`;
   const press = (key) => vm.runtime.startHats('event_whenkeypressed', { KEY_OPTION: key });
 
   // Every costume has to be 1:1 with its own viewBox, at the origin.
@@ -245,8 +267,7 @@ async function main() {
   // would simply come out as the wrong letters. This notices.
   const hud = vm.runtime.targets.find((t) => t.getName() === 'Hud');
   const costumes = hud.sprite.costumes.map((costume) => costume.name);
-  const alphabetVariable = hud.lookupVariableByNameAndType('alphabet', 'list');
-  const alphabet = alphabetVariable ? alphabetVariable.value.map(String) : [];
+  const alphabet = (raw('alphabet') || []).map(String);
   // A costume name is the character's, prefixed, and the four that cannot go in
   // a file name are spelled out. This mirrors `glyphName` in the generator, which
   // is what writes the files, so the two lists are checked against each other
@@ -561,7 +582,7 @@ async function main() {
     // The last entry sets the board's wave off and the card comes after it, so
     // wait for the card rather than stopping the threads that are about to show
     // it — stopping them leaves the game in play with nothing left to play.
-    const carded = await until(() => Number(arena()[0]) === 2, 30000);
+    const carded = await until(() => cell('state') === 2, 30000);
     check(
       carded,
       `the last entry never reached the win card (${where()}, ` +

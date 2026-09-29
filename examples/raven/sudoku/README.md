@@ -7,7 +7,7 @@ person would use — no guessing, ever.
 
 ```sh
 cargo run -p raven -- check -m examples/raven/sudoku/raven.toml
-cargo run -p raven -- build -m examples/raven/sudoku/raven.toml
+cargo run -p raven -- build -m examples/raven/sudoku/raven.toml --debug
 node examples/raven/sudoku/tools/assets.mjs    # regenerate the costumes
 node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
 ```

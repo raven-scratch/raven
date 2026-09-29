@@ -210,13 +210,16 @@ is the contract. It is implemented — `raven build` writes a working `.sb3`:
   memory is **dynamic**: a script's block-scoped cells live on its own stack
   (`_stack1`, `_stack2`, …), pushed when their declaration runs and popped when
   their block ends, while `var`s and procedure frames live in an arena (`_vms`,
-  or `_gvm` on the stage) that is declared empty and grown on demand. A program
-  cannot name a Scratch variable — the five blocks that do are refused with an
-  explanation — and the only Scratch variable a project gets is the mirror `watch`
-  asks for. A `struct` is a *place*:
-  a fixed frame of cells, so `line.to.x` is one block and cannot be copied. A
-  `map` is one list of alternating keys and values, reached through `get`, `set`,
-  `has` and `remove`.
+  or `_gvm` on the stage) declared with one item per cell. A program cannot name
+  a Scratch variable or list — the blocks that do are refused with an explanation
+  — and the only Scratch variable or list a project gets is the mirror `watch`
+  asks for. A `struct` is a *place*: a fixed frame of cells, so `line.to.x` is one
+  block and cannot be copied. A `list<T>` is an owned **run of cells** with a
+  handle, and a `map<K, V>` is the same run holding alternating keys and values;
+  a run that grows lives in `_heap` or `_gheap`, which is a list of its own so
+  that a large table cannot stop a growing list. Lists and maps are never copied
+  or passed — owned, like a `struct`, which is what lets their storage be decided
+  while compiling.
 * **`fn` and `macro`** — compile-time, hygienic, acyclic, and inlined at every
   call site, so they cost nothing at run time.
 * **Returning `proc`s** — `proc f(a: num) -> num { return a + 1; }`. `return` is
@@ -224,10 +227,10 @@ is the contract. It is implemented — `raven build` writes a working `.sb3`:
   the call site reads back.
 * **A typed standard library** — all 150 catalog blocks, namespaced and typed,
   with dropdowns as enum types and a totality test that fails the build when the
-  catalog gains a block the binding does not cover. Five of the 150 are bound only
-  to be refused — they are the name-a-Scratch-variable blocks — and each refusal
-  says what to write instead. An unambiguous block may also be called by its bare
-  name.
+  catalog gains a block the binding does not cover. The blocks that name a Scratch
+  variable or list are bound only to be refused — they are the layer raven
+  compiles *to* — and each refusal says what to write instead. An unambiguous
+  block may also be called by its bare name.
 * **A console and watches** — console::log(x) appends one line to _console,
   a Scratch list the stage declares only when something logs, and whose monitor
   the developer shows when wanted. watch score;

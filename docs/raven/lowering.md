@@ -38,8 +38,8 @@ sprite "Player" {
 ```
 
 **After expansion** (`raven expand`) the program is this raven-asm, and in the
-editor those are the same blocks — a hat, a `repeat` and an `if`, plus one small
-custom block that grows the arena:
+editor those are the same blocks — a hat, a `repeat` and an `if`, plus one arena
+list whose items are the cells the source declared:
 
 <div class="cmp">
 <div class="cmp-col">
@@ -47,25 +47,15 @@ custom block that grows the arena:
 
 ```rasm
 sprite "Player" {
-    list _vms = [];
+    list _vms = [0];
 
     event_whenflagclicked {
-        __vms_reserve;
         control_repeat(3) {
             motion_movesteps(10);
             data_replaceitemoflist(1, "_vms", operator_add(data_itemoflist(1, "_vms"), 1));
         }
         control_if(operator_gt(data_itemoflist(1, "_vms"), 2)) {
             looks_say(operator_join("done: ", data_itemoflist(1, "_vms")));
-        }
-    }
-
-    proc __vms_reserve() warp {
-        control_if(operator_lt(data_lengthoflist("_vms"), 1)) {
-            control_repeat_until(operator_not(operator_lt(data_lengthoflist("_vms"), 1))) {
-                data_addtolist("", "_vms");
-            }
-            data_replaceitemoflist(1, "_vms", 0);
         }
     }
 }
@@ -95,11 +85,11 @@ Two constructions cost something beyond a direct spelling:
 * `f"done: {score}"` is one `operator_join` per piece after the first — here, one
   join, because `score` is in the second slot.
 
-The arena is the third: `list _vms = [];` is declared **empty**, and the
-`__vms_reserve` call at the top of the hat grows it to the size the target needs
-the first time the script runs. That is why the number of blocks a program costs
-does not depend on how many cells it uses — the memory is asked for at run time
-rather than paid for at compile time.
+The arena is the third: `list _vms = [0];` carries the declared value `0` as its
+one item, so the cell is what the source said before any script runs, and no
+procedure has to put it there. `raven expand` prints the whole declaration,
+which is why the number of blocks a program costs does not depend on how many
+cells it uses — the cells are project data, not blocks.
 
 Nothing else was rewritten. `repeat` is `control_repeat`, `if` is `control_if`,
 `motion::move_steps` is `motion_movesteps`.
@@ -122,15 +112,15 @@ the construct adds *beyond* the code you wrote inside it.
 | `x = e;` where `x` is a `bool` | the same, storing the comparison's value | 1, and `<value = "true">` on every read |
 | `x += e;` | `data_replaceitemoflist(N, A, operator_add(data_itemoflist(N, A), e));` | 3 |
 | `x -= e;`, `x *= e;`, `x /= e;`, `x %= e;` | the same shape with `operator_subtract`, `operator_multiply`, `operator_divide`, `operator_mod` | 3 |
-| `l[i] = e;` | a grow to index `i` (an `if`, a `repeat_until` and a `data_addtolist`), then `data_replaceitemoflist(i, "l", e);` | 5 for the grow, 1 for the replace |
+| `l[i] = e;` | `__vm_ensure(h, i);` then `data_replaceitemoflist(base + i - 1, A, e);` | 2 at the call site, plus the shared ensure helper |
 | `p.x = e;` | `data_replaceitemoflist(N, "_vms", e);`, where `N` is the field's constant offset | 1 |
-| `l.push(e);` | `data_addtolist(e, "l");` | 1 |
-| `l.pop();` | `data_deleteoflist(data_lengthoflist("l"), "l");` | 2 |
-| `l.insert(i, e);` | `data_insertatlist(e, i, "l");` | 1 |
-| `l.remove(i);` | `data_deleteoflist(i, "l");` | 1 |
-| `l.clear();` | `data_deletealloflist("l");` | 1 |
-| `m.set(k, v);` | `item # of k in m` into a cell, then an `if`/`else` that replaces the pair or appends it | 6, and one cell |
-| `m.remove(k);` | the same lookup, then an `if` around two `data_deleteoflist` | 5, and one cell |
+| `l.push(e);` | `__vh_push(h, e);` — a call to the shared push helper | 1 |
+| `l.pop();` | `__vh_pop(h);` | 1 |
+| `l.insert(i, e);` | `__vh_insert(h, i, e);` | 1 |
+| `l.remove(i);` | `__vh_remove(h, i);` | 1 |
+| `l.clear();` | `data_replaceitemoflist(h + 1, A, 0);` — the length cell becomes zero | 1 |
+| `m.set(k, v);` | a find into a cell, then an `if`/`else` that replaces the pair or appends it | 3, plus the shared find helper |
+| `m.remove(k);` | the same find, then an `if` around two `__vh_remove` calls | 3, plus the shared find helper |
 | `return e;` | `data_replaceitemoflist(R, "_vms", e);` then `control_stop("this script");` | 2 |
 | `return;` | `control_stop("this script");` | 1 |
 | `if c { A }` | `control_if(c) { A }` | 1 |
@@ -187,16 +177,18 @@ block:
 | `a != b`, `a <= b`, `a >= b` | 2 each — Scratch has no `≠`, `≤`, `≥` |
 | `a && b`, `a \|\| b` | 1 each — and both operands are evaluated |
 | `!a` | 1 |
-| `l[i]` | 1 |
+| `l[i]` | 1 for `l[1]`, 2 at a computed index — the base read and the item read |
 | `p.x` where `p` is a struct | 1 — a cell read at a constant offset |
 | `seg.to.x` where `to` is a struct field | 1 — two offsets added at compile time |
-| `l.len()`, `l.at(i)`, `l.first()`, `l.contains(v)`, `l.index_of(v)` | 1 each |
-| `l.last()` | 2 — `item (length of l) of l` |
-| `l.text()` | 1 — `data_listcontents`, the whole list as one string |
+| `l.len()` | 1 — the handle's length cell |
+| `l.at(i)`, `l.first()` | 1 for the first item, 2 at a computed index |
+| `l.contains(v)`, `l.index_of(v)` | 1 — a call to the shared find helper |
+| `l.last()` | 3 — the base, the length and the item |
+| `l.text()` | 1 — a call to the shared text helper |
 | `l.is_empty()`, `m.is_empty()` | 2 |
-| `m.has(k)` | 2 — `item # of k in m` compared to zero |
-| `m.len()` | 2 — the list's length over two |
-| `m.get(k)` | 5 — two cells and a guarded read (see below) |
+| `m.has(k)` | 1, plus the shared find helper |
+| `m.len()` | 2 — the length over two |
+| `m.get(k)` | 2, plus the shared find helper (see below) |
 | `f"…{a}…{b}…"` | one `operator_join` per piece after the first |
 | `hypot(3, 4)` where `hypot` is an `fn` | however many blocks its body needs — here, four |
 | `f(x)` where `f` is a `proc` with a result type | the call, then a cell copy and a read — 2 blocks beyond the call itself |
@@ -222,11 +214,12 @@ A `proc` is emitted once per target that calls it, and only if it is called. A
 
 | raven | Effect in the project | Blocks |
 | --- | --- | --- |
-| `var x: num = 0;` | one cell of `_vms`, which the memory manager grows to fit | 0 |
+| `var x: num = 0;` | one cell of `_vms`, declared with its starting value as that cell's item | 0 |
 | `pub var x: num = 0;` | one cell of `_gvm`, the arena the stage declares | 0 |
-| `var l: list<num> = [];` | an entry in the target's `lists`, plus a list monitor | 0 |
+| `var l: list<num> = [];` | a run of `_vms`, or of `_heap` when it grows: a three-cell handle, then one cell per starting item | 0 |
 | `var p: Point = Point { x: 0, y: 0 };` | one cell per field, in declaration order, started from the literals | 0 |
-| the first arena cell a target uses | `_vms`, declared **empty**, plus the `warp` memory manager that grows it on demand | 0 |
+| the first arena cell a target uses | `_vms`, declared with one item per cell | 0 |
+| the first growable run a target uses | `_heap`, declared with the run's starting items | 0 |
 | the first block-scoped cell a script uses | `_stack<n>`, declared **empty**: it holds exactly the cells alive right now | 0 |
 | the first project-wide cell | one list, `_gvm`, declared on the stage | 0 |
 | `struct Point { x: num, y: num }` | *nothing* on its own — a shape, not storage | 0 |
@@ -246,26 +239,29 @@ block when it is read; see
 ### Where a cell is spent, and why a map is the expensive one
 
 A scalar costs one cell. A struct costs one per field, nested structs included,
-and every access to one is a single block.
+and every access to one is a single block. A list costs a three-cell handle plus
+one cell per starting item, and its items are as long as the highest index
+anything writes.
 
 A `map` is the one construct whose cost is not obvious. `set` and `remove` need
 the key's position twice — once to test it, once to use it — so it goes into a
-cell; `get` cannot simply be `item # of` and a read, because a missing key has
-position 0 and `item 1 of` a list is the first *key* at an even position, not its
-value. So `get` is a cell holding the position, a cell holding the answer, and a
-`control_if` that fills the second from the first when the position is not zero:
+cell; `get` cannot simply scan and read, because a missing key scans to 0 and
+item 0 of a run is nothing, not its value. The find is a shared `warp` procedure,
+`__vm_index` / `__vh_index`, that scans the run for a match and writes the
+1-based position or 0; `get` is a cell holding the answer and a `control_if` that
+fills it when the position is not zero:
 
 ```rasm
-data_replaceitemoflist(I, "_vms", data_itemnumoflist(k, "m"));
-data_replaceitemoflist(T, "_vms", "");
-control_if(operator_gt(data_itemoflist(I, "_vms"), 0)) {
-    data_replaceitemoflist(T, "_vms", data_itemoflist(operator_add(data_itemoflist(I, "_vms"), 1), "m"));
+__vh_index(h, k, 4);                       // the shared find, into cell 4
+data_replaceitemoflist(5, "_heap", "");
+control_if(operator_gt(data_itemoflist(4, "_heap"), 0)) {
+    data_replaceitemoflist(5, "_heap", data_itemoflist(operator_add(data_itemoflist(4, "_heap"), 1), "_heap"));
 }
 ```
 
-Five blocks for a lookup — plus the read that uses the answer — is the honest
-price of a table that is one Scratch list and two cells rather than a hidden
-dictionary.
+A helper is emitted once per target that needs it, so a program with ten lookups
+still pays for one `__vh_index`. The price of a table is the honest one: a run of
+cells and a scan, rather than a hidden dictionary.
 
 ## Reproducibility
 

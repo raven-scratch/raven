@@ -115,7 +115,7 @@ that check solves the puzzles the project deals with a solver written outside it
 node examples/raven/sudoku/tools/assets.mjs       # the costumes
 node examples/raven/sudoku/tools/sounds.mjs       # the loop and the effects
 cargo run -p raven -- check -m examples/raven/sudoku/raven.toml
-cargo run -p raven -- build -m examples/raven/sudoku/raven.toml
+cargo run -p raven -- build -m examples/raven/sudoku/raven.toml --debug
 SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
 node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
 ```
@@ -169,7 +169,7 @@ node examples/raven/chess/tools/assets.mjs         # the pieces (PNGs, through a
 python examples/raven/chess/tools/glyphs.py        # the font, one costume per character
 node examples/raven/chess/tools/sounds.mjs         # the effects
 cargo run -p raven -- check -m examples/raven/chess/raven.toml
-cargo run -p raven -- build -m examples/raven/chess/raven.toml
+cargo run -p raven -- build -m examples/raven/chess/raven.toml --debug
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/check.mjs
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/hud.mjs --svg examples/raven/chess/dist/hud
 ```

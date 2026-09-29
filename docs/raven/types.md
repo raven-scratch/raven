@@ -19,14 +19,14 @@ fits, how much storage it takes, and where it may be used at all.
 | `num` | round | a number | one cell |
 | `str` | round | text | one cell |
 | `bool` | **hexagonal** | a yes/no answer | one cell, one list item, one map value or one field |
-| `list<T>` | round | a Scratch list | a Scratch list |
-| `map<K, V>` | round | a key/value table | one Scratch list of alternating pairs |
+| `list<T>` | round | a run of cells | a run of an arena: `_vms` or `_heap` |
+| `map<K, V>` | round | a key/value table | a run of alternating keys and values |
 | `Point`, `Segment`, … | *not a value* | a declared `struct` | a run of cells |
 
 Where a cell lives depends on how long it has to live. A `let` in a script is on
 that script's **stack**, pushed when its declaration runs and popped when its
 block ends. A `var` — and a `proc`'s frame, which recursion shares — lives in the
-target's arena, which is grown on demand and never shrinks. See
+target's arena, which is declared with one item per cell. See
 [the memory system](/raven/design#the-stack-grows-and-shrinks).
 
 ## Booleans: stored as a value, converted on the way out
@@ -78,9 +78,9 @@ The three rows of that table behave differently, and the difference is the point
 
 * **`num`, `str`, `bool` are values.** They are copied. A binding holds one of
   them in one cell.
-* **`list<T>` and `map<K, V>` are containers.** They are Scratch lists, reached
-  through raven's checked methods — `xs.push(v)`, `m.get(k)` — and never through
-  a raw name.
+* **`list<T>` and `map<K, V>` are containers.** They are a run of cells in an
+  arena, reached through raven's checked methods — `xs.push(v)`, `m.get(k)` — and
+  never through a raw name.
 * **A `struct` is a place.** It is not a value at all: it cannot be assigned,
   compared, returned, or passed to a `proc`. `p.x` reads one cell at a constant
   offset, `p.x = e` writes one cell, and `seg.to.x` adds two compile-time offsets
@@ -88,7 +88,8 @@ The three rows of that table behave differently, and the difference is the point
 
 That last rule is what removes a whole class of questions. A struct has no
 identity beyond its cells, so there is no copy to make, no aliasing to worry
-about, and no lifetime to track.
+about, and no lifetime to track. A container is owned in the same way: it belongs
+to the declaration that named it. See [ownership](#ownership).
 
 ```rav
 var name: str = "player";
@@ -99,6 +100,47 @@ score = score + name;         // error: `name` is str, `+` needs num
 score = score + num(name);    // explicit, and free
 looks::say(f"{name}: {score}"); // fine
 ```
+
+## Ownership
+
+raven has an ownership model, and it is the strict one. Every value is either
+**copyable** or **owned**:
+
+| | Copyable | Owned |
+| --- | --- | --- |
+| Types | `num`, `str`, `bool` | `list<T>`, `map<K, V>`, a `struct` |
+| Assignment | copies the value | the type cannot be assigned at all |
+| Passing | by value | the type cannot be passed |
+| Returning | by value | the type cannot be returned |
+
+An owned value belongs to the declaration that named it, for the life of the
+program. It is never copied — there is no way to write a second name for the same
+run — and it is never moved either. `let a = b;` and `a = b;` are refused with
+"which is not one value", and a list or a map cannot be a `proc` parameter or a
+result.
+
+That is one step **stricter** than Rust, which allows a move, and it is
+deliberate. The two languages have the same problem — storage must have exactly
+one owner at a time — and they answer it differently because their targets are
+different. Rust's compiler can move a value because it is compiling to a machine
+where a move is a few instructions and the storage follows the binding. raven
+compiles to Scratch, where a complex value is a run of cells at a **constant
+index** — that is what makes `p.x` one block and `xs[i]` an index the compiler
+computed — and where the call interface is a custom block whose parameters are
+scalars. A move would have to relocate the run and copy a handle through a
+parameter the target does not have, and the constant index would become a cell
+read on every access. Forbidding the move buys the constant index back.
+
+What raven gets from ownership is exactly what it needs for the memory system:
+because an owned value has one name and no copies, its storage is decided while
+compiling. A `let` inside a `proc` is one cell, shared by every call — which is
+why a `let` inside a *recursive* `proc` is refused rather than quietly sharing a
+level's value — and a `list` is a run whose handle the compiler placed once.
+
+The rule is enforced where a value is read, not where it is declared:
+`no_value_for` says which type it is and what to write instead. There is no
+`&x`, no borrow, and no lifetime, because there is nothing to borrow: a value
+that cannot be copied cannot be lent.
 
 ## Shapes: where a value may go
 
@@ -158,16 +200,16 @@ A variable is declared once, at target scope, with a type and an initial value:
 
 ```rav
 var score: num = 0;              // one cell of the target's `_vms`
-var trail: list<num> = [];       // a Scratch list
-var totals: map<str, num> = [];  // a Scratch list of key/value pairs
+var trail: list<num> = [];       // a run of `_vms`, or of `_heap` if it grows
+var totals: map<str, num> = [];  // a run of alternating keys and values
 pub var best: num = 0;           // one cell of the project's `_gvm`
 ```
 
 * Without `pub`, the variable belongs to the file's target. In a stage file that
   makes it project-wide, because the stage's variables always are.
 * With `pub`, a **scalar** goes into `_gvm`, the arena the stage declares, so it
-  has exactly one cell for the whole project. A `pub` list or map is a Scratch
-  list on the stage.
+  has exactly one cell for the whole project. A `pub` list or map is a run of
+  `_gvm`, or of `_gheap` when it grows.
 * There is **no shadowing between `var`s**: a sprite-local variable may not share
   a name with a project-wide one. raven rejects it rather than quietly choosing.
 * A `var` is never block-local. It is visible to every script in its target,
@@ -202,23 +244,25 @@ down when a project wants an exact spot.
 
 ## Lists
 
-A list is the one container Scratch gives blocks to drive an item at a time, so a
-`list<T>` is a Scratch list — reached through raven's checked methods rather than
-by naming it at run time.
+A `list<T>` is a **run of cells** in one of the virtual memory system's arenas,
+reached through raven's checked methods rather than by naming it at run time. The
+run starts with a handle — the cell its items begin at, its length, and its
+capacity — and the items follow. A read or a write is `item (base + i - 1) of`
+the arena.
 
 ```rav
 var trail: list<num> = [];
 
 trail.push(5);
 trail.insert(1, 9);
-trail[1] = 100;                        // data::replace_item_of_list
-let lead = trail[1];                   // data::item_of_list
-let same = trail.at(1);                // the same block
+trail[1] = 100;
+let lead = trail[1];
+let same = trail.at(1);
 let count = trail.len();
 let where = trail.index_of(5);         // 1-based, or 0 when it is not there
-let first = trail.first();             // item 1
-let last = trail.last();               // item (length of trail)
-let whole = trail.text();              // the whole list, one block
+let first = trail.first();
+let last = trail.last();
+let whole = trail.text();              // the whole list as one string
 trail.remove(1);
 trail.pop();
 if trail.contains(5) { }
@@ -226,34 +270,42 @@ if trail.is_empty() { }                // length == 0
 trail.clear();
 ```
 
-`trail[i]` and `trail[i] = v` are sugar for the same two blocks; both spellings
-emit exactly one block. The `data::` functions work too — `data::add_to_list(5, trail)`
-is `trail.push(5)` — and both resolve the list against the target's declarations,
-so neither can name a list the program did not declare.
+The `data::` blocks are refused: `data::add_to_list(5, trail)` is not available,
+and `trail.push(5)` is. A raw Scratch list block takes a *list's name*, and a
+raven list has no name to give it.
 
 List indexes are `1`-based, as in Scratch, and are not checked at compile time —
-raven cannot know a list's length. An out-of-range read is `""`, and an
-out-of-range write is ignored, both of which the runtime documents.
+raven cannot know a list's length. An out-of-range read is `""`; writing past the
+end grows the run to the index, so a list is exactly as long as the highest index
+anything has written to it.
+
+A run whose initializer is empty, or that is only ever written in place, lives in
+the fixed arena `_vms`. A run that is *pushed* or *inserted* into lives in
+`_heap`, which is a list of its own: Scratch refuses to add to a list of 200,000
+items, so a large table in `_vms` would stop every list in the program from
+growing. Which is which is decided while compiling, and the project never carries
+the name — a list is a run, not a Scratch list. See
+[the memory system](/raven/design#the-arenas-are-declared-not-grown).
 
 ## Maps
 
-A `map<K, V>` is one Scratch list holding the pairs `k0, v0, k1, v1, …`, so it
-needs no machinery beyond the list blocks:
+A `map<K, V>` is a run holding the pairs `k0, v0, k1, v1, …`, so it needs no
+machinery beyond the run and a lookup:
 
 ```rav
 var totals: map<str, num> = [];
 
-totals.set("runs", 3);      // an `item # of` lookup, then a replace or an append
+totals.set("runs", 3);      // a find, then a replace or an append
 let runs = totals.get("runs");
 let known = totals.has("runs");
 totals.remove("runs");
-let n = totals.len();       // the list's length over two
+let n = totals.len();       // half the run's length
 if totals.is_empty() { }
 totals.clear();
 ```
 
-Keys and values are scalars. `get` on a missing key is `""`: a missing key has
-position 0, and `item 1 of` a list is its first *key*, so the read is guarded
+Keys and values are scalars. `get` on a missing key is `""`: the lookup returns
+0 when the key is absent, and item 0 of a run is nothing, so the read is guarded
 rather than trusting the lookup.
 
 ## Structs
@@ -397,8 +449,9 @@ cell. Bind a value you want to sample once, and pass a pure expression to a macr
 
 Scratch's `replace item` does nothing at all when the list is shorter than the
 index, which would make `xs[i] = v` a silent no-op on a fresh list. raven grows
-the list to the index first, so a list is exactly as long as the highest index
-anything has written to it:
+the run to the index first — the shared `__vm_ensure` / `__vh_ensure` helper does
+it — so a list is exactly as long as the highest index anything has written to
+it:
 
 ```rav
 var xs: list<num> = [];
@@ -406,5 +459,6 @@ xs[3] = 7;      // three items: "", "", 7
 xs[1] += 5;     // the first of them is now 5
 ```
 
-That is one `if` and one `repeat until` around the write. Reading past the end
-is still the empty string, as it is in Scratch; only writing grows the list.
+Reading past the end is still the empty string, as it is in Scratch; only writing
+grows the list. Writing past the 200,000th item cannot grow anything: Scratch
+refuses the block that would, and that is a limit of the target, not of raven.

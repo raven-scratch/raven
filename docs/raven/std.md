@@ -37,6 +37,27 @@ pen::set_pen_size_to(3);
 music::play_drum_for_beats(Drum::Snare, 0.25);
 ```
 
+### A menu that accepts a reporter
+
+Scratch marks some dropdowns `acceptReporters`: the value is an **input**, so a
+block the program computed may fill it. raven follows the catalog there and
+nowhere else, so the rule is the target's own:
+
+```rav
+if sensing::key_pressed("backspace") { }   // any string
+if sensing::key_pressed("") { }             // the empty string is a key too
+if sensing::key_pressed(f"arrow {dir}") { } // and so is a join
+if sensing::key_pressed(Key::Space) { }     // a fixed value stays the dropdown
+```
+
+A literal that is not one of the menu's own values is emitted as a one-block
+`join(value, "")`, because a constant has to arrive where Scratch expects a
+block; a value the program computed is already one. The **hat** is the
+difference to remember: `on key_pressed(Key::Space)` is a *field* baked into the
+block, with no slot for a reporter, so it takes a `Key` variant and nothing else.
+The hat also fires on a mouse-wheel scroll, which Scratch reports as an up or
+down arrow; the boolean never sees one.
+
 ## The console
 
 `console` is not a Scratch block and not in the catalog: it is three functions
@@ -137,15 +158,17 @@ spelling.
 | `data_changevariableby` | *refused* — `score += 1;` |
 | `data_showvariable` | *refused* — a cell has no monitor |
 | `data_hidevariable` | *refused* — a cell has no monitor |
-| `data_itemoflist` | `trail[i]` or `trail.at(i)` (or `data::item_of_list(i, trail)`) |
-| `data_replaceitemoflist` | `trail[i] = v;` (or `data::replace_item_of_list(i, trail, v)`) |
-| `data_addtolist` | `trail.push(v)` |
-| `data_insertatlist` | `trail.insert(i, v)` |
-| `data_deleteoflist` | `trail.remove(i)` |
-| `data_deletealloflist` | `trail.clear()` |
-| `data_lengthoflist` | `trail.len()` |
-| `data_listcontainsitem` | `trail.contains(v)` |
-| `data_itemnumoflist` | `trail.index_of(v)` |
+| `data_itemoflist` | *refused* — `trail[i]` or `trail.at(i)` |
+| `data_replaceitemoflist` | *refused* — `trail[i] = v;` |
+| `data_addtolist` | *refused* — `trail.push(v)` |
+| `data_insertatlist` | *refused* — `trail.insert(i, v)` |
+| `data_deleteoflist` | *refused* — `trail.remove(i)` |
+| `data_deletealloflist` | *refused* — `trail.clear()` |
+| `data_lengthoflist` | *refused* — `trail.len()` |
+| `data_listcontainsitem` | *refused* — `trail.contains(v)` |
+| `data_itemnumoflist` | *refused* — `trail.index_of(v)` |
+| `data_listcontents` | *refused* — `trail.text()` |
+| `data_showlist`, `data_hidelist` | *refused* — a run has no monitor; `watch trail;` shows one |
 | `control_repeat` | `repeat n { … }` |
 | `control_forever` | `forever { … }` |
 | `control_if`, `control_if_else` | `if c { … }`, `if c { … } else { … }` |
@@ -165,10 +188,9 @@ has no such blocks, so `raven check` reports them as warnings and `--strict`
 refuses them. The prelude's `for` and a list's methods are the portable way to
 count.
 
-### The five refused blocks
+### The refused blocks
 
-`data_variable`, `data_setvariableto`, `data_changevariableby`,
-`data_showvariable` and `data_hidevariable` are in the catalog and in raven's
+The five variable blocks and every list block are in the catalog and in raven's
 binding table, and calling one is an error that says why:
 
 ```text
@@ -177,6 +199,10 @@ error: `data::set_variable_to` is not available in raven
   = note: raw Scratch variables and lists are the layer raven compiles *to*,
           not the layer a program writes
 ```
+
+A list block is refused for the same reason: it takes a **list's name**, and a
+raven `list` is a run of cells with no name to give it. `data::add_to_list(v,
+trail)` says `write `trail.push(v)``.
 
 They are the name-at-run-time interface, and raven's whole claim is that a
 program cannot reach it: a raven project declares no Scratch variable a program can

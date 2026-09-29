@@ -149,16 +149,6 @@ const fn cmd(module: &'static str, name: &'static str) -> Binding {
     }
 }
 
-const fn cmd_s(module: &'static str, name: &'static str, shorthand: &'static str) -> Binding {
-    Binding::Function {
-        module,
-        name,
-        shorthand: Some(shorthand),
-        result: None,
-        body: false,
-    }
-}
-
 const fn cmd_body(module: &'static str, name: &'static str) -> Binding {
     Binding::Function {
         module,
@@ -174,21 +164,6 @@ const fn val(module: &'static str, name: &'static str, result: Value) -> Binding
         module,
         name,
         shorthand: None,
-        result: Some(result),
-        body: false,
-    }
-}
-
-const fn val_s(
-    module: &'static str,
-    name: &'static str,
-    result: Value,
-    shorthand: &'static str,
-) -> Binding {
-    Binding::Function {
-        module,
-        name,
-        shorthand: Some(shorthand),
         result: Some(result),
         body: false,
     }
@@ -425,36 +400,60 @@ pub static BINDINGS: &[Row] = &[
             "a VMS cell has no monitor; use a `list` if you want one on screen",
         ),
     ),
+    // A list is a run of the virtual memory system now, not a Scratch list, so
+    // there is no name for these blocks to take. Every one of them is a method.
     row(
         "data_listcontents",
-        val("data", "contents_of_list", Value::Str),
+        no(
+            "data",
+            "contents_of_list",
+            "a list is a run of the VMS; write `xs.text()`",
+        ),
     ),
-    row("data_addtolist", cmd("data", "add_to_list")),
-    row("data_deleteoflist", cmd("data", "delete_of_list")),
-    row("data_deletealloflist", cmd("data", "delete_all_of_list")),
-    row("data_insertatlist", cmd("data", "insert_at_list")),
+    row(
+        "data_addtolist",
+        no("data", "add_to_list", "write `xs.push(v)`"),
+    ),
+    row(
+        "data_deleteoflist",
+        no("data", "delete_of_list", "write `xs.remove(i)`"),
+    ),
+    row(
+        "data_deletealloflist",
+        no("data", "delete_all_of_list", "write `xs.clear()`"),
+    ),
+    row(
+        "data_insertatlist",
+        no("data", "insert_at_list", "write `xs.insert(i, v)`"),
+    ),
     row(
         "data_replaceitemoflist",
-        cmd_s("data", "replace_item_of_list", "l[i] = e;"),
+        no("data", "replace_item_of_list", "write `xs[i] = v`"),
     ),
     row(
         "data_itemoflist",
-        val_s("data", "item_of_list", Value::ListElement, "l[i]"),
+        no("data", "item_of_list", "write `xs[i]`"),
     ),
     row(
         "data_itemnumoflist",
-        val("data", "item_num_of_list", Value::Num),
+        no("data", "item_num_of_list", "write `xs.index_of(v)`"),
     ),
     row(
         "data_lengthoflist",
-        val("data", "length_of_list", Value::Num),
+        no("data", "length_of_list", "write `xs.len()`"),
     ),
     row(
         "data_listcontainsitem",
-        val("data", "list_contains_item", Value::Bool),
+        no("data", "list_contains_item", "write `xs.contains(v)`"),
     ),
-    row("data_showlist", cmd("data", "show_list")),
-    row("data_hidelist", cmd("data", "hide_list")),
+    row(
+        "data_showlist",
+        no("data", "show_list", "a list is a run of the VMS and has no monitor; `watch xs;` shows a mirror"),
+    ),
+    row(
+        "data_hidelist",
+        no("data", "hide_list", "a list is a run of the VMS and has no monitor"),
+    ),
     // --------------------------------------------------------- My Blocks --
     row(
         "argument_reporter_string_number",
@@ -693,7 +692,7 @@ mod tests {
         assert_eq!(binding("control_if").unwrap().describe(), "if c { … }");
         assert_eq!(
             binding("data_replaceitemoflist").unwrap().spelling(),
-            "l[i] = e;"
+            "data::replace_item_of_list"
         );
         assert_eq!(
             binding("event_whenflagclicked").unwrap().describe(),
@@ -701,9 +700,10 @@ mod tests {
         );
     }
 
-    /// The five blocks that name a Scratch variable are reached by raven and
+    /// The blocks that name a Scratch variable or list are reached by raven and
     /// refused by it: the language's claim is that a program cannot use the raw
-    /// name-and-value interface at all.
+    /// name-and-value interface at all. A `list` is a run of the arena now, and
+    /// every one of these blocks is a method.
     #[test]
     fn the_raw_variable_blocks_are_refused_with_a_reason() {
         for opcode in [
@@ -712,6 +712,18 @@ mod tests {
             "data_changevariableby",
             "data_showvariable",
             "data_hidevariable",
+            "data_listcontents",
+            "data_addtolist",
+            "data_deleteoflist",
+            "data_deletealloflist",
+            "data_insertatlist",
+            "data_replaceitemoflist",
+            "data_itemoflist",
+            "data_itemnumoflist",
+            "data_lengthoflist",
+            "data_listcontainsitem",
+            "data_showlist",
+            "data_hidelist",
         ] {
             let binding = binding(opcode).unwrap_or_else(|| panic!("`{opcode}` has no row"));
             let why = binding.forbidden().unwrap_or_else(|| {
@@ -726,10 +738,5 @@ mod tests {
                 "does not resolve back"
             );
         }
-        assert_eq!(
-            binding("data_addtolist").unwrap().forbidden(),
-            None,
-            "a list is a Scratch list, and its blocks are how a program uses one"
-        );
     }
 }

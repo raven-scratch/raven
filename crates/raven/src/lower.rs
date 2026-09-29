@@ -63,10 +63,36 @@ const VMS: &str = "_vms";
 /// The name of the project-wide list the stage declares for global state.
 const GLOBAL_VM: &str = "_gvm";
 
-/// The memory manager's two procedures: `warp` blocks that grow an arena to
-/// what the program can use and put the declared starting values in place.
-const RESERVE_VMS: &str = "__vms_reserve";
-const RESERVE_GVM: &str = "__gvm_reserve";
+/// The per-target list a *growing* run lives in.
+///
+/// Scratch refuses to add to a list that already holds 200,000 items, so the
+/// fixed arena may not also be the heap: a program with a large table declared
+/// in `_vms` could never grow a list again. The heap therefore holds only the
+/// runs that grow, and stays small.
+const HEAP: &str = "_heap";
+
+/// The project-wide heap, declared on the stage beside `_gvm`.
+const GLOBAL_HEAP: &str = "_gheap";
+
+/// Cells one `list` or `map` handle occupies, in order: the 1-based cell the
+/// items start at, how many items there are, and how many cells are allocated.
+///
+/// A complex value is not a cell; it is a **run** of the arena, and the run is
+/// the program's own to grow. Reading the handle's cells is how a method finds
+/// the run, and it is why the arena can hold a list whose length only the run
+/// knows.
+const HANDLE: usize = 3;
+/// The cell the run starts at — or `0` when nothing is allocated yet.
+const H_BASE: usize = 0;
+/// How many items the run holds. A map counts two cells per entry.
+const H_LEN: usize = 1;
+/// How many cells the run has. Growing doubles it.
+const H_CAP: usize = 2;
+
+/// How many cells the project arena keeps for the global helpers' own
+/// temporaries. Every target that touches `_gvm` uses the same pool because
+/// `_gvm` is one list shared by the whole project.
+const GLOBAL_HELPER_CELLS: usize = 24;
 
 /// The name of the console list: every log line is one item of it.
 const CONSOLE: &str = "_console";
@@ -95,24 +121,135 @@ const MAX_EXPANSION_DEPTH: usize = 32;
 pub struct Output {
     pub files: Vec<rasm::File>,
     pub warnings: Vec<Diag>,
+    /// Where each complex value's run ended up, for `--debug` and for the
+    /// example checkers that have to read a name the project does not carry.
+    pub layouts: Vec<Layout>,
+}
+
+/// Where one name lives in a built project.
+#[derive(Clone, Debug)]
+pub struct Layout {
+    /// The target the name belongs to.
+    pub target: String,
+    /// The raven name.
+    pub name: String,
+    /// The Scratch list its cells are in, or its own name when a `watch` asked
+    /// for a real list.
+    pub list: String,
+    /// The 1-based cell of its handle, its own cell for a scalar, or `0` for a
+    /// watched list.
+    pub handle: usize,
+    /// Whether the run is the growable one.
+    pub dynamic: bool,
+    /// A scalar cell rather than a list.
+    pub scalar: bool,
 }
 
 /// Compile every target.
 pub fn compile(program: &Program) -> Result<Output> {
-    let globals = Globals::collect(program)?;
     let prelude = Prelude::load()?;
+    let mutations = mutated_lists(program);
+    let globals = Globals::collect(program, &mutations)?;
     let mut files = Vec::new();
     let mut warnings = Vec::new();
+    let mut layouts = Vec::new();
     for plan in &program.targets {
-        let mut unit = Unit::new(program, plan, &globals, &prelude)?;
+        let mut unit = Unit::new(program, plan, &globals, &prelude, mutations.clone())?;
         let mut file = unit.run()?;
         if plan.kind == ast::TargetKind::Stage {
             unit.emit_globals(&mut file);
         }
         warnings.extend(unit.warnings.iter().cloned());
+        layouts.extend(unit.layouts());
         files.push(file);
     }
-    Ok(Output { files, warnings })
+    Ok(Output {
+        files,
+        warnings,
+        layouts,
+    })
+}
+
+/// Which lists a program pushes to or inserts into.
+///
+/// A list whose run never grows is a *table*: its items can sit in the fixed
+/// arena, where a literal initializer costs nothing at run time and may be as
+/// long as `project.json` allows. A run that grows cannot live there: Scratch
+/// refuses to add to a list of 200,000 items, so one large table would stop
+/// every list in the program from growing. Growing is what `push`, `insert` and
+/// a map's `set` do — an index write only replaces an item that is already
+/// there, or grows a small arena — so those three are the whole question.
+///
+/// The answer is read from the source, and it is exact: a mutating method is a
+/// *statement*, and the parser builds one only with a single declared name as
+/// its receiver, so a macro cannot push to a list it was handed. The block
+/// parameters it can take are scanned where they are written.
+fn mutated_lists(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for plan in &program.targets {
+        scan_items(&items_of(&plan.main), &mut names);
+    }
+    for unit in program.modules() {
+        scan_items(&items_of(unit), &mut names);
+    }
+    names
+}
+
+fn scan_items(items: &[Item], names: &mut HashSet<String>) {
+    for item in items {
+        match item {
+            Item::Script(script) => scan_stmts(&script.body, names),
+            Item::Proc(decl) => scan_stmts(&decl.body, names),
+            Item::Macro(decl) => {
+                if let MacroBody::Stmts(stmts) = &decl.body {
+                    scan_stmts(stmts, names);
+                }
+            }
+            Item::Target(target) => scan_items(&target.items, names),
+            _ => {}
+        }
+    }
+}
+
+fn scan_stmts(stmts: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Method(call) => {
+                if matches!(call.name.name.as_str(), "push" | "insert" | "set") {
+                    if let Expr::Name(path) = &call.receiver {
+                        if path.is_single() {
+                            names.insert(path.last().name.clone());
+                        }
+                    }
+                }
+            }
+            Stmt::If(stmt) => {
+                scan_stmts(&stmt.then_branch, names);
+                if let Some(otherwise) = &stmt.else_branch {
+                    scan_stmts(otherwise, names);
+                }
+            }
+            Stmt::Loop(stmt) => scan_stmts(&stmt.body, names),
+            Stmt::Match(stmt) => {
+                for arm in &stmt.arms {
+                    scan_stmts(&arm.body, names);
+                }
+            }
+            Stmt::Call(call) => {
+                if let Some(body) = &call.body {
+                    scan_stmts(body, names);
+                }
+            }
+            Stmt::Macro(call) => {
+                for arg in &call.args {
+                    if let MacroArg::Block(block) = arg {
+                        scan_stmts(block, names);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,20 +273,29 @@ struct VarInfo {
     items: Vec<rasm::Literal>,
     /// A list, as opposed to a scalar variable.
     is_list: bool,
+    /// `true` when the list is a real Scratch list rather than a run of the
+    /// arena. That happens exactly when a `watch` asks to see it on the stage.
+    scratch: bool,
+    /// `true` when the list's run may grow. A run that grows lives in the heap,
+    /// which is a list of its own so a large fixed table cannot stop it.
+    dynamic: bool,
     /// `true` when a list was declared `[]` rather than with items.
     declared_empty: bool,
     /// `true` when the variable belongs to the stage.
     global: bool,
-    /// The cell a scalar lives in, 1-based. Zero for a list.
+    /// The cell a scalar lives in, or the first cell of a list's handle, 1-based.
     cell: usize,
     /// Where the declaration is, so generated raven-asm can point back at it.
     pos: Pos,
 }
 
 impl VarInfo {
-    /// The Scratch list a raven `list<T>` is backed by.
+    /// The Scratch list a watched `list<T>` is backed by.
+    ///
+    /// A list no `watch` asked for is a run of the arena and has no Scratch
+    /// list at all, so this is `None` for it.
     fn as_list_item(&self) -> Option<rasm::Item> {
-        if !self.is_list {
+        if !self.is_list || !self.scratch {
             return None;
         }
         // A list declared `[]` starts empty; one with items starts with them.
@@ -160,7 +306,7 @@ impl VarInfo {
         };
         Some(rasm::Item::List(rasm::ListDecl {
             global: self.global,
-            visible: false,
+            visible: true,
             monitor: rasm::MonitorSpec::default(),
             name: self.name.clone(),
             init,
@@ -181,6 +327,24 @@ pub struct Globals {
     console: bool,
     /// How many cells the project-wide arena, [`GLOBAL_VM`], holds.
     arena: usize,
+    /// The value each project-wide cell starts with, by cell index - 1.
+    cell_init: Vec<Option<rasm::Literal>>,
+    /// How many cells the project-wide heap, [`GLOBAL_HEAP`], holds.
+    heap: usize,
+    /// The starting value of each cell of the heap.
+    heap_init: Vec<Option<rasm::Literal>>,
+    /// Whether any project-wide list needs the fixed-arena helpers.
+    complex: bool,
+    /// Whether any project-wide list needs the heap helpers.
+    grows: bool,
+    /// The first cell of the fixed arena's helper pool, or `0`.
+    temps_fixed: usize,
+    /// The first cell of the heap's helper pool, or `0`.
+    temps_heap: usize,
+    /// The cell a `_gvm` helper writes its answer into.
+    out_fixed: usize,
+    /// The cell a `_gheap` helper writes its answer into.
+    out_heap: usize,
     broadcasts: Vec<String>,
     stage_costumes: Vec<String>,
     stage_sounds: Vec<String>,
@@ -188,9 +352,22 @@ pub struct Globals {
 }
 
 impl Globals {
-    fn collect(program: &Program) -> Result<Self> {
+    fn collect(program: &Program, mutates: &HashSet<String>) -> Result<Self> {
         let mut globals = Globals::default();
         let mut seen: HashMap<String, PathBuf> = HashMap::new();
+
+        // Every `watch` first: a `var` declared above its `watch` is still a
+        // watched list, and that decides whether it is a Scratch list at all.
+        for plan in &program.targets {
+            for name in watch_names(&plan.main) {
+                globals.watches.insert(name);
+            }
+        }
+        for unit in program.modules() {
+            for name in watch_names(unit) {
+                globals.watches.insert(name);
+            }
+        }
 
         let mut visit = |unit: &FileUnit, globals: &mut Globals| -> Result<()> {
             let is_stage = unit
@@ -231,11 +408,34 @@ impl Globals {
                                     .note("declare it inside the `sprite` or `stage` block, without `pub`"),
                             ));
                         }
-                        if !info.is_list {
+                        if info.is_list {
+                            if globals.watches.contains(&var.name.name) {
+                                // A watched list is a real Scratch list: it is
+                                // the one thing that can carry a monitor.
+                                info.scratch = true;
+                            } else if mutates.contains(&var.name.name) {
+                                // A run that may grow lives in the heap.
+                                info.dynamic = true;
+                                info.cell = lay_out_complex(
+                                    &mut globals.heap,
+                                    &mut globals.heap_init,
+                                    &info.items,
+                                );
+                                globals.grows = true;
+                            } else {
+                                info.cell = lay_out_complex(
+                                    &mut globals.arena,
+                                    &mut globals.cell_init,
+                                    &info.items,
+                                );
+                                globals.complex = true;
+                            }
+                        } else {
                             // A project-wide scalar is a cell in the project's
                             // arena; the index is the same in every target.
                             globals.arena += 1;
                             info.cell = globals.arena;
+                            set_cell_init(&mut globals.cell_init, info.cell, info.init.clone());
                         }
                         globals.vars.push(info);
                     }
@@ -269,6 +469,19 @@ impl Globals {
             visit(unit, &mut globals)?;
             globals.console |= items_use_console(&items_of(unit));
         }
+        // Each global helper family works in one list for the whole project, so
+        // every target must agree on which cells are its temporaries. One more
+        // cell each is where the helper writes the answer a call reads back.
+        if globals.complex {
+            globals.temps_fixed = globals.arena + 1;
+            globals.out_fixed = globals.temps_fixed + GLOBAL_HELPER_CELLS;
+            globals.arena += GLOBAL_HELPER_CELLS + 1;
+        }
+        if globals.grows {
+            globals.temps_heap = globals.heap + 1;
+            globals.out_heap = globals.temps_heap + GLOBAL_HELPER_CELLS;
+            globals.heap += GLOBAL_HELPER_CELLS + 1;
+        }
         for plan in &program.targets {
             if plan.kind == ast::TargetKind::Sprite {
                 globals.sprite_names.push(plan.name.clone());
@@ -288,6 +501,62 @@ impl Globals {
             .find(|v| v.name == name && !v.is_list)
             .map(|v| v.cell)
     }
+}
+
+/// The names every `watch` in a unit asks for.
+fn watch_names(unit: &FileUnit) -> Vec<String> {
+    items_of(unit)
+        .iter()
+        .filter_map(|item| match item {
+            Item::Watch(watch) => Some(watch.names.iter().map(|n| n.name.clone())),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Record the value a cell starts with.
+fn set_cell_init(cell_init: &mut Vec<Option<rasm::Literal>>, cell: usize, value: rasm::Literal) {
+    while cell_init.len() < cell {
+        cell_init.push(None);
+    }
+    cell_init[cell - 1] = Some(value);
+}
+
+/// Lay a list or map out in an arena: a [`HANDLE`]-cell handle, then one cell
+/// per starting item, and return the handle's first cell.
+///
+/// The starting items are part of the arena's own declaration, so a project
+/// with a million literal items pays nothing to start: the editor loads them
+/// the way it loads a Scratch list's items. Only growth appends at run time.
+fn lay_out_complex(
+    cells: &mut usize,
+    cell_init: &mut Vec<Option<rasm::Literal>>,
+    items: &[rasm::Literal],
+) -> usize {
+    let handle = *cells + 1;
+    *cells += HANDLE;
+    let region = if items.is_empty() { 0 } else { *cells + 1 };
+    *cells += items.len();
+    set_cell_init(
+        cell_init,
+        handle + H_BASE,
+        rasm::Literal::Number(region.to_string()),
+    );
+    set_cell_init(
+        cell_init,
+        handle + H_LEN,
+        rasm::Literal::Number(items.len().to_string()),
+    );
+    set_cell_init(
+        cell_init,
+        handle + H_CAP,
+        rasm::Literal::Number(items.len().to_string()),
+    );
+    for (index, item) in items.iter().enumerate() {
+        set_cell_init(cell_init, region + index, item.clone());
+    }
+    handle
 }
 
 /// Whether any of these items logs to the console.
@@ -407,9 +676,9 @@ fn short(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
 
-/// A user declaration of the name the virtual memory system lives under.
+/// A user declaration of a name the virtual memory system owns.
 fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
-    if name == VMS || name == GLOBAL_VM {
+    if name == VMS || name == GLOBAL_VM || name == HEAP || name == GLOBAL_HEAP {
         Some(Error::new(
             source
                 .error(
@@ -418,6 +687,19 @@ fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
                 )
                 .span(span.len.max(1))
                 .note("every variable, `let`, `for` counter and procedure return value lives in it; pick another name"),
+        ))
+    } else if ["__vm_", "__vh_", "__gm_", "__gh_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        Some(Error::new(
+            source
+                .error(
+                    span.pos,
+                    format!("`{name}` is reserved for the memory manager"),
+                )
+                .span(span.len.max(1))
+                .note("`__vm_`, `__vh_`, `__gm_` and `__gh_` name the procedures that grow a run of an arena; pick another name"),
         ))
     } else {
         None
@@ -435,6 +717,8 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
             init: rasm::Literal::Str(String::new()),
             items: Vec::new(),
             is_list: false,
+            scratch: false,
+            dynamic: false,
             declared_empty: false,
             global,
             cell: 0,
@@ -473,6 +757,8 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
         init,
         items,
         is_list,
+        scratch: false,
+        dynamic: false,
         declared_empty: is_list && var.init_items_empty(),
         global,
         cell: 0,
@@ -519,18 +805,633 @@ fn arena_write(cell: usize, list: &str, value: rasm::Expr) -> rasm::Stmt {
     )
 }
 
+/// A constant cell read, with the space named.
+fn read_cell(cell: usize, space: Space) -> rasm::Expr {
+    arena_read(cell, space.list())
+}
+
+/// A constant cell write, with the space named.
+fn write_cell(cell: usize, space: Space, value: rasm::Expr) -> rasm::Stmt {
+    arena_write(cell, space.list(), value)
+}
+
+/// Which list a run of cells lives in.
+///
+/// A run that never grows is a table: it sits in the fixed arena, where a
+/// literal initializer costs nothing at run time and may be as long as
+/// `project.json` allows. A run that grows is a heap object, and the heap is a
+/// list of its own so that a large table cannot stop it growing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Space {
+    /// The target's fixed arena, `_vms`.
+    Fixed,
+    /// The target's heap, `_heap`.
+    Heap,
+    /// The project's fixed arena, `_gvm`.
+    GlobalFixed,
+    /// The project's heap, `_gheap`.
+    GlobalHeap,
+}
+
+impl Space {
+    /// The list this space is.
+    fn list(self) -> &'static str {
+        match self {
+            Space::Fixed => VMS,
+            Space::Heap => HEAP,
+            Space::GlobalFixed => GLOBAL_VM,
+            Space::GlobalHeap => GLOBAL_HEAP,
+        }
+    }
+
+    /// The prefix of this space's memory helpers.
+    fn prefix(self) -> &'static str {
+        match self {
+            Space::Fixed => "__vm_",
+            Space::Heap => "__vh_",
+            Space::GlobalFixed => "__gm_",
+            Space::GlobalHeap => "__gh_",
+        }
+    }
+}
+
+/// Where a `list` or a `map` keeps its storage.
+#[derive(Clone, Debug)]
+enum Container {
+    /// A watched list: a real Scratch list, reached by name.
+    Scratch(String),
+    /// A run of an arena: a [`HANDLE`]-cell handle at a constant index, and the
+    /// items after it at indices only the run's length knows.
+    Vms { handle: usize, space: Space },
+}
+
+impl Container {
+    /// `item i of <container>`, with `i` 1-based.
+    fn read(&self, index: rasm::Expr) -> rasm::Expr {
+        match self {
+            Container::Scratch(name) => {
+                mk_call("data_itemoflist", vec![index, mk_str(name.clone())])
+            }
+            Container::Vms { handle, space } => mk_call(
+                "data_itemoflist",
+                vec![item_at(*handle, *space, index), mk_str(space.list())],
+            ),
+        }
+    }
+
+    /// `replace item i of <container> with value`.
+    fn write(&self, index: rasm::Expr, value: rasm::Expr) -> rasm::Stmt {
+        match self {
+            Container::Scratch(name) => mk_stmt(
+                "data_replaceitemoflist",
+                vec![index, mk_str(name.clone()), value],
+            ),
+            Container::Vms { handle, space } => mk_stmt(
+                "data_replaceitemoflist",
+                vec![item_at(*handle, *space, index), mk_str(space.list()), value],
+            ),
+        }
+    }
+
+    /// `length of <container>`.
+    fn length(&self) -> rasm::Expr {
+        match self {
+            Container::Scratch(name) => mk_call("data_lengthoflist", vec![mk_str(name.clone())]),
+            Container::Vms { handle, space } => read_cell(handle + H_LEN, *space),
+        }
+    }
+}
+
+/// The index of the `i`-th item of a handle's run, 1-based: `base + i - 1`.
+///
+/// The run's first cell is itself a value the program wrote, so every read and
+/// write adds two blocks — that is the price of a length the arena does not
+/// keep for us. A constant index folds its `- 1` at compile time, which is what
+/// keeps `xs[1]` a single read.
+fn item_at(handle: usize, space: Space, index: rasm::Expr) -> rasm::Expr {
+    let base = read_cell(handle + H_BASE, space);
+    let literal = match &index {
+        rasm::Expr::Number(text, _) => text.parse::<i64>().ok(),
+        _ => None,
+    };
+    match literal {
+        Some(1) => base,
+        Some(value) => mk_call("operator_add", vec![base, mk_num((value - 1).to_string())]),
+        None => mk_call(
+            "operator_add",
+            vec![base, mk_call("operator_subtract", vec![index, mk_num("1")])],
+        ),
+    }
+}
+
+/// The expression a helper sees its handle as: the cell index it was passed.
+fn handle_param() -> rasm::Expr {
+    mk_call("argument_reporter_string_number", vec![mk_str("h")])
+}
+
+/// `item (h + offset) of <space>`, the handle's own cells.
+fn handle_cell(space: Space, offset: usize) -> rasm::Expr {
+    let list = space.list();
+    if offset == 0 {
+        return mk_call("data_itemoflist", vec![handle_param(), mk_str(list)]);
+    }
+    mk_call(
+        "data_itemoflist",
+        vec![
+            mk_call(
+                "operator_add",
+                vec![handle_param(), mk_num(offset.to_string())],
+            ),
+            mk_str(list),
+        ],
+    )
+}
+
+/// The cell a helper's handle says its run starts at.
+fn handle_base(space: Space) -> rasm::Expr {
+    handle_cell(space, H_BASE)
+}
+
+/// The index of the `i`-th item of the run a helper's handle names.
+fn handle_item_at(space: Space, index: rasm::Expr) -> rasm::Expr {
+    mk_call(
+        "operator_add",
+        vec![
+            handle_base(space),
+            mk_call("operator_subtract", vec![index, mk_num("1")]),
+        ],
+    )
+}
+
+/// `item i of <space>`, for an item of the run a helper's handle names.
+fn handle_item(space: Space, index: rasm::Expr) -> rasm::Expr {
+    mk_call(
+        "data_itemoflist",
+        vec![handle_item_at(space, index), mk_str(space.list())],
+    )
+}
+
+/// `replace item (h + offset) of <space> with value`.
+fn handle_write(space: Space, offset: usize, value: rasm::Expr) -> rasm::Stmt {
+    let list = space.list();
+    let index = if offset == 0 {
+        handle_param()
+    } else {
+        mk_call(
+            "operator_add",
+            vec![handle_param(), mk_num(offset.to_string())],
+        )
+    };
+    mk_stmt("data_replaceitemoflist", vec![index, mk_str(list), value])
+}
+
+/// `item i of <space>`, for an index a helper keeps in a temporary.
+fn temp_read(space: Space, cell: usize) -> rasm::Expr {
+    read_cell(cell, space)
+}
+
+/// `replace item (cell) of <space> with value`, for a helper's temporary.
+fn temp_write(space: Space, cell: usize, value: rasm::Expr) -> rasm::Stmt {
+    write_cell(cell, space, value)
+}
+
+/// `item (out) of <space>`, the cell the caller asked for the answer in.
+fn out_write(space: Space, value: rasm::Expr) -> rasm::Stmt {
+    mk_stmt(
+        "data_replaceitemoflist",
+        vec![param("out"), mk_str(space.list()), value],
+    )
+}
+
+/// `item (out) of <space>`: the answer a caller asked for.
+fn out_read(space: Space) -> rasm::Expr {
+    mk_call("data_itemoflist", vec![param("out"), mk_str(space.list())])
+}
+
+/// `length of <space>`.
+fn arena_length(space: Space) -> rasm::Expr {
+    mk_call("data_lengthoflist", vec![mk_str(space.list())])
+}
+
+/// `add value to <space>`.
+fn arena_add(space: Space, value: rasm::Expr) -> rasm::Stmt {
+    mk_stmt("data_addtolist", vec![value, mk_str(space.list())])
+}
+
+/// Which memory-manager helper a program needs.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Helper {
+    /// Grow a handle's capacity to at least `want`.
+    Reserve,
+    /// Append one item.
+    Push,
+    /// Insert one item at a 1-based index.
+    Insert,
+    /// Remove the item at a 1-based index.
+    Remove,
+    /// Grow a handle so the 1-based index `want` exists.
+    Ensure,
+    /// Drop the last item.
+    Pop,
+    /// Find a value's 1-based index, or `0`.
+    Index,
+    /// The whole list as one string.
+    Text,
+}
+
+impl Helper {
+    /// How many temporaries the helper's body needs.
+    fn temps(self) -> usize {
+        match self {
+            Helper::Reserve => 6,
+            Helper::Push => 1,
+            Helper::Insert => 3,
+            Helper::Remove => 2,
+            Helper::Ensure => 1,
+            Helper::Pop => 0,
+            Helper::Index => 3,
+            Helper::Text => 4,
+        }
+    }
+
+    /// How many parameters the helper takes, not counting the handle.
+    fn params(self) -> &'static [(&'static str, rasm::ParamKind)] {
+        use rasm::ParamKind;
+        match self {
+            Helper::Reserve => &[("want", ParamKind::Number)],
+            Helper::Push => &[("value", ParamKind::String)],
+            Helper::Insert => &[("at", ParamKind::Number), ("value", ParamKind::String)],
+            Helper::Remove => &[("at", ParamKind::Number)],
+            Helper::Ensure => &[("want", ParamKind::Number)],
+            Helper::Pop => &[],
+            Helper::Index => &[("value", ParamKind::String), ("out", ParamKind::Number)],
+            // `out` is last in every value helper: the caller appends the cell it
+            // wants the answer in, and a procedure call's arguments are
+            // positional.
+            Helper::Text => &[("letters", ParamKind::Number), ("out", ParamKind::Number)],
+        }
+    }
+}
+
+/// The raven-asm name of a helper, by the space it works in.
+fn helper_name(kind: Helper, space: Space) -> String {
+    let word = match kind {
+        Helper::Reserve => "reserve",
+        Helper::Push => "push",
+        Helper::Insert => "insert",
+        Helper::Remove => "remove",
+        Helper::Ensure => "ensure",
+        Helper::Pop => "pop",
+        Helper::Index => "index",
+        Helper::Text => "text",
+    };
+    format!("{}{word}", space.prefix())
+}
+
+/// A helper's parameter read, by name.
+fn param(name: &str) -> rasm::Expr {
+    mk_call("argument_reporter_string_number", vec![mk_str(name)])
+}
+
+/// A two-argument operator block.
+fn op(name: &str, left: rasm::Expr, right: rasm::Expr) -> rasm::Expr {
+    mk_call(name, vec![left, right])
+}
+
+/// A one-argument operator block.
+fn un(name: &str, operand: rasm::Expr) -> rasm::Expr {
+    mk_call(name, vec![operand])
+}
+
+/// The parameters a helper is declared and called with: the handle first.
+fn helper_params(kind: Helper) -> Vec<rasm::Param> {
+    let mut params = vec![rasm::Param {
+        name: "h".to_string(),
+        kind: rasm::ParamKind::Number,
+    }];
+    params.extend(kind.params().iter().map(|(name, kind)| rasm::Param {
+        name: (*name).to_string(),
+        kind: *kind,
+    }));
+    params
+}
+
+/// The body of one memory-manager helper.
+///
+/// Every helper is `warp`, so it runs to its end without a screen refresh and
+/// without another script slipping in between two of its blocks. That is what
+/// lets it keep its working cells in the arena: nobody else can be using them.
+fn helper_proc(kind: Helper, space: Space, temps: &[usize]) -> rasm::Item {
+    let r = |index: usize| temp_read(space, temps[index]);
+    let w = |index: usize, value: rasm::Expr| temp_write(space, temps[index], value);
+    let len_cell = || handle_cell(space, H_LEN);
+    let base = || handle_base(space);
+    let mut body: Vec<rasm::Stmt> = Vec::new();
+    match kind {
+        // cap, newcap, oldbase, len, newbase, i
+        Helper::Reserve => {
+            body.push(w(0, handle_cell(space, H_CAP)));
+            let copy = {
+                let one = op(
+                    "operator_add",
+                    r(4),
+                    op("operator_subtract", r(5), mk_num("1")),
+                );
+                let other = op(
+                    "operator_add",
+                    r(2),
+                    op("operator_subtract", r(5), mk_num("1")),
+                );
+                vec![
+                    w(1, op("operator_multiply", r(0), mk_num("2"))),
+                    mk_block(
+                        "control_if",
+                        vec![op("operator_lt", r(1), param("want"))],
+                        vec![w(1, param("want"))],
+                    ),
+                    w(2, base()),
+                    w(3, len_cell()),
+                    w(4, op("operator_add", arena_length(space), mk_num("1"))),
+                    mk_block(
+                        "control_repeat",
+                        vec![r(1)],
+                        vec![arena_add(space, mk_str(""))],
+                    ),
+                    w(5, mk_num("1")),
+                    mk_block(
+                        "control_repeat",
+                        vec![r(3)],
+                        vec![
+                            mk_stmt(
+                                "data_replaceitemoflist",
+                                vec![
+                                    one,
+                                    mk_str(space.list()),
+                                    mk_call("data_itemoflist", vec![other, mk_str(space.list())]),
+                                ],
+                            ),
+                            w(5, op("operator_add", r(5), mk_num("1"))),
+                        ],
+                    ),
+                    handle_write(space, H_BASE, r(4)),
+                    handle_write(space, H_CAP, r(1)),
+                ]
+            };
+            body.push(mk_block(
+                "control_if",
+                vec![op("operator_lt", r(0), param("want"))],
+                copy,
+            ));
+        }
+        // len
+        Helper::Push => {
+            body.push(w(0, len_cell()));
+            body.push(mk_stmt(
+                helper_name(Helper::Reserve, space),
+                vec![handle_param(), op("operator_add", r(0), mk_num("1"))],
+            ));
+            body.push(mk_stmt(
+                "data_replaceitemoflist",
+                vec![
+                    op("operator_add", base(), r(0)),
+                    mk_str(space.list()),
+                    param("value"),
+                ],
+            ));
+            body.push(handle_write(
+                space,
+                H_LEN,
+                op("operator_add", r(0), mk_num("1")),
+            ));
+        }
+        // len, j, at
+        Helper::Insert => {
+            body.push(mk_stmt(
+                helper_name(Helper::Reserve, space),
+                vec![handle_param(), op("operator_add", len_cell(), mk_num("1"))],
+            ));
+            body.push(w(0, len_cell()));
+            body.push(w(2, param("at")));
+            body.push(mk_block(
+                "control_if",
+                vec![op("operator_lt", r(2), mk_num("1"))],
+                vec![w(2, mk_num("1"))],
+            ));
+            body.push(mk_block(
+                "control_if",
+                vec![op(
+                    "operator_gt",
+                    r(2),
+                    op("operator_add", r(0), mk_num("1")),
+                )],
+                vec![w(2, op("operator_add", r(0), mk_num("1")))],
+            ));
+            body.push(w(1, r(0)));
+            body.push(mk_block(
+                "control_repeat_until",
+                vec![op("operator_lt", r(1), r(2))],
+                vec![
+                    mk_stmt(
+                        "data_replaceitemoflist",
+                        vec![
+                            op("operator_add", base(), r(1)),
+                            mk_str(space.list()),
+                            mk_call(
+                                "data_itemoflist",
+                                vec![
+                                    op(
+                                        "operator_add",
+                                        base(),
+                                        op("operator_subtract", r(1), mk_num("1")),
+                                    ),
+                                    mk_str(space.list()),
+                                ],
+                            ),
+                        ],
+                    ),
+                    w(1, op("operator_subtract", r(1), mk_num("1"))),
+                ],
+            ));
+            body.push(mk_stmt(
+                "data_replaceitemoflist",
+                vec![
+                    op(
+                        "operator_add",
+                        base(),
+                        op("operator_subtract", r(2), mk_num("1")),
+                    ),
+                    mk_str(space.list()),
+                    param("value"),
+                ],
+            ));
+            body.push(handle_write(
+                space,
+                H_LEN,
+                op("operator_add", r(0), mk_num("1")),
+            ));
+        }
+        // len, j
+        Helper::Remove => {
+            body.push(w(0, len_cell()));
+            let inside = vec![
+                w(1, param("at")),
+                mk_block(
+                    "control_repeat_until",
+                    vec![op(
+                        "operator_gt",
+                        r(1),
+                        op("operator_subtract", r(0), mk_num("1")),
+                    )],
+                    vec![
+                        mk_stmt(
+                            "data_replaceitemoflist",
+                            vec![
+                                op(
+                                    "operator_add",
+                                    base(),
+                                    op("operator_subtract", r(1), mk_num("1")),
+                                ),
+                                mk_str(space.list()),
+                                mk_call(
+                                    "data_itemoflist",
+                                    vec![op("operator_add", base(), r(1)), mk_str(space.list())],
+                                ),
+                            ],
+                        ),
+                        w(1, op("operator_add", r(1), mk_num("1"))),
+                    ],
+                ),
+                handle_write(space, H_LEN, op("operator_subtract", r(0), mk_num("1"))),
+            ];
+            body.push(mk_block(
+                "control_if",
+                vec![op(
+                    "operator_and",
+                    op("operator_gt", r(0), mk_num("0")),
+                    op(
+                        "operator_and",
+                        op("operator_gt", param("at"), mk_num("0")),
+                        un("operator_not", op("operator_gt", param("at"), r(0))),
+                    ),
+                )],
+                inside,
+            ));
+        }
+        // len
+        Helper::Ensure => {
+            body.push(mk_stmt(
+                helper_name(Helper::Reserve, space),
+                vec![handle_param(), param("want")],
+            ));
+            body.push(w(0, len_cell()));
+            body.push(mk_block(
+                "control_if",
+                vec![op("operator_lt", r(0), param("want"))],
+                vec![handle_write(space, H_LEN, param("want"))],
+            ));
+        }
+        Helper::Pop => {
+            body.push(mk_block(
+                "control_if",
+                vec![op("operator_gt", len_cell(), mk_num("0"))],
+                vec![handle_write(
+                    space,
+                    H_LEN,
+                    op("operator_subtract", len_cell(), mk_num("1")),
+                )],
+            ));
+        }
+        // i, len, done
+        Helper::Index => {
+            body.push(out_write(space, mk_num("0")));
+            body.push(w(0, mk_num("1")));
+            body.push(w(1, len_cell()));
+            body.push(w(2, mk_num("0")));
+            body.push(mk_block(
+                "control_repeat_until",
+                vec![op(
+                    "operator_or",
+                    op("operator_gt", r(0), r(1)),
+                    op("operator_gt", r(2), mk_num("0")),
+                )],
+                vec![mk_block_else(
+                    "control_if_else",
+                    vec![op(
+                        "operator_equals",
+                        handle_item(space, r(0)),
+                        param("value"),
+                    )],
+                    vec![out_write(space, r(0)), w(2, mk_num("1"))],
+                    vec![w(0, op("operator_add", r(0), mk_num("1")))],
+                )],
+            ));
+        }
+        // i, len, all, separator. Scratch joins only a list whose items are
+        // *strings* of one character without a separator; every other list —
+        // including one of numbers — is joined with a space. The caller says
+        // which case this element type is, so the helper does not have to guess
+        // from a value that Scratch would have kept typed.
+        Helper::Text => {
+            body.push(w(0, mk_num("1")));
+            body.push(w(1, len_cell()));
+            body.push(w(2, param("letters")));
+            body.push(mk_block(
+                "control_repeat_until",
+                vec![op("operator_gt", r(0), r(1))],
+                vec![
+                    mk_block(
+                        "control_if",
+                        vec![un(
+                            "operator_not",
+                            op(
+                                "operator_equals",
+                                mk_call("operator_length", vec![handle_item(space, r(0))]),
+                                mk_num("1"),
+                            ),
+                        )],
+                        vec![w(2, mk_num("0"))],
+                    ),
+                    w(0, op("operator_add", r(0), mk_num("1"))),
+                ],
+            ));
+            body.push(w(3, mk_str(" ")));
+            body.push(mk_block(
+                "control_if",
+                vec![op("operator_gt", r(2), mk_num("0"))],
+                vec![w(3, mk_str(""))],
+            ));
+            body.push(out_write(space, mk_str("")));
+            body.push(w(0, mk_num("1")));
+            body.push(mk_block(
+                "control_repeat_until",
+                vec![op("operator_gt", r(0), r(1))],
+                vec![
+                    mk_block(
+                        "control_if",
+                        vec![op("operator_gt", r(0), mk_num("1"))],
+                        vec![out_write(space, op("operator_join", out_read(space), r(3)))],
+                    ),
+                    out_write(
+                        space,
+                        op("operator_join", out_read(space), handle_item(space, r(0))),
+                    ),
+                    w(0, op("operator_add", r(0), mk_num("1"))),
+                ],
+            ));
+        }
+    }
+    rasm::Item::Proc(rasm::ProcDecl {
+        name: helper_name(kind, space),
+        params: helper_params(kind),
+        warp: true,
+        body,
+        pos: Pos::default(),
+    })
+}
+
 /// `delete all of <list>` — a fresh stack for a fresh run.
 fn arena_clear(list: &str) -> rasm::Stmt {
     mk_stmt("data_deletealloflist", vec![mk_str(list)])
-}
-
-/// A raven-asm literal as the expression a block input wants.
-fn literal_of_rasm(literal: &rasm::Literal) -> rasm::Expr {
-    match literal {
-        rasm::Literal::Number(text) => mk_num(text.clone()),
-        rasm::Literal::Str(text) => mk_str(text.clone()),
-        rasm::Literal::Bool(value) => bool_literal(*value),
-    }
 }
 
 /// `add value to <list>` — the *push* half of the stack.
@@ -575,23 +1476,6 @@ fn list_grow(list: &str, index: rasm::Expr) -> rasm::Stmt {
             vec![mk_call("operator_not", vec![short()])],
             vec![arena_push(list, mk_str(""))],
         )],
-    )
-}
-
-fn arena_grow(list: &str, to: usize) -> rasm::Stmt {
-    mk_block(
-        "control_repeat_until",
-        vec![mk_call(
-            "operator_not",
-            vec![mk_call(
-                "operator_lt",
-                vec![
-                    mk_call("data_lengthoflist", vec![mk_str(list)]),
-                    mk_num(to.to_string()),
-                ],
-            )],
-        )],
-        vec![arena_push(list, mk_str(""))],
     )
 }
 
@@ -913,6 +1797,18 @@ struct Unit<'a> {
     /// The value each cell starts with, by cell index - 1. A cell with no
     /// entry starts empty.
     cell_init: Vec<Option<rasm::Literal>>,
+    /// How many `_heap` cells have been handed out.
+    heap: usize,
+    /// The starting value of each heap cell.
+    heap_init: Vec<Option<rasm::Literal>>,
+    /// Which complex values have to be able to grow.
+    mutations: HashSet<String>,
+    /// The memory-manager helpers this target needs.
+    helpers: HashSet<(Helper, Space)>,
+    /// The `_vms` cell a value-producing helper writes its answer into.
+    out_fixed: Option<usize>,
+    /// The `_heap` cell a value-producing helper writes its answer into.
+    out_heap: Option<usize>,
     /// Which script is being lowered. Scripts are numbered in source order, and
     /// each one has its own stack.
     script: usize,
@@ -944,6 +1840,7 @@ impl<'a> Unit<'a> {
         plan: &'a TargetPlan,
         globals: &'a Globals,
         prelude: &'a Prelude,
+        mutations: HashSet<String>,
     ) -> Result<Self> {
         let mut unit = Unit {
             program,
@@ -966,6 +1863,12 @@ impl<'a> Unit<'a> {
             base_scope: HashMap::new(),
             cells: 0,
             cell_init: Vec::new(),
+            heap: 0,
+            heap_init: Vec::new(),
+            mutations,
+            helpers: HashSet::new(),
+            out_fixed: None,
+            out_heap: None,
             script: 0,
             in_script: false,
             depth: 0,
@@ -986,6 +1889,16 @@ impl<'a> Unit<'a> {
 
     /// Register every name the target can see.
     fn collect(&mut self) -> Result<()> {
+        // Every `watch` first: a list declared above its `watch` is still a
+        // watched list, and that decides whether it is a Scratch list at all.
+        for name in watch_names(&self.plan.main) {
+            self.watches.insert(name);
+        }
+        for module in &self.plan.modules {
+            for name in watch_names(module) {
+                self.watches.insert(name);
+            }
+        }
         let source = self.plan.main.source.clone();
         let items = items_of(&self.plan.main);
         let path = self.plan.main.path.clone();
@@ -1051,7 +1964,20 @@ impl<'a> Unit<'a> {
                             ty: var.ty,
                         },
                     );
-                } else if !info.is_list {
+                } else if info.is_list {
+                    // A list no `watch` asked for is a run of an arena: a
+                    // handle, then its starting items. A watched one stays a
+                    // real Scratch list, because a monitor is a Scratch list
+                    // and nothing else.
+                    if self.watches.contains(&var.name.name) {
+                        info.scratch = true;
+                    } else if self.mutations.contains(&info.name) {
+                        info.dynamic = true;
+                        info.cell = self.alloc_heap_complex(&info.items);
+                    } else {
+                        info.cell = self.alloc_complex(&info.items);
+                    }
+                } else {
                     // A target-level scalar is a cell in the target's own
                     // arena. It is in scope for every script and every `proc`
                     // body of the target, so it goes in the base scope.
@@ -1285,21 +2211,11 @@ impl<'a> Unit<'a> {
 
         self.drain_procs(&mut out)?;
 
-        // Now the arenas' sizes are known, so every script can start by growing
-        // them. The calls come first, before the script's own stack is emptied
-        // and before anything reaches for a cell.
-        let mut prologue: Vec<rasm::Stmt> = Vec::new();
-        if self.cells > 0 {
-            prologue.push(mk_stmt(RESERVE_VMS, Vec::new()));
-        }
-        if self.globals.arena > 0 {
-            prologue.push(mk_stmt(RESERVE_GVM, Vec::new()));
-        }
-        for mut stmt in scripts {
-            let mut body = stmt.body.take().unwrap_or_default();
-            let mut head = prologue.clone();
-            head.append(&mut body);
-            stmt.body = Some(head);
+        // Every helper before the arena is declared, because a helper's own
+        // temporaries are cells of that arena.
+        let helpers = self.helper_items();
+
+        for stmt in scripts {
             out.push(rasm::Item::Stmt(stmt));
         }
 
@@ -1308,6 +2224,9 @@ impl<'a> Unit<'a> {
         let mut locals: Vec<rasm::Item> = Vec::new();
         if self.cells > 0 {
             locals.push(self.vms_item());
+        }
+        if self.heap > 0 {
+            locals.push(self.arena_item(HEAP, false, self.heap, &self.heap_init));
         }
         for (index, high) in self.stacks.iter().enumerate() {
             if *high > 0 {
@@ -1321,21 +2240,12 @@ impl<'a> Unit<'a> {
                 }));
             }
         }
-        locals.extend(self.locals.iter().filter_map(|var| {
-            let mut item = var.as_list_item()?;
-            // A `watch`ed list already has storage; it only has to be shown.
-            if self.watches.contains(&var.name) {
-                if let rasm::Item::List(list) = &mut item {
-                    list.visible = true;
-                }
-            }
-            Some(item)
-        }));
+        locals.extend(self.locals.iter().filter_map(VarInfo::as_list_item));
         locals.append(&mut out);
 
         // A `watch`ed scalar is a real Scratch variable with a visible
-        // monitor, which the cell writes keep in step; a `watch`ed list already
-        // has a monitor, so it only has to be shown.
+        // monitor, which the cell writes keep in step; a `watch`ed list is a
+        // real Scratch list, so its monitor is the list's own.
         let mut mirrored: Vec<&VarInfo> = self
             .locals
             .iter()
@@ -1359,29 +2269,7 @@ impl<'a> Unit<'a> {
             }));
         }
 
-        // The memory manager, emitted only when there is an arena to grow.
-        if self.cells > 0 {
-            let inits: Vec<(usize, rasm::Literal)> = self
-                .cell_init
-                .iter()
-                .enumerate()
-                .filter_map(|(index, value)| Some((index + 1, value.clone()?)))
-                .collect();
-            locals.push(self.reserve_proc(RESERVE_VMS, VMS, &inits));
-        }
-        if self.globals.arena > 0 {
-            // A Scratch custom block belongs to one target, so a sprite cannot
-            // call the stage's copy: every target that touches `_gvm` grows its
-            // own.
-            let inits: Vec<(usize, rasm::Literal)> = self
-                .globals
-                .vars
-                .iter()
-                .filter(|v| !v.is_list)
-                .map(|v| (v.cell, v.init.clone()))
-                .collect();
-            locals.push(self.reserve_proc(RESERVE_GVM, GLOBAL_VM, &inits));
-        }
+        locals.extend(helpers);
         out = locals;
 
         Ok(rasm::File {
@@ -1407,6 +2295,14 @@ impl<'a> Unit<'a> {
             if self.globals.arena > 0 {
                 globals.push(self.global_vms_item());
             }
+            if self.globals.heap > 0 {
+                globals.push(self.arena_item(
+                    GLOBAL_HEAP,
+                    true,
+                    self.globals.heap,
+                    &self.globals.heap_init,
+                ));
+            }
             // The console is a list, so a log line is one `add`. It is
             // declared only when something logs, and its monitor starts
             // hidden: the developer ticks it in the editor when wanted.
@@ -1430,6 +2326,60 @@ impl<'a> Unit<'a> {
             globals.append(&mut target.items);
             target.items = globals;
         }
+    }
+
+    /// Where this target's complex values ended up, for `--debug`.
+    ///
+    /// A built project carries no names for them — that is the point — so a tool
+    /// that has to read one (`examples/raven/chess/tools/check.mjs`, say) needs
+    /// the cell and the list to read it from.
+    fn layouts(&self) -> Vec<Layout> {
+        let mut out = Vec::new();
+        let mut record = |var: &VarInfo| {
+            if !var.is_list {
+                out.push(Layout {
+                    target: self.plan.name.clone(),
+                    name: var.name.clone(),
+                    list: if var.global { GLOBAL_VM } else { VMS }.to_string(),
+                    handle: if var.ty.is_place() { 0 } else { var.cell },
+                    dynamic: false,
+                    scalar: true,
+                });
+                return;
+            }
+            if var.scratch {
+                out.push(Layout {
+                    target: self.plan.name.clone(),
+                    name: var.name.clone(),
+                    list: var.name.clone(),
+                    handle: 0,
+                    dynamic: false,
+                    scalar: false,
+                });
+                return;
+            }
+            let space = match (var.global, var.dynamic) {
+                (false, false) => Space::Fixed,
+                (false, true) => Space::Heap,
+                (true, false) => Space::GlobalFixed,
+                (true, true) => Space::GlobalHeap,
+            };
+            out.push(Layout {
+                target: self.plan.name.clone(),
+                name: var.name.clone(),
+                list: space.list().to_string(),
+                handle: var.cell,
+                dynamic: var.dynamic,
+                scalar: false,
+            });
+        };
+        for var in &self.locals {
+            record(var);
+        }
+        for var in &self.globals.vars {
+            record(var);
+        }
+        out
     }
 
     /// Emit every procedure reachable from the target's scripts, once.
@@ -1486,9 +2436,9 @@ impl<'a> Unit<'a> {
     /// The list is declared with **one item per cell**, because Scratch
     /// cannot grow a list by replacing into it: `data_replaceitemoflist` runs
     /// `Cast.toListIndex(index, length, false)`, which rejects an index past the
-    /// end, so a write into a shorter list is silently dropped. Pre-sizing the
-    /// list is what makes a constant cell index work at all — and it is also why
-    /// reads of an unwritten cell return `""` rather than failing.
+    /// end, so a write into a shorter list is silently dropped. Sizing the list
+    /// at load time is what makes a constant cell index work at all — and it is
+    /// also why reads of an unwritten cell return `""` rather than failing.
     ///
     /// A cell that belongs to a `var` starts with that variable's declared
     /// value, because the declaration's initialiser is part of the arena: a
@@ -1496,67 +2446,62 @@ impl<'a> Unit<'a> {
     /// That is how raven keeps a Scratch variable's "starts at its declared
     /// value" behaviour without declaring a Scratch variable.
     fn vms_item(&self) -> rasm::Item {
-        // The arena starts **empty** and is grown by the memory manager the
-        // first time a script needs it, so nothing is ever reserved that the
-        // program does not use.
-        self.arena_item(VMS, false, 0)
+        self.arena_item(VMS, false, self.cells, &self.cell_init)
     }
 
     /// The project-wide arena, declared on the stage and visible everywhere.
+    ///
+    /// Every target reads the same `_gvm`, so the stage declares it with the
+    /// project's own starting values and the global helpers' temporary pool.
     fn global_vms_item(&self) -> rasm::Item {
-        // Empty for the same reason as `_vms`: it is grown on demand, and the
-        // declared starting values are written by the memory manager once.
-        rasm::Item::List(rasm::ListDecl {
-            global: true,
-            visible: false,
-            monitor: rasm::MonitorSpec::default(),
-            name: GLOBAL_VM.to_string(),
-            init: Vec::new(),
-            pos: Pos::default(),
-        })
+        self.arena_item(GLOBAL_VM, true, self.globals.arena, &self.globals.cell_init)
     }
 
-    /// The `warp` procedure that grows an arena to its size and puts the
-    /// declared starting values in place — the whole of the memory manager.
-    #[allow(clippy::unused_self)]
-    fn reserve_proc(&self, name: &str, list: &str, inits: &[(usize, rasm::Literal)]) -> rasm::Item {
-        let mut body = vec![arena_grow(list, self.reserve_to(list))];
-        for (cell, value) in inits {
-            body.push(arena_write(*cell, list, literal_of_rasm(value)));
+    /// The helpers the target needs, with their temporaries allocated.
+    ///
+    /// A helper's working cells live in the arena it works in. The local ones
+    /// are new cells of `_vms`; the global ones are slices of the fixed pool the
+    /// stage reserved, because every target's copy of `_gm_*` has to agree on
+    /// which cells of the project arena it may use.
+    fn helper_items(&mut self) -> Vec<rasm::Item> {
+        let mut needed: Vec<(Helper, Space)> = self.helpers.iter().copied().collect();
+        needed.sort_by_key(|(kind, space)| (format!("{kind:?}"), format!("{space:?}")));
+        let mut items = Vec::new();
+        let mut global_fixed = self.globals.temps_fixed;
+        let mut global_heap = self.globals.temps_heap;
+        for (kind, space) in needed {
+            let count = kind.temps();
+            let base = match space {
+                Space::Fixed => self.alloc_cells(count),
+                Space::Heap => self.alloc_heap_cells(count),
+                Space::GlobalFixed => {
+                    let base = global_fixed;
+                    global_fixed += count;
+                    base
+                }
+                Space::GlobalHeap => {
+                    let base = global_heap;
+                    global_heap += count;
+                    base
+                }
+            };
+            let temps: Vec<usize> = (0..count).map(|index| base + index).collect();
+            items.push(helper_proc(kind, space, &temps));
         }
-        rasm::Item::Proc(rasm::ProcDecl {
-            name: name.to_string(),
-            params: Vec::new(),
-            warp: true,
-            body: vec![mk_block(
-                "control_if",
-                vec![mk_call(
-                    "operator_lt",
-                    vec![
-                        mk_call("data_lengthoflist", vec![mk_str(list)]),
-                        mk_num(self.reserve_to(list).to_string()),
-                    ],
-                )],
-                body,
-            )],
-            pos: Pos::default(),
-        })
-    }
-
-    /// How far an arena has to grow: past the last cell the program can use.
-    fn reserve_to(&self, list: &str) -> usize {
-        if list == GLOBAL_VM {
-            self.globals.arena
-        } else {
-            self.cells
-        }
+        items
     }
 
     /// One arena list of `cells` items, each carrying its starting value.
-    fn arena_item(&self, name: &str, global: bool, cells: usize) -> rasm::Item {
+    fn arena_item(
+        &self,
+        name: &str,
+        global: bool,
+        cells: usize,
+        cell_init: &[Option<rasm::Literal>],
+    ) -> rasm::Item {
         let init = (1..=cells)
             .map(|cell| {
-                self.cell_init
+                cell_init
                     .get(cell - 1)
                     .and_then(Clone::clone)
                     .unwrap_or_else(|| rasm::Literal::Str(String::new()))
@@ -1591,6 +2536,46 @@ impl<'a> Unit<'a> {
         let base = self.cells + 1;
         self.cells += n;
         base
+    }
+
+    /// Lay a list or map out in the target's fixed arena and return its handle.
+    fn alloc_complex(&mut self, items: &[rasm::Literal]) -> usize {
+        lay_out_complex(&mut self.cells, &mut self.cell_init, items)
+    }
+
+    /// Lay a list or map out in the target's heap and return its handle.
+    fn alloc_heap_complex(&mut self, items: &[rasm::Literal]) -> usize {
+        lay_out_complex(&mut self.heap, &mut self.heap_init, items)
+    }
+
+    /// Hand out `n` cells of the target's heap.
+    fn alloc_heap_cells(&mut self, n: usize) -> usize {
+        let base = self.heap + 1;
+        self.heap += n;
+        base
+    }
+
+    /// Note that a helper is needed, and in which space.
+    fn need_helper(&mut self, kind: Helper, space: Space) {
+        // A helper that grows a run calls `reserve`; both have to be emitted.
+        if matches!(kind, Helper::Push | Helper::Insert | Helper::Ensure) {
+            self.helpers.insert((Helper::Reserve, space));
+        }
+        self.helpers.insert((kind, space));
+    }
+
+    /// Run a helper, as a statement.
+    fn helper_stmt(
+        &mut self,
+        kind: Helper,
+        handle: usize,
+        space: Space,
+        args: Vec<rasm::Expr>,
+    ) -> rasm::Stmt {
+        self.need_helper(kind, space);
+        let mut all = vec![mk_num(handle.to_string())];
+        all.extend(args);
+        mk_stmt(helper_name(kind, space), all)
     }
 
     // -- the running script's stack ---------------------------------------
@@ -2444,8 +3429,16 @@ impl<'a> Unit<'a> {
                 {
                     return Ok(Vec::new());
                 }
-                let info = var_info(decl, false)?;
+                let mut info = var_info(decl, false)?;
                 if info.is_list {
+                    if self.watches.contains(&info.name) {
+                        info.scratch = true;
+                    } else if self.mutations.contains(&info.name) {
+                        info.dynamic = true;
+                        info.cell = self.alloc_heap_complex(&info.items);
+                    } else {
+                        info.cell = self.alloc_complex(&info.items);
+                    }
                     self.locals.push(info);
                     return Ok(Vec::new());
                 }
@@ -2830,11 +3823,9 @@ impl<'a> Unit<'a> {
                 let element = self.list_element(&name, source, path.span)?;
                 let index = self.expr(index, source, params)?;
                 expect(&index, Ty::Num, "a list index", source)?;
+                let container = self.container_of(&name, source, path.span)?;
                 Ok(Typed {
-                    expr: read_bool(
-                        Ty::from(element),
-                        mk_call("data_itemoflist", vec![index.expr, mk_str(name)]),
-                    ),
+                    expr: read_bool(Ty::from(element), container.read(index.expr)),
                     ty: Ty::from(element),
                     span: *span,
                 })
@@ -2946,7 +3937,7 @@ impl<'a> Unit<'a> {
                     source
                         .error(span.pos, format!("`{name}` is a list"))
                         .span(span.len)
-                        .note("a list is not a value; read an item with `name[i]` or pass it to a `data::` block"),
+                        .note("a list is not a value; read an item with `name[i]`, or use a method such as `name.len()`"),
                 ));
             }
             if binding.ty.is_place() {
@@ -2986,7 +3977,7 @@ impl<'a> Unit<'a> {
                 source
                     .error(span.pos, format!("`{name}` is a list"))
                     .span(span.len)
-                    .note("a list is not a value; read an item with `name[i]` or pass it to a `data::` block"),
+                    .note("a list is not a value; read an item with `name[i]`, or use a method such as `name.len()`"),
             ));
         }
         let expr = match self.globals.scalar_cell(&name) {
@@ -3541,7 +4532,7 @@ impl<'a> Unit<'a> {
                     }
                     mk_str(text.clone())
                 }
-                (_, Shape::Menu(id)) => self.menu_argument(id, expr, source, params)?,
+                (_, Shape::Menu(id)) => self.menu_argument(id, arg.wire, expr, source, params)?,
                 (_, Shape::ParamName) => {
                     return Err(Error::new(
                         source.error(expr.span().pos, "this block reads a procedure parameter"),
@@ -3612,6 +4603,7 @@ impl<'a> Unit<'a> {
     fn menu_argument(
         &mut self,
         menu_id: &str,
+        wire: Wire,
         expr: &Expr,
         source: &Rc<Source>,
         params: &[(String, Scalar)],
@@ -3675,6 +4667,32 @@ impl<'a> Unit<'a> {
                 return Ok(value.expr);
             }
         }
+
+        // A menu that accepts reporters is an input slot, so it takes a value
+        // the program computed. A *field* is baked into the block and cannot —
+        // which is the difference between `sensing_keypressed("backspace")` and
+        // the key hat, whose dropdown is a field.
+        //
+        // The value has to reach Scratch as a reporter, so a literal becomes a
+        // one-block `join(text, "")`: that is the same string, and it is the
+        // only way a constant can stand where Scratch expects a block. A
+        // literal that already names a fixed value stays the clean dropdown.
+        if wire == Wire::Input && menu::accepts_reporters(menu_id) {
+            let value = self.expr(expr, source, params)?;
+            if !ty::fits(Shape::Text, value.ty) {
+                return Err(Error::new(
+                    source
+                        .error(
+                            value.span.pos,
+                            format!("this input takes text, found `{}`", value.ty.name()),
+                        )
+                        .span(value.span.len.max(1))
+                        .note("write the key as a string, as in `\"backspace\"`"),
+                ));
+            }
+            return Ok(self.menu_reporter(menu_id, value.expr));
+        }
+
         Err(Error::new(
             source
                 .error(
@@ -3684,6 +4702,30 @@ impl<'a> Unit<'a> {
                 .span(expr.span().len)
                 .note(format!("the values are {}", self.variant_list(menu_id))),
         ))
+    }
+
+    /// The expression a reporter-accepting menu needs.
+    ///
+    /// A value the program computed is already a reporter and is left alone. A
+    /// constant is not, so it becomes `join(value, "")` — the same string in one
+    /// block, and the only spelling of a literal that Scratch will take where it
+    /// expects a block. A literal that already names a fixed value stays the
+    /// clean dropdown, so `sensing_keypressed("space")` reads as it always did.
+    fn menu_reporter(&self, menu_id: &str, value: rasm::Expr) -> rasm::Expr {
+        if matches!(value, rasm::Expr::Call(_)) {
+            return value;
+        }
+        if let rasm::Expr::Str(text, _) = &value {
+            if let menu::Domain::Fixed(values) = menu::domain(menu_id) {
+                if values
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(text))
+                {
+                    return value;
+                }
+            }
+        }
+        mk_call("operator_join", vec![value, mk_str("")])
     }
 
     /// Check a name written as a literal against what the target declares.
@@ -4045,7 +5087,7 @@ impl<'a> Unit<'a> {
     /// when it is not pure, and the statement that makes sure that item exists.
     fn list_item_write(
         &mut self,
-        name: &str,
+        container: &Container,
         index: &ast::Expr,
         source: &Rc<Source>,
         params: &[(String, Scalar)],
@@ -4060,8 +5102,188 @@ impl<'a> Unit<'a> {
         };
         let mut out = Vec::new();
         out.extend(bind);
-        out.push(list_grow(name, slot.clone()));
+        match container {
+            // A Scratch list is grown to the index, then written.
+            Container::Scratch(name) => out.push(list_grow(name, slot.clone())),
+            // A run of an arena has a length of its own, so it is grown to the
+            // index and the length is the new one.
+            Container::Vms { handle, space } => {
+                out.push(self.helper_stmt(Helper::Ensure, *handle, *space, vec![slot.clone()]));
+            }
+        }
         Ok((slot, out))
+    }
+
+    /// Where a `list` or a `map` keeps its storage.
+    fn container_of(&self, name: &str, source: &Source, span: Span) -> Result<Container> {
+        let var = self
+            .locals
+            .iter()
+            .find(|v| v.name == name)
+            .or_else(|| self.globals.var(name));
+        let Some(var) = var else {
+            return Err(Error::new(
+                source
+                    .error(span.pos, format!("there is no list called `{name}`"))
+                    .span(span.len)
+                    .note("declare it with `var name: list<num> = [];`"),
+            ));
+        };
+        if !var.is_list {
+            return Err(list_where_scalar(source, span, name));
+        }
+        if var.scratch {
+            return Ok(Container::Scratch(name.to_string()));
+        }
+        let space = match (var.global, var.dynamic) {
+            (false, false) => Space::Fixed,
+            (false, true) => Space::Heap,
+            (true, false) => Space::GlobalFixed,
+            (true, true) => Space::GlobalHeap,
+        };
+        Ok(Container::Vms {
+            handle: var.cell,
+            space,
+        })
+    }
+
+    /// `index of value in container` — 1-based, or `0` when it is not there.
+    fn container_index(&mut self, container: &Container, value: rasm::Expr) -> rasm::Expr {
+        match container {
+            Container::Scratch(name) => {
+                mk_call("data_itemnumoflist", vec![value, mk_str(name.clone())])
+            }
+            Container::Vms { handle, space } => {
+                self.helper_value(Helper::Index, *handle, *space, vec![value])
+            }
+        }
+    }
+
+    /// The whole container as one string.
+    fn container_text(&mut self, container: &Container, element: Scalar) -> rasm::Expr {
+        match container {
+            Container::Scratch(name) => mk_call("data_listcontents", vec![mk_str(name.clone())]),
+            Container::Vms { handle, space } => {
+                // Scratch joins a list of one-character strings with nothing
+                // and anything else with a space; the element type says which
+                // rule can apply before a value is even read.
+                let letters = if element == Scalar::Str { "1" } else { "0" };
+                self.helper_value(Helper::Text, *handle, *space, vec![mk_num(letters)])
+            }
+        }
+    }
+
+    /// Append one item.
+    fn container_push(&mut self, container: &Container, value: rasm::Expr) -> rasm::Stmt {
+        match container {
+            Container::Scratch(name) => {
+                mk_stmt("data_addtolist", vec![value, mk_str(name.clone())])
+            }
+            Container::Vms { handle, space } => {
+                self.helper_stmt(Helper::Push, *handle, *space, vec![value])
+            }
+        }
+    }
+
+    /// Insert one item at a 1-based index.
+    fn container_insert(
+        &mut self,
+        container: &Container,
+        at: rasm::Expr,
+        value: rasm::Expr,
+    ) -> rasm::Stmt {
+        match container {
+            Container::Scratch(name) => {
+                mk_stmt("data_insertatlist", vec![value, at, mk_str(name.clone())])
+            }
+            Container::Vms { handle, space } => {
+                self.helper_stmt(Helper::Insert, *handle, *space, vec![at, value])
+            }
+        }
+    }
+
+    /// Remove the item at a 1-based index.
+    fn container_remove(&mut self, container: &Container, at: rasm::Expr) -> rasm::Stmt {
+        match container {
+            Container::Scratch(name) => {
+                mk_stmt("data_deleteoflist", vec![at, mk_str(name.clone())])
+            }
+            Container::Vms { handle, space } => {
+                self.helper_stmt(Helper::Remove, *handle, *space, vec![at])
+            }
+        }
+    }
+
+    /// Drop the last item.
+    fn container_pop(&mut self, container: &Container) -> rasm::Stmt {
+        match container {
+            Container::Scratch(name) => mk_stmt(
+                "data_deleteoflist",
+                vec![
+                    mk_call("data_lengthoflist", vec![mk_str(name.clone())]),
+                    mk_str(name.clone()),
+                ],
+            ),
+            Container::Vms { handle, space } => {
+                self.helper_stmt(Helper::Pop, *handle, *space, Vec::new())
+            }
+        }
+    }
+
+    /// Forget every item, keeping the run for the next one.
+    fn container_clear(&self, container: &Container) -> rasm::Stmt {
+        match container {
+            Container::Scratch(name) => arena_clear(name),
+            Container::Vms { handle, space } => write_cell(*handle + H_LEN, *space, mk_num("0")),
+        }
+    }
+
+    /// Run a value-producing helper and read the cell it wrote.
+    ///
+    /// The helper writes its answer into a cell of the same list, which the
+    /// caller then copies into a cell of its own. The copy is the point: two
+    /// helpers called inside one expression would otherwise share the answer
+    /// cell and the last one would win. The call is hoisted above the statement
+    /// that needed it, like every other effectful reporter.
+    fn helper_value(
+        &mut self,
+        kind: Helper,
+        handle: usize,
+        space: Space,
+        args: Vec<rasm::Expr>,
+    ) -> rasm::Expr {
+        let out = self.out_cell(space);
+        let mut all = args;
+        all.push(mk_num(out.to_string()));
+        let call = self.helper_stmt(kind, handle, space, all);
+        let (temp, init) = self.temp_cell(read_cell(out, space));
+        self.pre.push(call);
+        self.pre.push(init);
+        temp.read()
+    }
+
+    /// The cell a value-producing helper of this space writes into.
+    fn out_cell(&mut self, space: Space) -> usize {
+        match space {
+            Space::Fixed => match self.out_fixed {
+                Some(cell) => cell,
+                None => {
+                    let cell = self.alloc_cell();
+                    self.out_fixed = Some(cell);
+                    cell
+                }
+            },
+            Space::Heap => match self.out_heap {
+                Some(cell) => cell,
+                None => {
+                    let cell = self.alloc_heap_cells(1);
+                    self.out_heap = Some(cell);
+                    cell
+                }
+            },
+            Space::GlobalFixed => self.globals.out_fixed,
+            Space::GlobalHeap => self.globals.out_heap,
+        }
     }
 
     fn assign_place(
@@ -4110,11 +5332,9 @@ impl<'a> Unit<'a> {
             [ast::Accessor::Index(index)] => {
                 let element = self.list_element(&name, source, target.name.span)?;
                 expect(&value, Ty::from(element), &format!("`{name}`"), source)?;
-                let (slot, mut out) = self.list_item_write(&name, index, source, params)?;
-                out.push(mk_stmt(
-                    "data_replaceitemoflist",
-                    vec![slot, mk_str(name), value.expr],
-                ));
+                let container = self.container_of(&name, source, target.name.span)?;
+                let (slot, mut out) = self.list_item_write(&container, index, source, params)?;
+                out.push(container.write(slot, value.expr));
                 Ok(out)
             }
             _ => {
@@ -4146,12 +5366,10 @@ impl<'a> Unit<'a> {
                     span: target.span,
                 };
                 expect(&placeholder, Ty::Num, &format!("`{name}`"), source)?;
-                let (slot, mut out) = self.list_item_write(&name, index, source, params)?;
-                let read = mk_call("data_itemoflist", vec![slot.clone(), mk_str(name.clone())]);
-                out.push(mk_stmt(
-                    "data_replaceitemoflist",
-                    vec![slot, mk_str(name), mk_call(opcode, vec![read, rhs])],
-                ));
+                let container = self.container_of(&name, source, target.name.span)?;
+                let (slot, mut out) = self.list_item_write(&container, index, source, params)?;
+                let read = container.read(slot.clone());
+                out.push(container.write(slot, mk_call(opcode, vec![read, rhs])));
                 Ok(out)
             }
             [] => {
@@ -4205,8 +5423,8 @@ impl<'a> Unit<'a> {
 
     // -- methods ----------------------------------------------------------
 
-    /// The declared list or map a method receiver names.
-    fn receiver(&mut self, expr: &Expr, source: &Rc<Source>) -> Result<(String, Ty)> {
+    /// The declared list or map a method receiver names, and where it lives.
+    fn receiver(&mut self, expr: &Expr, source: &Rc<Source>) -> Result<(String, Container, Ty)> {
         let Expr::Name(path) = expr else {
             return Err(Error::new(
                 source
@@ -4241,7 +5459,8 @@ impl<'a> Unit<'a> {
                     .span(path.span.len),
             ));
         }
-        Ok((name, ty))
+        let container = self.container_of(&name, source, path.span)?;
+        Ok((name, container, ty))
     }
 
     /// `receiver.method(args);` — the VMS methods that are statements.
@@ -4251,7 +5470,7 @@ impl<'a> Unit<'a> {
         source: &Rc<Source>,
         params: &[(String, Scalar)],
     ) -> Result<Vec<rasm::Stmt>> {
-        let (name, ty) = self.receiver(&stmt.receiver, source)?;
+        let (_name, container, ty) = self.receiver(&stmt.receiver, source)?;
         let method = stmt.name.name.as_str();
         let arg = |at: usize, this: &mut Self| -> Result<Typed> {
             let Some(expr) = stmt.args.get(at) else {
@@ -4266,101 +5485,68 @@ impl<'a> Unit<'a> {
             (Ty::List(element), "push") if stmt.args.len() == 1 => {
                 let value = arg(0, self)?;
                 expect(&value, Ty::from(element), "the pushed value", source)?;
-                Ok(vec![mk_stmt(
-                    "data_addtolist",
-                    vec![value.expr, mk_str(name)],
-                )])
+                Ok(vec![self.container_push(&container, value.expr)])
             }
             (Ty::List(element), "insert") if stmt.args.len() == 2 => {
                 let index = arg(0, self)?;
                 expect(&index, Ty::Num, "the position", source)?;
                 let value = arg(1, self)?;
                 expect(&value, Ty::from(element), "the inserted value", source)?;
-                Ok(vec![mk_stmt(
-                    "data_insertatlist",
-                    vec![value.expr, index.expr, mk_str(name)],
-                )])
+                Ok(vec![
+                    self.container_insert(&container, index.expr, value.expr)
+                ])
             }
             (Ty::List(_), "remove") if stmt.args.len() == 1 => {
                 let index = arg(0, self)?;
                 expect(&index, Ty::Num, "the position", source)?;
-                Ok(vec![mk_stmt(
-                    "data_deleteoflist",
-                    vec![index.expr, mk_str(name)],
-                )])
+                Ok(vec![self.container_remove(&container, index.expr)])
             }
             (Ty::List(_), "clear") if stmt.args.is_empty() => {
-                Ok(vec![mk_stmt("data_deletealloflist", vec![mk_str(name)])])
+                Ok(vec![self.container_clear(&container)])
             }
-            (Ty::List(_), "pop") if stmt.args.is_empty() => Ok(vec![mk_stmt(
-                "data_deleteoflist",
-                vec![
-                    mk_call("data_lengthoflist", vec![mk_str(name.clone())]),
-                    mk_str(name),
-                ],
-            )]),
+            (Ty::List(_), "pop") if stmt.args.is_empty() => {
+                Ok(vec![self.container_pop(&container)])
+            }
             (Ty::Map(..), "clear") if stmt.args.is_empty() => {
-                Ok(vec![mk_stmt("data_deletealloflist", vec![mk_str(name)])])
+                Ok(vec![self.container_clear(&container)])
             }
             (Ty::Map(key, value), "set") if stmt.args.len() == 2 => {
                 let k = arg(0, self)?;
                 expect(&k, Ty::from(key), "the key", source)?;
                 let v = arg(1, self)?;
                 expect(&v, Ty::from(value), "the value", source)?;
-                let (slot, init) = self.temp_cell(mk_call(
-                    "data_itemnumoflist",
-                    vec![k.expr.clone(), mk_str(name.clone())],
-                ));
-                let found = slot.read();
-                // Where the key is, once: the `if` and the write both need it.
-                let mut out = vec![init];
-                let yes = vec![mk_stmt(
-                    "data_replaceitemoflist",
-                    vec![
-                        mk_call("operator_add", vec![found.clone(), mk_num("1")]),
-                        mk_str(name.clone()),
-                        v.expr.clone(),
-                    ],
+                // Where the key is, once: the test and the write both need it.
+                let found = self.container_index(&container, k.expr.clone());
+                let yes = vec![container.write(
+                    mk_call("operator_add", vec![found.clone(), mk_num("1")]),
+                    v.expr.clone(),
                 )];
                 let no = vec![
-                    mk_stmt("data_addtolist", vec![k.expr, mk_str(name.clone())]),
-                    mk_stmt("data_addtolist", vec![v.expr, mk_str(name.clone())]),
+                    self.container_push(&container, k.expr),
+                    self.container_push(&container, v.expr),
                 ];
-                out.push(mk_block_else(
+                Ok(vec![mk_block_else(
                     "control_if_else",
                     vec![mk_call("operator_gt", vec![found, mk_num("0")])],
                     yes,
                     no,
-                ));
-                Ok(out)
+                )])
             }
             (Ty::Map(key, _), "remove") if stmt.args.len() == 1 => {
                 let k = arg(0, self)?;
                 expect(&k, Ty::from(key), "the key", source)?;
-                let (slot, init) = self.temp_cell(mk_call(
-                    "data_itemnumoflist",
-                    vec![k.expr.clone(), mk_str(name.clone())],
-                ));
-                let found = slot.read();
-                let mut out = vec![init];
+                let found = self.container_index(&container, k.expr);
                 // The value follows its key, so deleting the key twice removes
                 // the pair.
                 let yes = vec![
-                    mk_stmt(
-                        "data_deleteoflist",
-                        vec![found.clone(), mk_str(name.clone())],
-                    ),
-                    mk_stmt(
-                        "data_deleteoflist",
-                        vec![found.clone(), mk_str(name.clone())],
-                    ),
+                    self.container_remove(&container, found.clone()),
+                    self.container_remove(&container, found.clone()),
                 ];
-                out.push(mk_block(
+                Ok(vec![mk_block(
                     "control_if",
                     vec![mk_call("operator_gt", vec![found, mk_num("0")])],
                     yes,
-                ));
-                Ok(out)
+                )])
             }
             _ => Err(no_such_method(source, &stmt.name, method, ty, false)),
         }
@@ -4376,7 +5562,7 @@ impl<'a> Unit<'a> {
         source: &Rc<Source>,
         params: &[(String, Scalar)],
     ) -> Result<Typed> {
-        let (list, ty) = self.receiver(receiver, source)?;
+        let (_receiver_name, container, ty) = self.receiver(receiver, source)?;
         let method = name.name.as_str();
         let value_of = |this: &mut Self, at: usize| -> Result<Typed> {
             let Some(arg) = args.get(at) else {
@@ -4386,15 +5572,16 @@ impl<'a> Unit<'a> {
         };
         match (ty, method, args.len()) {
             (Ty::List(_), "len", 0) => Ok(Typed {
-                expr: mk_call("data_lengthoflist", vec![mk_str(list)]),
+                expr: container.length(),
                 ty: Ty::Num,
                 span: expr.span(),
             }),
             (Ty::List(element), "contains", 1) => {
                 let value = value_of(self, 0)?;
                 expect(&value, Ty::from(element), "the value", source)?;
+                let found = self.container_index(&container, value.expr);
                 Ok(Typed {
-                    expr: mk_call("data_listcontainsitem", vec![mk_str(list), value.expr]),
+                    expr: mk_call("operator_gt", vec![found, mk_num("0")]),
                     ty: Ty::Bool,
                     span: expr.span(),
                 })
@@ -4403,7 +5590,7 @@ impl<'a> Unit<'a> {
                 let value = value_of(self, 0)?;
                 expect(&value, Ty::from(element), "the value", source)?;
                 Ok(Typed {
-                    expr: mk_call("data_itemnumoflist", vec![value.expr, mk_str(list)]),
+                    expr: self.container_index(&container, value.expr),
                     ty: Ty::Num,
                     span: expr.span(),
                 })
@@ -4412,89 +5599,50 @@ impl<'a> Unit<'a> {
                 let index = value_of(self, 0)?;
                 expect(&index, Ty::Num, "the position", source)?;
                 Ok(Typed {
-                    expr: read_bool(
-                        Ty::from(element),
-                        mk_call("data_itemoflist", vec![index.expr, mk_str(list)]),
-                    ),
+                    expr: read_bool(Ty::from(element), container.read(index.expr)),
                     ty: Ty::from(element),
                     span: expr.span(),
                 })
             }
             (Ty::List(element), "first", 0) => Ok(Typed {
-                expr: read_bool(
-                    Ty::from(element),
-                    mk_call("data_itemoflist", vec![mk_num("1"), mk_str(list)]),
-                ),
+                expr: read_bool(Ty::from(element), container.read(mk_num("1"))),
                 ty: Ty::from(element),
                 span: expr.span(),
             }),
-            // The last item is the one at the list's length, and Scratch's
-            // `item of` computes that at run time — one reporter, not a loop.
+            // The last item is the one at the list's length, which the run
+            // keeps, so it is one read at a computed index — not a loop.
             (Ty::List(element), "last", 0) => Ok(Typed {
-                expr: read_bool(
-                    Ty::from(element),
-                    mk_call(
-                        "data_itemoflist",
-                        vec![
-                            mk_call("data_lengthoflist", vec![mk_str(list.clone())]),
-                            mk_str(list),
-                        ],
-                    ),
-                ),
+                expr: read_bool(Ty::from(element), container.read(container.length())),
                 ty: Ty::from(element),
                 span: expr.span(),
             }),
-            // The whole list as one string, which is `data_listcontents` — the
-            // same block `data::contents_of_list(l)` names.
-            (Ty::List(_), "text", 0) => Ok(Typed {
-                expr: mk_call("data_listcontents", vec![mk_str(list)]),
+            // The whole list as one string.
+            (Ty::List(element), "text", 0) => Ok(Typed {
+                expr: self.container_text(&container, element),
                 ty: Ty::Str,
                 span: expr.span(),
             }),
             (Ty::List(_), "is_empty", 0) => Ok(Typed {
-                expr: mk_call(
-                    "operator_equals",
-                    vec![
-                        mk_call("data_lengthoflist", vec![mk_str(list)]),
-                        mk_num("0"),
-                    ],
-                ),
+                expr: mk_call("operator_equals", vec![container.length(), mk_num("0")]),
                 ty: Ty::Bool,
                 span: expr.span(),
             }),
             (Ty::Map(..), "is_empty", 0) => Ok(Typed {
-                expr: mk_call(
-                    "operator_equals",
-                    vec![
-                        mk_call("data_lengthoflist", vec![mk_str(list)]),
-                        mk_num("0"),
-                    ],
-                ),
+                expr: mk_call("operator_equals", vec![container.length(), mk_num("0")]),
                 ty: Ty::Bool,
                 span: expr.span(),
             }),
             (Ty::Map(..), "len", 0) => Ok(Typed {
-                expr: mk_call(
-                    "operator_divide",
-                    vec![
-                        mk_call("data_lengthoflist", vec![mk_str(list)]),
-                        mk_num("2"),
-                    ],
-                ),
+                expr: mk_call("operator_divide", vec![container.length(), mk_num("2")]),
                 ty: Ty::Num,
                 span: expr.span(),
             }),
             (Ty::Map(key, _), "has", 1) => {
                 let k = value_of(self, 0)?;
                 expect(&k, Ty::from(key), "the key", source)?;
+                let found = self.container_index(&container, k.expr);
                 Ok(Typed {
-                    expr: mk_call(
-                        "operator_gt",
-                        vec![
-                            mk_call("data_itemnumoflist", vec![k.expr, mk_str(list)]),
-                            mk_num("0"),
-                        ],
-                    ),
+                    expr: mk_call("operator_gt", vec![found, mk_num("0")]),
                     ty: Ty::Bool,
                     span: expr.span(),
                 })
@@ -4502,27 +5650,18 @@ impl<'a> Unit<'a> {
             (Ty::Map(key, value), "get", 1) => {
                 let k = value_of(self, 0)?;
                 expect(&k, Ty::from(key), "the key", source)?;
-                // A missing key has position zero, and `item 1 of` a list is
+                // A missing key has position zero, and `item 1 of` a map is
                 // its first *key*, so the read is guarded by a test. The two
                 // cells are the cost of a table whose keys are not indices.
-                let (found, found_init) = self.temp_cell(mk_call(
-                    "data_itemnumoflist",
-                    vec![k.expr, mk_str(list.clone())],
-                ));
+                let found = self.container_index(&container, k.expr);
                 let (slot, slot_init) = self.temp_cell(mk_str(""));
-                let mut pre = vec![found_init, slot_init];
-                pre.push(mk_block(
+                self.pre.push(slot_init);
+                self.pre.push(mk_block(
                     "control_if",
-                    vec![mk_call("operator_gt", vec![found.read(), mk_num("0")])],
-                    vec![slot.write(mk_call(
-                        "data_itemoflist",
-                        vec![
-                            mk_call("operator_add", vec![found.read(), mk_num("1")]),
-                            mk_str(list),
-                        ],
-                    ))],
+                    vec![mk_call("operator_gt", vec![found.clone(), mk_num("0")])],
+                    vec![slot
+                        .write(container.read(mk_call("operator_add", vec![found, mk_num("1")])))],
                 ));
-                self.pre.extend(pre);
                 Ok(Typed {
                     expr: read_bool(Ty::from(value), slot.read()),
                     ty: Ty::from(value),
@@ -5645,7 +6784,7 @@ fn list_where_scalar(source: &Source, span: Span, name: &str) -> Error {
         source
             .error(span.pos, format!("`{name}` is a list, not a variable"))
             .span(span.len)
-            .note("read an item with `name[i]`, or use `data::length_of_list(name)`"),
+            .note("read an item with `name[i]`, or use a method such as `name.len()`"),
     )
 }
 

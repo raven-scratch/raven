@@ -11,8 +11,10 @@ Scratch blocks that *are* those statements, and a raven expression becomes
 reporter blocks that *are* that expression. raven adds no runtime of its own — no
 dispatch, no frame layout, no bookkeeping. The lists it declares, `_vms` and
 `_gvm`, are fixed arrays indexed by constants, and every access to them is a
-block the source asked for. If a construct cannot be expressed as blocks, it is a
-compile error, not a clever trick.
+block the source asked for. A `list` is a run of that memory and its helpers are
+`warp` procedures the expansion prints; nothing runs that `raven expand` does not
+show. If a construct cannot be expressed as blocks, it is a compile error, not a
+clever trick.
 
 ## 2. Every expansion is printable
 
@@ -101,65 +103,49 @@ error: `data::set_variable_to` is not available in raven
 ```
 
 A raven program cannot *write* a Scratch variable: everything it stores is a
-**cell of the virtual memory system**: a constant index into one of two Scratch
-lists, read with `data_itemoflist` and written with `data_replaceitemoflist`. The
-one Scratch variable a project can declare is the mirror `watch` asks for, and
-that exists to be looked at on the stage rather than programmed with.
+**cell of the virtual memory system**: a constant index into a Scratch list, read
+with `data_itemoflist` and written with `data_replaceitemoflist`. The one Scratch
+variable a project can declare is the mirror `watch` asks for, and that exists to
+be looked at on the stage rather than programmed with.
 
-There are four lists, and the split between them is by **lifetime**:
+There are five lists, and the split between them is by **lifetime** and by
+whether the storage *grows*:
 
 | | |
 | --- | --- |
-| `_vms` | the target's arena: its `var`s and every `proc`'s frame. Code-sized, and it outlives a script. |
+| `_vms` | the target's arena: its `var`s, every `proc`'s frame, and every list or map that is only ever read or written in place. Declared with one item per cell, so a table costs nothing to start. |
+| `_heap` | the target's heap: the runs that grow. A list of its own, because Scratch refuses to add to a list of 200,000 items — one large table in `_vms` would otherwise stop every list in the program from growing. |
 | `_gvm` | the project's arena, declared on the stage: every `pub var`, and every stage `var` |
+| `_gheap` | the project's heap, declared on the stage |
 | `_stack1`, `_stack2`, … | one per script: everything block-scoped. **It grows and shrinks with the scopes that use it.** |
 | `_console` | the log, when something logs |
 
 None of them is declared unless the program uses it: a target with no `var`, no
 `let` and no `proc` cell emits no arena at all, a script that never pushes a
 block-scoped cell gets no stack, and a project that never logs gets no console.
-The memory manager's `warp` procedure follows the same rule — it exists exactly
-when there is an arena to grow.
 
 ### The stack grows and shrinks
 
-A `let`, a `for` counter, a struct `let` or a temporary is a cell on the
-**running script's** stack. `let x = e;` is one `add e to _stack1`; the read is
-`item 2 of _stack1`; and when the block that declared it ends, the block pops it
-again with `delete 2 of _stack1`. Nothing is reserved up front: the list starts
-**empty** and its length is exactly the number of block-scoped cells alive at
-that moment. A script also empties its own stack at the start of every run, so a
-script stopped mid-block cannot leave the next run out of step.
+A `let` and a `for` counter are cells on the **running script's** stack.
+`let x = e;` is one `add e to _stack1`; the read is `item 2 of _stack1`; and when
+the block that declared it ends, the block pops it again with
+`delete 2 of _stack1`. Nothing is reserved up front: the list starts **empty**
+and its length is exactly the number of block-scoped cells alive at that moment.
+A script also empties its own stack at the start of every run, so a script
+stopped mid-block cannot leave the next run out of step.
 
 Each script has its own stack, so two scripts running at once — the green flag
 and a broadcast, say — cannot pull the ground out from under each other.
 
-### The arenas are grown on demand
+### The arenas are declared, not grown
 
-`_vms` and `_gvm` hold what has to outlive a script: a `var`, and a `proc`'s
-frame, which every call of that procedure shares (that is what makes recursion
-work with a constant index). They are declared **empty** too, and a generated
-`warp` procedure — the whole of the memory manager — grows them to the highest
-cell the program can reach and writes the declared starting values, once:
-
-```rasm
-proc __vms_reserve() warp {
-    control_if(operator_lt(data_lengthoflist("_vms"), 12)) {
-        control_repeat_until(operator_not(operator_lt(data_lengthoflist("_vms"), 12))) {
-            data_addtolist("", "_vms");
-        }
-        data_replaceitemoflist(1, "_vms", 0);
-    }
-}
-```
-
-Every script calls it first; after the first call it is one block. Its size is
-the program's, not the data's — no amount of running makes it bigger — so there
-is no storage limit a program can hit, and nothing is reserved that the program
-does not use.
-
-Both arena names and the stack prefix are reserved: a program cannot declare
-them.
+`_vms` and `_gvm` hold what has to outlive a script: a `var`, a `proc`'s frame,
+which every call of that procedure shares (that is what makes recursion work with
+a constant index), and the lists and maps that do not grow. They are declared
+with **one item per cell**, each carrying its starting value, so a `var score:
+num = 0;` is a cell that holds `0` before any script runs and no procedure has to
+run to put it there. The size is the program's, not the data's — no amount of
+running makes it bigger.
 
 A cell in an arena is a **name for a location**, not a stack frame, and that has
 one consequence worth stating plainly: a `let` inside a *procedure* is one cell
@@ -178,21 +164,48 @@ no way to make a variable the editor can see, no way to reach one by name, and n
 way for a macro to quietly add one. `raven expand` prints every cell, and the
 count of them is the count in the source.
 
+### A list is a run of cells
+
+A `list<T>` or a `map<K, V>` is not a Scratch list. It is a **run of cells** in
+one of the arenas, starting with a handle — the cell the items begin at, the
+length, and the capacity — and reached through raven's checked methods:
+
+```rasm
+data_replaceitemoflist(2, "_vms", data_itemoflist(1, "_vms"))   // xs[1] = xs[1]
+```
+
+The handle's base is a cell, so a run can move: pushing past its capacity doubles
+it, appends the new cells at the end of the arena, and copies the items across.
+Every read and write is `item (base + i - 1)`, which for a constant index folds to
+a constant offset plus one base read.
+
+A run that is never pushed or inserted into is a **table**, and stays in the fixed
+arena, where a literal initializer is part of the declaration and costs nothing at
+run time. A run that grows lives in `_heap` or `_gheap`. The two live in different
+lists for one reason, and it is Scratch's: `add to list` is refused once a list
+holds 200,000 items, so a large table sharing the arena with a growable run would
+freeze that run. Which lists grow is read out of the source — `push`, `insert`
+and a map's `set` — and a macro that mutates a list it was handed marks every list
+growable, so the answer is never wrong in the direction that breaks a program.
+
 ### Values, places and containers
 
 Three kinds of storage follow from that, and the difference between them is the
-difference between Rust's values, its owned places and its reference types:
+difference between Rust's values and its owned places:
 
 | | what it is | how it is read |
 | --- | --- | --- |
 | `num` `str` `bool` | a value: it is copied | one cell read |
 | `struct` | a **place**: a run of cells whose shape is fixed at compile time, so it cannot be copied, compared or passed to a `proc` | one cell read per field, at a constant index |
-| `list<T>` `map<K,V>` | a container: a Scratch list, because that is the one thing Scratch gives blocks to drive an item at a time | the block the method is, through raven's checked name |
+| `list<T>` `map<K,V>` | an **owned** run of cells, reached through raven's checked methods | the base read, then one item read |
 
 A struct being a place is the whole reason `p.pos.x` costs one block: the layout
 is decided while compiling, so the two field offsets are added into one constant.
 Nesting costs nothing. A struct has no identity beyond its cells, so there is no
-ownership question to answer and no hidden copy to get wrong.
+ownership question to answer and no hidden copy to get wrong. A container is
+owned in the same strict sense — one name, no copies, no moves — and
+[the ownership section](/raven/types#ownership) says why that is the right call
+for this target.
 
 ### A boolean is stored, and converted on the way out
 
@@ -222,12 +235,11 @@ a `map<K, bool>`, a struct field and a `proc p() -> bool` all hold one.
 
 ### Maps
 
-A `map<K, V>` is one Scratch list holding `k0, v0, k1, v1, …`. `has` is
-`item # of` compared to zero; `set` is that lookup followed by a replace or an
-append; `remove` deletes the key and then the value that followed it. `get` is
-the one method that costs a `control_if`: a missing key has position 0, and
-`item 1 of` a list is its first *key*, so the read is guarded rather than
-trusting the lookup.
+A `map<K, V>` is one run holding `k0, v0, k1, v1, …`. `has` is a scan of the keys
+for a match; `set` is that scan followed by a replace or an append; `remove`
+removes the key and then the value that followed it. `get` is the one method that
+costs a `control_if`: a missing key scans to 0, and item 0 of a run is nothing, so
+the read is guarded rather than trusting the scan.
 
 ## Value-returning procedures
 
@@ -390,7 +402,10 @@ it keeps every field access a single block at a constant index.
 
 What that refuses is a struct you can put in a `list`, hand to a `proc`, or
 return from one. Each of those needs a memory layout that depends on the
-program's run, which is what the virtual memory system deliberately does not have.
+program's run, which is what the virtual memory system deliberately does not have
+for a struct. A `list` is a run, and a run can be found through a handle, but the
+call interface is a custom block whose parameters are scalars, so an owned run
+cannot cross it either.
 
 ### A general `for` over anything, and iterators
 
