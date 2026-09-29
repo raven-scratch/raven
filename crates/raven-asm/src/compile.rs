@@ -1691,10 +1691,13 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    fn resolve_variable(&self, expr: &Expr, src: &Rc<Source>) -> Result<Sym> {
+    /// The symbol a variable argument names. Borrowed, not cloned: a global
+    /// list's `init` is the project's whole table, and a reference to one is per
+    /// statement.
+    fn resolve_variable<'s>(&'s self, expr: &Expr, src: &Rc<Source>) -> Result<&'s Sym> {
         let name = self.resolve_str(expr, src, "a variable name")?;
         if let Some(sym) = self.syms.var(self.globals, name) {
-            return Ok(sym.clone());
+            return Ok(sym);
         }
         let mut candidates: Vec<String> = self
             .syms
@@ -1715,10 +1718,11 @@ impl<'a> Emitter<'a> {
         Err(err)
     }
 
-    fn resolve_list(&self, expr: &Expr, src: &Rc<Source>) -> Result<Sym> {
+    /// The symbol a list argument names. Borrowed for the same reason.
+    fn resolve_list<'s>(&'s self, expr: &Expr, src: &Rc<Source>) -> Result<&'s Sym> {
         let name = self.resolve_str(expr, src, "a list name")?;
         if let Some(sym) = self.syms.list(self.globals, name) {
-            return Ok(sym.clone());
+            return Ok(sym);
         }
         let mut candidates: Vec<String> = self
             .syms

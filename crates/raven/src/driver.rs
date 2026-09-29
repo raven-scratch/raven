@@ -118,7 +118,7 @@ pub fn build(options: &Options) -> Result<BuildResult> {
     let json = serde_json::to_vec(&build.project)
         .map_err(|e| Error::msg(format!("cannot serialize project.json: {e}")))?;
     let mut zip = raven_scratch::zipw::ZipWriter::new();
-    zip.add("project.json", json.clone());
+    zip.add("project.json", json);
     for asset in &build.assets {
         zip.add(asset.filename(), asset.data.clone());
     }
