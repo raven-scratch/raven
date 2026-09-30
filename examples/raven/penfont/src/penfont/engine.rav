@@ -29,7 +29,7 @@
 // **The box.** Scratch does not clip a sprite asked to move past the edge of the
 // stage, it *moves it back* — so a run drawn from x = 300 is drawn at x = 225,
 // and every row that reaches past the edge piles onto the same column, which is
-// a smear rather than a letter. Every run is therefore cut at EDGE_X/EDGE_Y
+// a smear rather than a letter. Every run is therefore cut at PF_EDGE_X/PF_EDGE_Y
 // first. Those are the tightest fence a costume can give, not the widest, so a
 // page inside it fits whatever the sprite is wearing.
 //
@@ -49,28 +49,28 @@ use penfont::font;
 
 /// The box the pen may be moved inside. A run outside it is cut, never asked
 /// for: see the note above about what Scratch does to a sprite past the edge.
-pub const EDGE_X: num = 225;
-pub const EDGE_Y: num = 165;
+pub const PF_EDGE_X: num = 225;
+pub const PF_EDGE_Y: num = 165;
 
 /// Baseline to baseline, in ems. This is the font's own leading: the tallest ink
 /// the tables carry reaches about 1.06 em above the baseline and 0.3 below, so a
 /// line that would be comfortable for Latin alone collides with a CJK one.
-pub const LEAD: num = 1.32;
+pub const PF_LEAD: num = 1.32;
 
 /// What a sheet page holds, and where. Twelve across and eight down at these
 /// pitches is 432 by 238 inside a box 450 wide, which leaves the top and the
 /// bottom for the two lines that say where in the inventory you are.
-pub const COLS: num = 12;
-pub const ROWS: num = 8;
-pub const SHEET_CELLS: num = 96;
-pub const CELL: num = 36;
-pub const STEP: num = 34;
-pub const SHEET_LEFT: num = -218;
-pub const SHEET_TOP: num = 130;
-pub const SHEET_EM: num = 22;
-pub const SHEET_SAY: num = -136;
-pub const SHEET_TAIL: num = -156;
-pub const SHEET_SAY_EM: num = 16;
+pub const PF_COLS: num = 12;
+pub const PF_ROWS: num = 8;
+pub const PF_SHEET_CELLS: num = 96;
+pub const PF_CELL: num = 36;
+pub const PF_STEP: num = 34;
+pub const PF_SHEET_LEFT: num = -218;
+pub const PF_SHEET_TOP: num = 130;
+pub const PF_SHEET_EM: num = 22;
+pub const PF_SHEET_SAY: num = -136;
+pub const PF_SHEET_TAIL: num = -156;
+pub const PF_SHEET_SAY_EM: num = 16;
 
 /// The pen width a size wants: one unit an em is FONT_ROWS units of scan row, so
 /// `ceil` of the scale is the smallest pen that leaves no white between two rows.
@@ -131,7 +131,7 @@ pub proc glyph_of(pf_text: str) -> num warp {
 
 /// Which sheet page a glyph is on.
 pub proc glyph_page(pf_g: num) -> num warp {
-    return floor((pf_g - 1) / SHEET_CELLS) + 1;
+    return floor((pf_g - 1) / PF_SHEET_CELLS) + 1;
 }
 
 /// How many pages the sheet has.
@@ -166,13 +166,13 @@ pub proc ink_glyph(pf_g: num, pf_x: num, pf_y: num, pf_scale: num, pf_pen: num) 
             from = pf_x + (a + b) * pf_scale / 2;
             to = from + 0.05;
         }
-        if from < -EDGE_X {
-            from = -EDGE_X;
+        if from < -PF_EDGE_X {
+            from = -PF_EDGE_X;
         }
-        if to > EDGE_X {
-            to = EDGE_X;
+        if to > PF_EDGE_X {
+            to = PF_EDGE_X;
         }
-        if to > from && top > -EDGE_Y && top < EDGE_Y {
+        if to > from && top > -PF_EDGE_Y && top < PF_EDGE_Y {
             motion::set_x(from);
             motion::set_y(top);
             pen::pen_down();
@@ -206,7 +206,7 @@ pub proc draw_text(pf_content: str, pf_x: num, pf_y: num, pf_em: num, pf_colour:
     let scale: num = pf_em / FONT_ROWS;
     let pen: num = stroke_width(pf_em);
     pen::set_pen_size_to(pen);
-    let lead: num = pf_em * LEAD;
+    let lead: num = pf_em * PF_LEAD;
     let px: num = pf_x;
     let py: num = pf_y;
     let i: num = 1;
@@ -280,7 +280,7 @@ pub proc stroke(pf_x0: num, pf_y0: num, pf_x1: num, pf_y1: num) warp {
     pen::pen_up();
 }
 
-/// The sheet: every glyph the font has, `COLS` by `ROWS` to a page, in the order
+/// The sheet: every glyph the font has, `PF_COLS` by `PF_ROWS` to a page, in the order
 /// the table is keyed, with the page number under it and `pf_mark` -- a glyph
 /// index, or 0 -- ringed in the accent ink.
 ///
@@ -292,18 +292,18 @@ pub proc stroke(pf_x0: num, pf_y0: num, pf_x1: num, pf_y1: num) warp {
 /// draws nothing. It is where a find says what it found.
 pub proc draw_sheet(pf_page: num, pf_mark: num, pf_note: str, pf_colour: str, pf_accent: str) warp {
     pen::clear();
-    let em: num = SHEET_EM;
+    let em: num = PF_SHEET_EM;
     let scale: num = em / FONT_ROWS;
     let pen: num = stroke_width(em);
     pen::set_pen_size_to(pen);
     let total: num = font_chars.len();
-    let first: num = (pf_page - 1) * SHEET_CELLS + 1;
+    let first: num = (pf_page - 1) * PF_SHEET_CELLS + 1;
     let k: num = 0;
-    repeat SHEET_CELLS {
+    repeat PF_SHEET_CELLS {
         let g: num = first + k;
         if g <= total {
-            let cx: num = SHEET_LEFT + 6 + (k % COLS) * CELL;
-            let cy: num = SHEET_TOP - floor(k / COLS) * STEP;
+            let cx: num = PF_SHEET_LEFT + 6 + (k % PF_COLS) * PF_CELL;
+            let cy: num = PF_SHEET_TOP - floor(k / PF_COLS) * PF_STEP;
             if g == pf_mark {
                 pen::set_pen_color_to_color(num(pf_accent));
             } else {
@@ -311,18 +311,18 @@ pub proc draw_sheet(pf_page: num, pf_mark: num, pf_note: str, pf_colour: str, pf
             }
             ink_glyph(g, cx, cy, scale, pen);
             if g == pf_mark {
-                stroke(cx - 4, cy - 5, cx + CELL - 10, cy - 5);
-                stroke(cx + CELL - 10, cy - 5, cx + CELL - 10, cy + 27);
-                stroke(cx + CELL - 10, cy + 27, cx - 4, cy + 27);
+                stroke(cx - 4, cy - 5, cx + PF_CELL - 10, cy - 5);
+                stroke(cx + PF_CELL - 10, cy - 5, cx + PF_CELL - 10, cy + 27);
+                stroke(cx + PF_CELL - 10, cy + 27, cx - 4, cy + 27);
                 stroke(cx - 4, cy + 27, cx - 4, cy - 5);
             }
         }
         k += 1;
     }
     pen::set_pen_size_to(1);
-    draw_text(f"glyphs {first} to {first + SHEET_CELLS - 1} of {total}   page {pf_page} of {sheet_pages()}",
-              SHEET_LEFT, SHEET_SAY, SHEET_SAY_EM, pf_colour, 0);
+    draw_text(f"glyphs {first} to {first + PF_SHEET_CELLS - 1} of {total}   page {pf_page} of {sheet_pages()}",
+              PF_SHEET_LEFT, PF_SHEET_SAY, PF_SHEET_SAY_EM, pf_colour, 0);
     if operators::length(pf_note) > 0 {
-        draw_text(pf_note, SHEET_LEFT, SHEET_TAIL, SHEET_SAY_EM, pf_accent, 0);
+        draw_text(pf_note, PF_SHEET_LEFT, PF_SHEET_TAIL, PF_SHEET_SAY_EM, pf_accent, 0);
     }
 }

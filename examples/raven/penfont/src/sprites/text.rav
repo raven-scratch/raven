@@ -16,7 +16,7 @@ sprite "Text" {
 
     /// The page: the block starts here, and the first baseline sits `CAP` ems
     /// under the top. The stage is 480 by 360 and the pen may only be moved
-    /// inside `EDGE_X` by `EDGE_Y`, so this leaves room for the descender of a
+    /// inside `PF_EDGE_X` by `PF_EDGE_Y`, so this leaves room for the descender of a
     /// line at the very top.
     const LEFT: num = -224;
     const TOP: num = 152;

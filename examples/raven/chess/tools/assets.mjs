@@ -21,14 +21,15 @@
 // a 14 to 1 downscale, which aliases, and ten times the bytes for nothing.
 //
 // The browser that does the rasterising is playwright's chromium, the same one
-// `tools/glyphs.py` renders its proof sheets with.
+// `tools/pieces.mjs` renders the board's proof sheets with.
 //
 // Every other costume is written 1:1 with its own viewBox, at the origin,
 // because Scratch draws a costume at its `width` and `height` and does not
 // rescale a viewBox that disagrees with them.
 //
-// The HUD font is not here: it is one SVG per character per weight, from a real
-// font, and `tools/glyphs.py` writes those and the module that stamps them.
+// The HUD's text is not here and is not a costume at all: it is drawn with the
+// pen, from the glyph table `lib/penfont`'s generator writes into
+// `src/penfont/`.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

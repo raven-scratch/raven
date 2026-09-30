@@ -58,7 +58,7 @@ consumer has to decide for themselves.
 the block is pinned to the top-left of the stage and the first baseline sits 0.9
 ems under it. The library is given the baseline and does not care where it is.
 The stage is 480 by 360 and the pen may only be moved inside the library's
-`EDGE_X` by `EDGE_Y`, which is 225 by 165 either side of the middle, so the
+`PF_EDGE_X` by `PF_EDGE_Y`, which is 225 by 165 either side of the middle, so the
 default page is five short lines: 330 units of box, 45 units of leading at the
 default size, and seven lines is the most that can ever fit.
 

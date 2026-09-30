@@ -58,16 +58,29 @@ costume is all it needs to wear.
 | `draw_text(content, x, y, em, colour, wide)` | a block of text from the top-left of its first baseline, wrapped inside `wide` (0 is no wrap) |
 | `draw_sheet(page, mark, note, colour, accent)` | one page of the glyph sheet; `mark` is a glyph index to ring, `note` a line to print under it |
 | `glyph(g, x, y, em, colour)` | one glyph by index |
+| `ink_glyph(g, x, y, scale, pen)` | the same, with the scale and the pen width already worked out — the one to call in a loop |
+| `stroke_width(em)` | the pen width a size wants |
 | `find_glyph(key)` | the index of a key, or 0 |
 | `glyph_of(text)` | the index of the glyph a piece of text starts with, reading `\c` |
 | `glyph_page(g)` / `sheet_pages()` | which page a glyph is on, and how many there are |
-| `EDGE_X`, `EDGE_Y` | the box the pen may be moved inside |
-| `LEAD` | baseline to baseline, in ems |
-| `COLS`, `ROWS`, `CELL`, `STEP`, `SHEET_LEFT`, `SHEET_TOP`, `SHEET_EM` | the sheet's geometry |
+| `PF_EDGE_X`, `PF_EDGE_Y` | the box the pen may be moved inside |
+| `PF_LEAD` | baseline to baseline, in ems |
+| `PF_COLS`, `PF_ROWS`, `PF_CELL`, `PF_STEP`, `PF_SHEET_LEFT`, `PF_SHEET_TOP`, `PF_SHEET_EM` | the sheet's geometry |
+| `FONT_ROWS`, `FONT_CAP` | the table's: scan rows to the em, and the capital's ink height in the same units |
 
 `em` is the size of the em box in stage units, which is what the font's numbers
 are fractions of — a CJK glyph is about 0.88 em of ink, a Latin cap about 0.7.
 The stage is 480 by 360, so 16 to 48 is the useful range.
+
+`FONT_ROWS` and `FONT_CAP` are the pair that lets you size text by its
+*capitals* instead of by its em, which is what a layout usually wants: a capital
+`size` units tall is an em of `size * FONT_ROWS / FONT_CAP`, and an advance is
+that many rows over. Chess sizes everything that way.
+
+Everything the library exports is named so that a project cannot already be
+using the name: `pf_` on a parameter, `PF_` on a constant. That is not tidiness.
+A module is compiled into each target that uses it, and neither a parameter nor a
+constant keeps its own name there — see the note at the end of this file.
 
 ## The text language
 
@@ -83,6 +96,10 @@ be keyed on the character. A capital is marked in the text instead:
 A character the font does not carry advances half an em and draws nothing, so a
 missing glyph leaves a gap rather than a hole in the line.
 
+The text language stops there: `draw_text` draws the first face and nothing else.
+A second face or a different typography is a `find_glyph` and an `ink_glyph` of
+your own, which is what chess does — see **A second face** below.
+
 ## The box, which is the part that bites
 
 Scratch does not clip a sprite asked to move past the edge of the stage: it
@@ -90,22 +107,37 @@ Scratch does not clip a sprite asked to move past the edge of the stage: it
 it is a run drawn at x = 225 — and a glyph whose rows reach past the edge piles
 all of those rows onto the same column, which is a smear, not a letter.
 
-This library cuts every run at `EDGE_X` by `EDGE_Y` first, so it never asks for a
+This library cuts every run at `PF_EDGE_X` by `PF_EDGE_Y` first, so it never asks for a
 position the fence will not give it. Those 225 by 165 are the *tightest* fence a
 costume can give, not the widest — the stage half-width is 240 and Scratch takes
 at least 15 off it once a costume is 30 units across — so a page inside this box
 fits whatever the sprite is wearing. Keep your own layout inside it too, and if
 your page can grow, `font2vm.py --stage` will tell you when it leaves.
 
+## A second face, which is how bold works
+
+`--bold PATH` builds a second font into the same table, under keys that are the
+ordinary key with `\b` in front of it. So a bold `H` is `\b\cH`, the bold space
+is `\b `, and a caller that builds its own keys gets both faces from one search
+and one install — the engine itself needs to know nothing about it.
+
+Chess uses that for its two weights: it walks a string, decides a character's key
+from the case and weight the run is in, and calls `find_glyph` and `ink_glyph`
+itself, because it needs a line centred on a point, sized by its capitals, and
+styled by escapes in the text. That is the shape to copy when `draw_text` is not
+what you want: the table and the pen are the library, and the typography is
+yours.
+
 ## Two things that will bite you, and what to do about them
 
 **A module procedure's parameter is not safe from your names.** A module is
-compiled into each target that uses it, and a parameter does not survive that as
-a local: if the sprite that draws has `var text` and the procedure takes a
-parameter called `text`, the procedure gets *your* text, silently. Every
-parameter in this library is therefore spelled `pf_something`, which is not a
-style but the fix. When you write a procedure of your own that other targets
-import, do the same.
+compiled into each target that uses it, and neither a parameter nor a constant
+survives that as its own: if the sprite that draws has `var text` and the
+procedure takes a parameter called `text`, the procedure gets *your* text,
+silently, and a project with its own `EDGE_X` collides with the library's. Every
+parameter here is spelled `pf_something` and every constant `PF_something` for
+that reason, with the table's own `FONT_*` names kept distinct for the same
+reason. When you write a module of your own, do the same.
 
 **A non-`pub` item in a module is dropped.** `pub proc stroke_width` and not
 `proc stroke_width`, or the rest of the module cannot call it. The same goes for
@@ -125,16 +157,18 @@ python lib/penfont/font2vm.py --preview OUT.png  just draw the page
 | --- | --- |
 | `--set maple` \| `yahei` | which font chain to build from (default `maple`) |
 | `--font PATH`, `--face N` | a first font in place of the set's own |
-| `--fonts A.ttf,B.ttc:2` | the whole chain |
-| `--charset all` \| `latin,cjk,icons` | which standards and blocks to take |
+| `--fonts A.ttf,B.ttc:2` | the whole chain, which is also how to have exactly one font |
+| `--bold PATH[:FACE]` | a second face, keyed under `\b` |
+| `--charset all` \| `ascii` \| `latin,cjk,icons` | which standards and blocks to take |
 | `--text "…"`, `--chars-file FILE` | characters of your own to add |
 | `--lay FILE` | the raven file holding your page's layout, for the three checks |
 
 Without `--charset` or `--text` the inventory is every standard block the font
 has — around 15,000 glyphs and 19 MB of table for a CJK font. `--charset latin`
 is about 1,600 glyphs and well under a megabyte, which is what a project that
-only sets English wants. ASCII is always in, so there is always a space, a digit
-and a full stop.
+only sets English wants; `--charset ascii` is the 95 printable characters, 106 KB
+in two weights, and is what chess takes. ASCII is always in, so there is always a
+space, a digit and a full stop.
 
 The three checks read `--lay`, a raven file holding `const LEFT`, `const TOP`,
 `const CAP`, `var size`, `var limit`, `var ink` and `var text`, so that the page

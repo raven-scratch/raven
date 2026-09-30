@@ -117,6 +117,12 @@ SETS = {
 REF_ROWS = 48  # scan rows to the em, and the units one row is
 TOL = 0.2  # how far a curve may leave its chord before it is split, in rows
 CAP = "\\c"
+# The stem a second face is keyed under. `\b` is the character the text language
+# would read as an escape, so a table with a bold face in it is a table whose
+# keys a caller can build without a convention of its own: the bold glyph for
+# `\cH` is `\b\cH`, and the comparison that finds it lowercases both sides, so
+# the prefix is the whole of it.
+BOLD = "\\b"
 BIG5_TAIL = list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))
 EUC_TAIL = list(range(0xA1, 0xFF))
 
@@ -160,7 +166,7 @@ STANDARDS = [
     ("KS X 1001 hanja", "euc_kr", range(0xCA, 0xFE), EUC_TAIL),
 ]
 
-CHARSETS = ("all", "latin", "cjk", "icons")
+CHARSETS = ("all", "ascii", "latin", "cjk", "icons")
 
 
 # --------------------------------------------------------------- inventory --
@@ -208,8 +214,9 @@ def inventory(cmaps, extra=(), charset=("all",), only=None):
     census: list[tuple[str, int]] = []
     chars: set[str] = set()
     for lo, hi, name, group in list(UNICODE_RANGES) + list(extra):
-        # ASCII is always in: a table with no space, no digit and no full stop
-        # cannot set a line however narrow it was asked to be.
+        # ASCII is always in, whatever was asked for: a table with no space, no
+        # digit and no full stop cannot set a line however narrow it is.
+        # `--charset ascii` is then the smallest table there is.
         if name != "ASCII" and not (whole or group in charset):
             continue
         take = [chr(c) for c in range(lo, hi + 1) if have(c)]
@@ -337,7 +344,7 @@ class Glyph:
         self.key, self.char, self.runs, self.adv, self.src = key, char, runs, adv, src
 
 
-def build(fonts, keys: list[str]) -> list[Glyph]:
+def build(fonts, keys: list[str], stem: str = "", src_offset: int = 0) -> list[Glyph]:
     glyphs = []
     for key in keys:
         char = key[len(CAP):] if key.startswith(CAP) else key
@@ -354,10 +361,33 @@ def build(fonts, keys: list[str]) -> list[Glyph]:
             upem = font["head"].unitsPerEm
             tol_font = TOL * upem / REF_ROWS
             runs = spans(decompose(font, name, tol_font), upem)
-            adv = round(font["hmtx"][name][0] * REF_ROWS / upem)
-            glyphs.append(Glyph(key, char, runs, adv, which))
+            # The advance keeps its fraction: a run is placed glyph by glyph, so
+            # rounding this to a whole scan row would drift the end of a line by
+            # a couple of percent of its own width. The runs are integers because
+            # they are a raster; the advance is not, because it is not.
+            adv = round(font["hmtx"][name][0] * REF_ROWS / upem, 4)
+            glyphs.append(Glyph(stem + key, char, runs, adv, which + src_offset))
             break
     return glyphs
+
+
+def cap_height(font) -> float:
+    """The capital's ink height, in reference rows, which is how a caller that
+    sizes text by its capitals converts a size into an em."""
+    upem = font["head"].unitsPerEm
+    os2 = font.get("OS/2")
+    units = getattr(os2, "sCapHeight", 0) if os2 else 0
+    if not units:
+        # No `OS/2`, or one that does not say: measure an `H`, which is what a
+        # cap height is.
+        from fontTools.pens.boundsPen import BoundsPen
+
+        name = font.getBestCmap().get(ord("H"))
+        if name is not None:
+            pen = BoundsPen(font.getGlyphSet())
+            font.getGlyphSet()[name].draw(pen)
+            units = pen.bounds[3] if pen.bounds else 0
+    return round(units * REF_ROWS / upem, 4)
 
 
 # ------------------------------------------------------------------- output --
@@ -382,7 +412,7 @@ def wrap(items: list[str], width: int = 108, indent: int = 4) -> str:
     return "\n".join(lines)
 
 
-def emit(glyphs: list[Glyph], path: Path, name: str) -> None:
+def emit(glyphs: list[Glyph], path: Path, name: str, cap: float) -> None:
     chars = [g.key for g in glyphs]
     ats, counts, advs, flat = [], [], [], []
     # `font_at` is where a glyph's runs start *in `font_run`*, which is three
@@ -427,6 +457,11 @@ def emit(glyphs: list[Glyph], path: Path, name: str) -> None:
 
 /// Scan rows to the em: what a text size is divided by to get the scale.
 pub const FONT_ROWS: num = {REF_ROWS};
+
+/// The capital's ink height in the same units: a caller that sizes text by its
+/// capitals -- "this word is eight units tall" -- divides the size by this and
+/// multiplies by FONT_ROWS to get the em those tables are fractions of.
+pub const FONT_CAP: num = {cap};
 
 /// The key of every glyph, in comparison order.
 pub var font_chars: list<str> = [
@@ -584,9 +619,9 @@ def read_layout(engine_path: Path, lay_path: Path) -> dict:
         "limit": num(src, r"var limit: num = ([\d.eE+-]+);", "limit", lay_path.name),
         "ink": re.search(r'var ink: str = "([^"]*)";', src).group(1),
         "text": rav_decode(re.search(r'var text: str = "(.*)";', src).group(1)),
-        "lead": num(engine, r"const LEAD: num = ([\d.eE+-]+);", "LEAD", engine_path.name),
-        "edge_x": num(engine, r"const EDGE_X: num = ([\d.eE+-]+);", "EDGE_X", engine_path.name),
-        "edge_y": num(engine, r"const EDGE_Y: num = ([\d.eE+-]+);", "EDGE_Y", engine_path.name),
+        "lead": num(engine, r"const PF_LEAD: num = ([\d.eE+-]+);", "PF_LEAD", engine_path.name),
+        "edge_x": num(engine, r"const PF_EDGE_X: num = ([\d.eE+-]+);", "PF_EDGE_X", engine_path.name),
+        "edge_y": num(engine, r"const PF_EDGE_Y: num = ([\d.eE+-]+);", "PF_EDGE_Y", engine_path.name),
     }
 
 
@@ -805,8 +840,11 @@ def main() -> int:
                     help="the whole font chain, in place of the set's own")
     ap.add_argument("--font", help="a first font, in place of the set's own")
     ap.add_argument("--face", type=int, default=0)
+    ap.add_argument("--bold", metavar="PATH[:FACE]",
+                    help="a second face, keyed `\\b` and the ordinary key, so a "
+                         "caller builds the key and the engine needs no change")
     ap.add_argument("--charset", default="all",
-                    help="comma-separated: all, latin, cjk, icons (default all)")
+                    help="comma-separated: all, ascii, latin, cjk, icons (default all)")
     ap.add_argument("--text", metavar="CHARS",
                     help="add these characters to the inventory")
     ap.add_argument("--chars-file", metavar="FILE",
@@ -860,10 +898,24 @@ def main() -> int:
         keys = keys[: args.limit]
 
     glyphs = build(fonts, keys)
+    # A second face goes in the same table under the `\b` stem, sorted in with
+    # the rest, so one install is one weight or two and the engine never learns
+    # which it was given.
+    if args.bold:
+        m = re.fullmatch(r"(.*):(\d+)", args.bold.strip())
+        bold_path, bold_face = (m.group(1), int(m.group(2))) if m else (args.bold.strip(), 0)
+        bold = load_font(bold_path, bold_face)
+        sources += [(bold_path, bold_face)]
+        glyphs += build([bold], keys, BOLD, len(sources) - 1)
+        glyphs.sort(key=lambda g: g.key.lower())
+
     runs = sum(len(g.runs) for g in glyphs)
     blank = sum(1 for g in glyphs if not g.runs)
-    print(f"{args.name or args.set}: {len(fonts)} fonts, {len(glyphs)} glyphs, {runs} runs")
+    print(f"{args.name or args.set}: {len(fonts) + (1 if args.bold else 0)} fonts, "
+          f"{len(glyphs)} glyphs, {runs} runs")
     print("  " + ", ".join(f"{n} {c}" for n, c in census if c))
+    if args.bold:
+        print(f"  {len(keys)} of them again under {BOLD!r} for the bold face")
     print(f"  {blank} glyphs draw nothing (spaces and the like)")
 
     self_check(glyphs)
@@ -891,7 +943,7 @@ def main() -> int:
             lay["size"] = args.size
         return stage_check(glyphs, sources, lay["text"], lay, Path(args.stage))
 
-    emit(glyphs, out / "font.rav", args.name or args.set)
+    emit(glyphs, out / "font.rav", args.name or args.set, cap_height(fonts[0]))
     # The engine goes in beside the table, so one command installs both and the
     # same command updates them.
     (out / "engine.rav").parent.mkdir(parents=True, exist_ok=True)

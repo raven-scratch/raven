@@ -152,26 +152,25 @@ counts of six standard positions, and `tools/check.mjs` is what keeps the raven
 port honest: it loads the built project into a real Scratch VM and compares the
 legal move list, every perft count, every one of the nine bots' weights, the
 input planes, the whole policy head, the value, the move it picks, and three
-games moved by the mouse, against `maia.py --dump`. `tools/hud.mjs` is the same
-trick for the drawn interface: the same project with a stand-in renderer, every
-stamp of every page recorded, and a check that each run of text is stamped at the
-pitch its own font metrics give it and that no two runs are stamped over each
-other, and that nothing is stamped after the card that ends a game. Its costumes
-and its sounds are generated, its board and its panel are laid out from the
-numbers in `src/layout.rav` rather than tuned by eye, and the board is drawn with
-the pen rather than with clones.
+games moved by the mouse, against `maia.py --dump`. Its HUD used to stamp one
+costume per character per weight, with `tools/hud.mjs` recording every stamp to
+check the pitch of each run; that is now `lib/penfont` — Montserrat's two weights
+converted into one glyph table and drawn as pen lines — so the costumes, the
+generator and the stamp harness went with it, and `src/penfont/` is installed
+into the project the same way the penfont example installs it. Its costumes and
+its sounds are generated, its board and its panel are laid out from the numbers
+in `src/layout.rav` rather than tuned by eye, and the board is drawn with the pen
+rather than with clones.
 
 ```sh
 python examples/raven/chess/tools/maia.py          # the engine, and its perft checks
 python examples/raven/chess/tools/maia.py --dump   # what check.mjs compares against
 python examples/raven/chess/tools/maia.py --export # regenerate src/net.rav
 node examples/raven/chess/tools/assets.mjs         # the pieces (PNGs, through a browser) and the tiles
-python examples/raven/chess/tools/glyphs.py        # the font, one costume per character
 node examples/raven/chess/tools/sounds.mjs         # the effects
 cargo run -p raven -- check -m examples/raven/chess/raven.toml
 cargo run -p raven -- build -m examples/raven/chess/raven.toml --debug
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/check.mjs
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/hud.mjs --svg examples/raven/chess/dist/hud
 ```
 
 `lib/penfont` is a library rather than an example, and the one to read when a

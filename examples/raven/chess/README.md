@@ -11,10 +11,9 @@ spring rather than a fixed curve.
 ```
 tools/maia.py            the Python engine: weights in, move out, and the checks
 tools/check.mjs          runs the built project and compares it with maia.py
-tools/assets.mjs         the costumes: the lichess pieces, the tiles, the font
-tools/glyphs.py          the HUD font: one costume per character, from Montserrat
-tools/hud.mjs            what the HUD stamps, page by page, and whether it fits
+tools/assets.mjs         the costumes: the lichess pieces, the tiles, the chrome
 tools/sounds.mjs         the four sounds
+tools/measure-text.py    where a run's characters land, out of the glyph table
 tools/pieces/            the lichess cburnett pieces, as downloaded
 tools/policy_tables.json lc0's move numbering, cached so Python need not re-read it
 src/engine.rav           the rules and the networks, shared by both sprites
@@ -22,8 +21,10 @@ src/layout.rav           where everything is, shared by both sprites
 src/stage.rav            what both sprites read, and nothing else
 src/sprites/board.rav    the game: drawing, input, motion, the bots
 src/sprites/hud.rav      the panel, the menu and every character
+src/penfont/font.rav     Montserrat, both weights, as pen spans (generated)
+src/penfont/engine.rav   the text library, copied in
 src/net.rav              nine bots, packed (generated, 42 MiB)
-assets/                  706 costume and sound files (generated)
+assets/                  1,922 costume and sound files (generated)
 ```
 
 ```sh
@@ -31,10 +32,15 @@ assets/                  706 costume and sound files (generated)
 python examples/raven/chess/tools/maia.py
 python examples/raven/chess/tools/maia.py --dump
 
-# the costumes, the font and the sounds (the first two need a browser: playwright)
+# the costumes and the sounds (the first needs a browser: playwright)
 node examples/raven/chess/tools/assets.mjs
-python examples/raven/chess/tools/glyphs.py
 node examples/raven/chess/tools/sounds.mjs
+
+# the HUD's glyph table, from Montserrat's two weights, into src/penfont/
+python lib/penfont/font2vm.py --project examples/raven/chess \
+  --charset ascii --name Montserrat \
+  --fonts ref/scratch-editor/node_modules/@scratch/scratch-vm/node_modules/docdash/static/fonts/Montserrat/Montserrat-Regular.ttf \
+  --bold  ref/scratch-editor/node_modules/@scratch/scratch-vm/node_modules/docdash/static/fonts/Montserrat/Montserrat-Bold.ttf
 
 # the weights, when the network files change
 python examples/raven/chess/tools/maia.py --export
@@ -46,10 +52,6 @@ cargo run -p raven -- build -m examples/raven/chess/raven.toml --debug
 # which is where the checker finds each list's run of cells)
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
     node examples/raven/chess/tools/check.mjs
-
-# the built project's HUD: every stamp of every page, and the pages as images
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
-    node examples/raven/chess/tools/hud.mjs --svg examples/raven/chess/dist/hud
 ```
 
 ## The Python engine
@@ -291,10 +293,10 @@ its own idea of what an SVG is.
 * TurboWarp's renderer has a path of its own again, on top of all of it.
 
 A PNG has one reader and it is the same one everywhere. The rasteriser is
-playwright's chromium — the same browser `tools/glyphs.py` draws its proof sheets
-with — and each piece is drawn as an image of its own rather than inlined into one
-page: two lichess files both call their gradient `a`, and a document holding both
-gives every `fill="url(#a)"` the first one.
+playwright's chromium — the same browser `tools/assets.mjs` renders every other
+costume with — and each piece is drawn as an image of its own rather than inlined
+into one page: two lichess files both call their gradient `a`, and a document
+holding both gives every `fill="url(#a)"` the first one.
 
 The run then reads every file it wrote back: every piece must be a PNG of exactly
 the size its name says, and every SVG that remains — the tiles, the cells, the
@@ -308,26 +310,35 @@ the number it belongs to in `src/layout.rav`.
 
 ## The font
 
-Scratch has no text, so the HUD's font is costumes: one SVG per character per
-weight, generated from Montserrat by `tools/glyphs.py`, every one of them the
-same box with the character's outline at the font's own origin and its own
-advance. A line is one stamp per character along the baseline, and it is centred
-by the sum of those advances — the string is walked once to measure it and again
-to stamp it, which is also what makes an escape like `\l` cost nothing.
+Scratch has no text. The HUD's used to be costumes — one SVG per character per
+weight — and is now [`lib/penfont`](../../../lib/penfont): Montserrat's outlines
+converted once into the scan rows a pen can fill, and drawn as pen lines. The
+table is `src/penfont/font.rav`, the library is `src/penfont/engine.rav` beside
+it, and one command makes both:
 
-Two things about that are worth writing down, because both are silent when they
-are wrong:
+```sh
+python lib/penfont/font2vm.py --project examples/raven/chess \
+  --charset ascii --name Montserrat --fonts …/Montserrat-Regular.ttf --bold …/Montserrat-Bold.ttf
+```
 
-* A stamp draws whatever costume the sprite is wearing, so every stamp here is
-  preceded by the costume it means. A button stamped after a label is that
-  label's last letter otherwise, which is how the settings button once came out
-  with a `Y` behind it.
-* `set size to` clamps what it is given to a floor that depends on the costume
-  the sprite is *currently* wearing: five stage units across it, or 100% when
-  the costume is smaller than that. A size of 14% set while wearing the 1 by 1
-  blank pixel comes back as 100%, and a line measured for 14% is then stamped
-  at 100% — its characters pile up on each other. The size is therefore set per
-  character, with that character's glyph already on, and never before it.
+`--charset ascii` is the 95 printable characters the panel is written in, and
+`--bold` puts Montserrat's bold weight in the same table under keys like `\b\cH`,
+so the two weights are one table and one install. That file is 106 KB where the
+188 costumes it replaced were 1.1 MB.
+
+`hud.rav` keeps its own typography, because chess asks for things the library's
+`draw_text` does not do: a line is centred on a point, sized by its *capitals*
+(`FONT_CAP` is what turns that into an em), and styled by a run of escapes in the
+text. What it takes from the library is the table — `find_glyph` for the glyph a
+key names, `font_adv` for the pitch — and `ink_glyph`, which is the pen lines.
+`tools/measure-text.py` prints where a run's characters land, which is how the
+spacing is looked at without a player.
+
+Two things the old costume scheme needed care about are gone with it, because
+they were properties of stamping: a stamp draws whatever costume the sprite is
+wearing, and `set size to` clamps against the costume it is wearing, so the size
+had to be set per character with that character's glyph already on. A pen line
+has neither problem.
 
 ## What it is checked against
 
@@ -351,33 +362,16 @@ came out:
 Everything that takes time in a Scratch VM takes time here too: a forward pass
 is about ninety seconds, so the whole check runs for around twenty minutes.
 
-`tools/hud.mjs` is the same trick for the HUD, and takes seconds. The project is
-loaded with a stand-in in place of the WebGL renderer which answers the two
-questions the VM asks a renderer about geometry — how big a skin is, and where a
-drawable may move to — with the costume's own size, so the VM's own clamp of
-`set size to` is in the loop, and records every `pen stamp` as the costume,
-position and size the sprite had. The costumes themselves are read through the
-real sanitizer, and a piece, which is a PNG, goes in as an SVG that holds it:
-the skin is then the size TurboWarp gives it, and the page comes out as TurboWarp
-would draw it. It drives the menu, the settings page, a game, the way back from a
-game to the menu and the end of a game through the mouse — the last of those by
-playing a scholar's mate rather than by writing the end of the game into the
-state, so that what the card has to survive is a move like any other — and checks
-that every character of a run is stamped at a pitch its own advance and its own
-stamped size agree with, that no two runs of text are stamped over each other,
-that a button is a button, that nothing from the board is stamped after the card
-that ends a game, and that the same move leaves the same page with the board
-turned round as without, and on the board turned round while the piece was still
-in the air — the square a piece left shows no piece and the square it reached
-shows it, which is what the flight repainting a square it never crossed, or
-arriving where its square used to be, would leave behind.
-With `--slow` it also starts a bot's turn and watches the panel's clock while it
-runs, and presses `MENU` in the middle of that turn: both are things the board's
-own loop cannot do anything about, because a search runs inside a single frame of
-it.
-`--svg` writes each page's stamps as an SVG — every target's, in the order they
-were stamped, so what is under what is what the file shows — which is what to look
-at when the checks pass and the page is still wrong.
+The HUD used to have a harness of its own, `tools/hud.mjs`, which recorded every
+`pen stamp` and checked that each run of text was stamped at the pitch its own
+advance gave it, that no two runs overlapped, and that nothing was stamped after
+the card that ends a game. Every one of those assertions was about glyph
+*costumes*, and there are none: a pen line has no costume to name, so a run is
+not identifiable in the recording and the harness has nothing left to stand on.
+It is gone with the costumes. What it also did — render each page to an SVG — is
+worth rebuilding on `penLine` for anyone who wants it, and the drawing itself is
+checked by the same kind of harness in the library:
+`examples/raven/penfont/tools/check.mjs`.
 
 ## Layout
 
