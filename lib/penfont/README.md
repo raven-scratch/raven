@@ -10,7 +10,7 @@ curve.
 
 Two things come out of it. **Text**, laid out and wrapped, at any size and in any
 colour. And the **sheet**: every glyph the font has, twelve by eight to a page
-and 162 pages of them, with a **find** that searches the table and turns to the
+and 116 pages of them, with a **find** that searches the table and turns to the
 page a character is on.
 
 ## Installing it
@@ -159,16 +159,59 @@ python lib/penfont/font2vm.py --preview OUT.png  just draw the page
 | `--font PATH`, `--face N` | a first font in place of the set's own |
 | `--fonts A.ttf,B.ttc:2` | the whole chain, which is also how to have exactly one font |
 | `--bold PATH[:FACE]` | a second face, keyed under `\b` |
-| `--charset all` \| `ascii` \| `latin,cjk,icons` | which standards and blocks to take |
+| `--charset a,b,c` | which glyph sets to take (default `all`) |
+| `--list-charsets` | print them all, with the size this font gives each |
 | `--text "…"`, `--chars-file FILE` | characters of your own to add |
 | `--lay FILE` | the raven file holding your page's layout, for the three checks |
 
-Without `--charset` or `--text` the inventory is every standard block the font
-has — around 15,000 glyphs and 19 MB of table for a CJK font. `--charset latin`
-is about 1,600 glyphs and well under a megabyte, which is what a project that
-only sets English wants; `--charset ascii` is the 95 printable characters, 106 KB
-in two weights, and is what chess takes. ASCII is always in, so there is always a
-space, a digit and a full stop.
+## Choosing the glyphs, which is choosing the size
+
+A project that sets one language should not carry the glyphs of four, so what
+goes in the table is a list of named **sets** and `--charset` is which of them to
+take. Twenty sets, each one block of characters a project either needs or does
+not:
+
+| set | | set | |
+| --- | --- | --- | --- |
+| `ascii` 95 | printable ASCII | `jis1` 3,486 | JIS X 0208 level 1, the Japanese common kanji |
+| `latin1` 96 | Latin-1 | `jis2` 3,390 | JIS X 0208 level 2 |
+| `punct` 131 | general punctuation, currency, letterlike | `hangul` 3,185 | KS X 1001 hangul |
+| `maths` 116 | arrows, operators, technical | `hanja` 4,888 | KS X 1001 hanja |
+| `shapes` 335 | box drawing, blocks, geometric, dingbats | `gb1` 3,755 | GB 2312 level 1, simplified common |
+| `fullwidth` 154 | halfwidth and fullwidth forms | `gb2` 3,651 | GB 2312 level 2 and symbols |
+| `cjkpunct` 211 | CJK punctuation and compatibility | `big5-1` 5,495 | Big5 level 1, traditional common |
+| `kana` 189 | hiragana and katakana | `big5-2` 7,689 | Big5 level 2 |
+| `bopomofo` 43 | bopomofo | `ideographs` 20,976 | every CJK ideograph the font has |
+| `jamo` 94 | hangul compatibility jamo | `icons` 3,499 | the font's own extras, the Nerd Font icons |
+
+The counts are Maple Mono NF CN's; `--list-charsets` prints the same table for
+whatever font you point it at.
+
+Bundles name several at once, which is what a project usually wants:
+
+| bundle | | size |
+| --- | --- | --- |
+| `basic` | ASCII, Latin-1 and the punctuation a line of English needs | 322 |
+| `latin` | plus the symbols a Latin page uses | 773 |
+| `korean` | the Latin sets plus fullwidth forms, CJK punctuation and hangul | 3,738 |
+| `japanese` | plus kana and the common kanji | 4,407 |
+| `chinese` | plus the simplified and traditional common sets | 7,953 |
+| `hanzi` | the common Chinese sets, both scripts, both levels | 15,964 |
+| `cjk` | everything CJK | 20,541 |
+| `all` | everything, including the font's own extra blocks | 28,711 |
+
+Sizes are the *union*, not the sum: every CJK set carries the same punctuation,
+and what a reader wants to know is how big the table will be. The table is
+roughly 1.3 KB a glyph, so `basic` is about 400 KB and the whole Chinese
+inventory about 20 MB; the demo takes `chinese,japanese,korean`, which is 11,083
+glyphs and 14.5 MB.
+
+ASCII is in every table whatever you ask for — a table with no space, no digit
+and no full stop cannot set a line, and it is 95 glyphs. That also makes
+`--charset ascii` the smallest table there is, which is what chess takes: two
+weights of the 95 printable characters, 106 KB.
+
+`--text` and `--chars-file` add characters of your own to whatever the sets give.
 
 The three checks read `--lay`, a raven file holding `const LEFT`, `const TOP`,
 `const CAP`, `var size`, `var limit`, `var ink` and `var text`, so that the page

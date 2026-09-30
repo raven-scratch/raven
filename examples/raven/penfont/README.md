@@ -5,13 +5,13 @@ the library itself: [read its README](../../../lib/penfont/README.md) to use it
 in a project of your own. What is here is the page around it — a stage, a mode
 switch and some keys — over the same engine every consumer gets.
 
-15,496 glyphs of English, digits, punctuation, symbols, simplified and
-traditional Chinese, Japanese, Korean and the Nerd Font icons, each filled in
-with pen lines from tables the project carries in its own arena. No costumes, no
-stamps, and the project never sees a font file, an outline or a curve.
+11,083 glyphs of English, digits, punctuation, symbols, simplified and
+traditional Chinese, Japanese and Korean, each filled in with pen lines from
+tables the project carries in its own arena. No costumes, no stamps, and the
+project never sees a font file, an outline or a curve.
 
 ```
-src/penfont/font.rav      generated: 15,496 glyphs as 1,568,200 pen runs (19 MB)
+src/penfont/font.rav      generated: 11,083 glyphs as 1,173,546 pen runs (14.5 MB)
 src/penfont/engine.rav    the library, copied in — do not edit it here
 src/sprites/text.rav      the demo: the page layout, the two modes, the keys
 src/stage.rav             the paper
@@ -19,7 +19,10 @@ tools/check.mjs           runs the built project in a real Scratch VM and render
 ```
 
 ```sh
-python lib/penfont/font2vm.py --project examples/raven/penfont   # install the library
+# install the library, taking the glyph sets this page actually sets
+python lib/penfont/font2vm.py --project examples/raven/penfont \
+  --charset chinese,japanese,korean
+python lib/penfont/font2vm.py --project examples/raven/penfont --list-charsets
 python lib/penfont/font2vm.py --project examples/raven/penfont --stats
 cargo run -p raven -- check -m examples/raven/penfont/raven.toml
 cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
@@ -33,6 +36,11 @@ The first command writes both files under `src/penfont/`, so it is how the
 library is installed *and* how it is updated: edit `lib/penfont/engine.rav`, run
 it again, and this project has the change. The copy here is generated, so do not
 edit it in place.
+
+`--charset chinese,japanese,korean` is the point of the sets: the demo writes
+those three scripts and the symbols that go with them, and nothing else. The
+whole inventory is 28,711 glyphs and 41 MB; this is 11,083 and 14.5. `--list-charsets`
+prints every set and bundle with the size this font gives it.
 
 The order of the rest matters, and it is the order that catches things. `--stage`
 renders the page the project opens on and writes `dist/page.gray`; `check.mjs`
@@ -109,9 +117,9 @@ the page it is on, which is a page the sheet had to turn to get to.
 ```
 drawn       4302 lines at pen size 1, 0 stamps
 expected    4302 lines, scale 0.708
-stage       x -222..183, y -152..147, page overlap 1.000
-sheet       96 cells, 12934 strokes, x -217..195, y -139..149
-find        "中" at 1502, page 16
+stage       x -222..181, y -152..147, page overlap 1.000
+sheet       96 cells, 12966 strokes, x -217..195, y -139..149
+find        "中" at 1444, page 16
 ```
 
 A page overlap of 1.000 is the whole chain agreeing: fontTools, the scanline

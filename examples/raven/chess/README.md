@@ -321,10 +321,10 @@ python lib/penfont/font2vm.py --project examples/raven/chess \
   --charset ascii --name Montserrat --fonts …/Montserrat-Regular.ttf --bold …/Montserrat-Bold.ttf
 ```
 
-`--charset ascii` is the 95 printable characters the panel is written in, and
-`--bold` puts Montserrat's bold weight in the same table under keys like `\b\cH`,
-so the two weights are one table and one install. That file is 106 KB where the
-188 costumes it replaced were 1.1 MB.
+`--charset ascii` is the 95 printable characters the panel is written in — the
+smallest set there is — and `--bold` puts Montserrat's bold weight in the same
+table under keys like `\b\cH`, so the two weights are one table and one install.
+That file is 106 KB where the 188 costumes it replaced were 1.1 MB.
 
 `hud.rav` keeps its own typography, because chess asks for things the library's
 `draw_text` does not do: a line is centred on a point, sized by its *capitals*

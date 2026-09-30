@@ -3,15 +3,18 @@
 This is the generator half of `lib/penfont`. The other half is `engine.rav`,
 which is the raven module that reads what this writes.
 
-    python lib/penfont/font2vm.py --out myproject/src/penfont
-    python lib/penfont/font2vm.py --out myproject/src/penfont --font myfont.ttf
-    python lib/penfont/font2vm.py --out myproject/src/penfont --charset latin
-    python lib/penfont/font2vm.py --out myproject/src/penfont --text "Hello 世界"
+    python lib/penfont/font2vm.py --project myproject
+    python lib/penfont/font2vm.py --project myproject --list-charsets
+    python lib/penfont/font2vm.py --project myproject --charset chinese,japanese
+    python lib/penfont/font2vm.py --project myproject --charset basic,icons
+    python lib/penfont/font2vm.py --project myproject --font myfont.ttf --bold mybold.ttf
+    python lib/penfont/font2vm.py --project myproject --text "Hello 世界"
 
-`--out` is the module directory to install into. One run writes `font.rav` there
-and copies `engine.rav` beside it, so installing the library in a project is one
-command and updating it is the same command again. Nothing is read from this
-repository, so the tool can be copied anywhere and run from anywhere.
+`--project` is the project to install into: `src/penfont` under it, and one run
+writes `font.rav` there and copies `engine.rav` beside it, so installing the
+library in a project is one command and updating it is the same command again.
+Nothing is read from this repository, so the tool can be copied anywhere and run
+from anywhere.
 
 Why spans and not outlines: Scratch's pen draws a line and has no fill block at
 all, so a glyph is filled the way any concave polygon is filled on a raster --
@@ -27,22 +30,30 @@ centre (x = j + 0.5) is inside the outline, so a run is a pixel span of that
 reference raster and drawing it at size S scales by S / REF_ROWS. Winding is
 non-zero, which is what TrueType means and what makes the hole in `o` a hole.
 
-Which characters: the default inventory is the standard that defines it, read
-out of Python's own codecs rather than off a web page, so the tool needs no
-network and "why this character" has a standard's name as its answer.
+Which characters: `--charset` names the sets to take, and each set is one block of
+characters a project either needs or does not, so a project pays for the
+languages it sets. `GLYPH_SETS` below is the whole of it, one row a set, and
+`--list-charsets` prints them all with the size the chosen font gives each.
 
-    ASCII and Latin-1, and the punctuation, currency, letterlike, arrow, maths,
-    technical, geometric, box-drawing, dingbat, CJK-punctuation, kana, Bopomofo,
-    enclosed and fullwidth blocks the font actually has;
-    GB 2312 level 1 (3755) -- the simplified Chinese common set;
-    Big5 level 1 (5401) -- the traditional Chinese common set;
-    JIS X 0208 level 1 (2965) -- the Japanese common kanji, and its kana;
-    KS X 1001's hangul (2350) and hanja -- the Korean common set;
-    and, for Maple, the Nerd Font icons in the basic private use area.
+    ascii, latin1, punct, maths, shapes, fullwidth, cjkpunct, kana, bopomofo,
+    jamo, and the font's own extra blocks -- the Nerd Font icons, for Maple;
 
-`--charset` takes a comma-separated subset of `latin`, `cjk`, `icons`, and
-`--text` or `--chars-file` adds characters of your own. ASCII is always in, so a
-table always has a space, a digit and a full stop however narrow it is.
+    then the codecs, which is what makes the CJK sets mean what their standards
+    say rather than what a block happens to contain, read out of Python's own
+    codecs so the tool needs no network and "why this character" has a standard's
+    name as its answer:
+
+    gb1 and gb2        GB 2312, the simplified Chinese common set and the rest;
+    big5-1 and big5-2  Big5, the traditional Chinese common set and the rest;
+    jis1 and jis2      JIS X 0208, the Japanese common kanji and the rest;
+    hangul and hanja   KS X 1001;
+    ideographs         every CJK Unified Ideograph the font has, wherever from.
+
+The bundles in `GLYPH_BUNDLES` name several sets at once -- `basic`, `latin`,
+`fullwidth`, `korean`, `japanese`, `chinese`, `hanzi`, `cjk`, `all` -- because
+that is what a project usually asks for. `--text` or `--chars-file` adds
+characters of your own. ASCII is always in, so a table always has a space, a
+digit and a full stop however narrow it is.
 
 Case: Scratch compares two strings case-insensitively, so `A` and `a` are one
 string to the only lookup there is and a table cannot be keyed on the character.
@@ -123,50 +134,201 @@ CAP = "\\c"
 # `\cH` is `\b\cH`, and the comparison that finds it lowercases both sides, so
 # the prefix is the whole of it.
 BOLD = "\\b"
-BIG5_TAIL = list(range(0x40, 0x7F)) + list(range(0xA1, 0xFF))
-EUC_TAIL = list(range(0xA1, 0xFF))
+# Tuples, not lists: a source is compared and de-duplicated as a whole, and a
+# list inside it would make it unhashable.
+BIG5_TAIL = tuple(range(0x40, 0x7F)) + tuple(range(0xA1, 0xFF))
+EUC_TAIL = tuple(range(0xA1, 0xFF))
 
-UNICODE_RANGES = [
-    (0x0020, 0x007E, "ASCII", "latin"),
-    (0x00A0, 0x00FF, "Latin-1", "latin"),
-    (0x2000, 0x206F, "general punctuation", "latin"),
-    (0x2070, 0x209F, "super/subscripts", "latin"),
-    (0x20A0, 0x20BF, "currency", "latin"),
-    (0x2100, 0x214F, "letterlike", "latin"),
-    (0x2150, 0x218F, "number forms", "latin"),
-    (0x2190, 0x21FF, "arrows", "latin"),
-    (0x2200, 0x22FF, "maths", "latin"),
-    (0x2300, 0x23FF, "misc technical", "latin"),
-    (0x2460, 0x24FF, "enclosed alphanumerics", "latin"),
-    (0x2500, 0x257F, "box drawing", "latin"),
-    (0x2580, 0x259F, "block elements", "latin"),
-    (0x25A0, 0x25FF, "geometric shapes", "latin"),
-    (0x2600, 0x26FF, "misc symbols", "latin"),
-    (0x2700, 0x27BF, "dingbats", "latin"),
-    (0x3000, 0x303F, "CJK punctuation", "cjk"),
-    (0x3040, 0x309F, "hiragana", "cjk"),
-    (0x30A0, 0x30FF, "katakana", "cjk"),
-    (0x3100, 0x312F, "bopomofo", "cjk"),
-    (0x3130, 0x318F, "hangul jamo", "cjk"),
-    (0x3200, 0x32FF, "enclosed CJK", "cjk"),
-    (0x3300, 0x33FF, "CJK compatibility", "cjk"),
-    (0xFE30, 0xFE4F, "CJK forms", "cjk"),
-    (0xFE50, 0xFE6F, "small forms", "cjk"),
-    (0xFF00, 0xFFEF, "halfwidth/fullwidth", "cjk"),
+# ------------------------------------------------------------ glyph sets --
+#
+# What goes in the table is a list of named sets, and `--charset` is which of
+# them to take. Each set is one block of characters a project either needs or
+# does not, so a project that sets one language pays for one language: the whole
+# inventory is 19 MB and 15,496 glyphs, ASCII is 106 KB and 95, and a project
+# that only ever writes English notices.
+#
+# A source is either a Unicode range or a range of a two-byte codec, and the
+# codec is what makes the Chinese and Japanese sets mean what their standards
+# say rather than what a block happens to contain.
+#
+# ASCII is in every table whatever is asked for. A table with no space, no digit
+# and no full stop cannot set a line, and it is 95 glyphs.
+
+_GB1 = range(0xB0, 0xD8)
+_GB2 = range(0xD8, 0xF8)
+_BIG5_1 = range(0xA4, 0xC7)
+_BIG5_2 = range(0xC7, 0xF9)
+_JIS_1 = range(0xB0, 0xD0)
+_JIS_2 = range(0xD0, 0xF5)
+_KR_HANGUL = range(0xB0, 0xC9)
+_KR_HANJA = range(0xCA, 0xFE)
+
+#     name, what it is, its sources
+GLYPH_SETS = [
+    ("ascii", "the 95 printable ASCII characters",
+     [("u", 0x0020, 0x007E, "ASCII")]),
+    ("latin1", "Latin-1 letters and symbols",
+     [("u", 0x00A0, 0x00FF, "Latin-1")]),
+    ("punct", "general punctuation, super- and subscripts, currency, letterlike, number forms",
+     [("u", 0x2000, 0x206F, "general punctuation"),
+      ("u", 0x2070, 0x209F, "super/subscripts"),
+      ("u", 0x20A0, 0x20BF, "currency"),
+      ("u", 0x2100, 0x214F, "letterlike"),
+      ("u", 0x2150, 0x218F, "number forms")]),
+    ("maths", "arrows, mathematical operators, miscellaneous technical",
+     [("u", 0x2190, 0x21FF, "arrows"),
+      ("u", 0x2200, 0x22FF, "maths"),
+      ("u", 0x2300, 0x23FF, "misc technical")]),
+    ("shapes", "enclosed alphanumerics, box drawing, blocks, geometric shapes, symbols, dingbats",
+     [("u", 0x2460, 0x24FF, "enclosed alphanumerics"),
+      ("u", 0x2500, 0x257F, "box drawing"),
+      ("u", 0x2580, 0x259F, "block elements"),
+      ("u", 0x25A0, 0x25FF, "geometric shapes"),
+      ("u", 0x2600, 0x26FF, "misc symbols"),
+      ("u", 0x2700, 0x27BF, "dingbats")]),
+    ("fullwidth", "halfwidth and fullwidth forms, small form variants",
+     [("u", 0xFE50, 0xFE6F, "small forms"),
+      ("u", 0xFF00, 0xFFEF, "halfwidth/fullwidth")]),
+    ("cjkpunct", "CJK punctuation, enclosed CJK, CJK compatibility and forms",
+     [("u", 0x3000, 0x303F, "CJK punctuation"),
+      ("u", 0x3200, 0x32FF, "enclosed CJK"),
+      ("u", 0x3300, 0x33FF, "CJK compatibility"),
+      ("u", 0xFE30, 0xFE4F, "CJK forms")]),
+    ("kana", "hiragana and katakana",
+     [("u", 0x3040, 0x309F, "hiragana"),
+      ("u", 0x30A0, 0x30FF, "katakana")]),
+    ("bopomofo", "bopomofo", [("u", 0x3100, 0x312F, "bopomofo")]),
+    ("jamo", "hangul compatibility jamo", [("u", 0x3130, 0x318F, "hangul jamo")]),
+    ("gb1", "GB 2312 level 1 -- the simplified Chinese common set, 3755 characters",
+     [("c", "gb2312", _GB1, EUC_TAIL, "GB 2312 level 1")]),
+    ("gb2", "GB 2312 level 2 and its symbols -- the rarer simplified characters",
+     [("c", "gb2312", range(0xA1, 0xAA), EUC_TAIL, "GB 2312 symbols"),
+      ("c", "gb2312", _GB2, EUC_TAIL, "GB 2312 level 2")]),
+    ("big5-1", "Big5 level 1 -- the traditional Chinese common set, 5401 characters",
+     [("c", "big5", _BIG5_1, BIG5_TAIL, "Big5 level 1")]),
+    ("big5-2", "Big5 level 2 -- the rarer traditional characters",
+     [("c", "big5", _BIG5_2, BIG5_TAIL, "Big5 level 2")]),
+    ("jis1", "JIS X 0208 level 1 and its symbols -- the Japanese common kanji",
+     [("c", "euc_jp", range(0xA1, 0xB0), EUC_TAIL, "JIS X 0208 symbols"),
+      ("c", "euc_jp", _JIS_1, EUC_TAIL, "JIS X 0208 level 1")]),
+    ("jis2", "JIS X 0208 level 2 -- the rarer Japanese kanji",
+     [("c", "euc_jp", _JIS_2, EUC_TAIL, "JIS X 0208 level 2")]),
+    ("hangul", "KS X 1001 hangul and its symbols -- the Korean common syllables",
+     [("c", "euc_kr", range(0xA1, 0xAB), EUC_TAIL, "KS X 1001 symbols"),
+      ("c", "euc_kr", _KR_HANGUL, EUC_TAIL, "KS X 1001 hangul")]),
+    ("hanja", "KS X 1001 hanja",
+     [("c", "euc_kr", _KR_HANJA, EUC_TAIL, "KS X 1001 hanja")]),
+    ("ideographs", "every CJK Unified Ideograph the font has, wherever it comes from",
+     [("u", 0x4E00, 0x9FFF, "CJK Unified Ideographs")]),
 ]
 
-STANDARDS = [
-    ("GB 2312 level 1", "gb2312", range(0xB0, 0xD8), EUC_TAIL),
-    ("GB 2312 symbols", "gb2312", range(0xA1, 0xAA), EUC_TAIL),
-    ("Big5 level 1", "big5", range(0xA4, 0xC7), BIG5_TAIL),
-    ("JIS X 0208 level 1", "euc_jp", range(0xB0, 0xD0), EUC_TAIL),
-    ("JIS X 0208 symbols", "euc_jp", range(0xA1, 0xB0), EUC_TAIL),
-    ("KS X 1001 hangul", "euc_kr", range(0xB0, 0xC9), EUC_TAIL),
-    ("KS X 1001 symbols", "euc_kr", range(0xA1, 0xAB), EUC_TAIL),
-    ("KS X 1001 hanja", "euc_kr", range(0xCA, 0xFE), EUC_TAIL),
+# A bundle is a name for several sets at once, which is what a project usually
+# asks for: `--charset chinese` rather than the seven sets that means.
+GLYPH_BUNDLES = [
+    ("basic", "ASCII, Latin-1 and the punctuation a line of English needs",
+     ["ascii", "latin1", "punct"]),
+    ("latin", "the above and the symbols a Latin page uses",
+     ["ascii", "latin1", "punct", "maths", "shapes"]),
+    ("japanese", "the Latin and fullwidth sets plus kana and the common kanji",
+     ["ascii", "latin1", "punct", "maths", "shapes", "fullwidth", "cjkpunct",
+      "kana", "jis1"]),
+    ("korean", "the Latin and fullwidth sets plus hangul",
+     ["ascii", "latin1", "punct", "maths", "shapes", "fullwidth", "cjkpunct",
+      "jamo", "hangul"]),
+    ("chinese", "the Latin and fullwidth sets plus the simplified and traditional common sets",
+     ["ascii", "latin1", "punct", "maths", "shapes", "fullwidth", "cjkpunct",
+      "gb1", "big5-1"]),
+    ("hanzi", "the common Chinese sets, both scripts, both levels -- the big one",
+     ["gb1", "gb2", "big5-1", "big5-2"]),
+    ("cjk", "everything CJK: the hanzi, the kana, the hangul, the kanji",
+     ["ascii", "latin1", "punct", "maths", "shapes", "fullwidth", "cjkpunct",
+      "kana", "bopomofo", "jamo", "gb1", "gb2", "big5-1", "big5-2", "jis1",
+      "jis2", "hangul", "hanja"]),
+    ("all", "every set there is, including the font's own extra blocks",
+     None),  # None means "all of them", resolved against the font in use
 ]
 
-CHARSETS = ("all", "ascii", "latin", "cjk", "icons")
+# Old names, kept working: 0.3 shipped `all`, `ascii`, `latin`, `cjk`, `icons`.
+CHARSET_ALIASES = {"all": "all", "ascii": "ascii", "latin": "latin", "cjk": "cjk"}
+
+# A set and a bundle with the same name would be two different answers to one
+# `--charset` word, and the bundle would silently win. `fullwidth` was both for a
+# while; this is what says so at import rather than at the end of a build.
+assert not ({name for name, _, _ in GLYPH_SETS} & {name for name, _, _ in GLYPH_BUNDLES}), \
+    "a glyph set and a bundle share a name"
+
+
+def glyph_registry(extra):
+    """The sets this font can offer, the set's own extras last.
+
+    A font set brings blocks of its own -- the Nerd Font icons, for Maple -- and
+    they are one more set, so `--charset latin,icons` is how a project asks for
+    the icons without the CJK.
+    """
+    sets = list(GLYPH_SETS)
+    if extra:
+        sets.append(("icons", "the font's own extra blocks -- the Nerd Font icons, for Maple",
+                     [("u", lo, hi, name) for lo, hi, name, *_ in extra]))
+    return sets
+
+
+def resolve_charset(names, registry):
+    """The set names asked for, as sources, in registry order, without repeats.
+
+    Raises SystemExit naming what is unknown, and what the alternatives are.
+    """
+    available = {name for name, _, _ in registry}
+    bundles = {name: sets for name, _, sets in GLYPH_BUNDLES}
+    wanted: set[str] = set()
+    for name in names:
+        name = CHARSET_ALIASES.get(name, name)
+        if name in bundles:
+            bundle = bundles[name]
+            wanted |= set(available if bundle is None else bundle)
+        elif name in available:
+            wanted.add(name)
+        else:
+            raise SystemExit(
+                f"unknown --charset {name!r}; try --list-charsets "
+                f"({', '.join(sorted(bundles) + sorted(available))})")
+    sources = []
+    seen = set()
+    for name, _, src in registry:
+        if name not in wanted:
+            continue
+        for s in src:
+            if s in seen:
+                continue
+            seen.add(s)
+            sources.append(s)
+    return sources
+
+
+def charset_catalogue(registry, cmaps):
+    """Each set and bundle with how many characters this font actually has.
+
+    A bundle's number is the size of the *union* of the sets it names, not the
+    sum: they overlap, every CJK set holds the same punctuation, and the number a
+    reader wants is how big the table will be.
+    """
+    have = set()
+    for cm in cmaps:
+        have |= {c for c in cm if c <= 0xFFFF}
+
+    def chars_of(src):
+        if src[0] == "u":
+            return {chr(c) for c in range(src[1], src[2] + 1) if c in have}
+        return {c for c in two_byte_codec(src[1], src[2], src[3]) if ord(c) in have}
+
+    per_set = {name: set().union(*[chars_of(s) for s in src]) if src else set()
+               for name, _, src in registry}
+    rows = [(name, what, len(per_set[name])) for name, what, _ in registry]
+    bundles = []
+    for name, what, sets in GLYPH_BUNDLES:
+        chosen = set(per_set) if sets is None else set(sets)
+        union = set().union(*[per_set[n] for n in chosen]) if chosen else set()
+        bundles.append((name, what, len(union)))
+    return rows, bundles
 
 
 # --------------------------------------------------------------- inventory --
@@ -202,7 +364,7 @@ def load_font(path: str, face: int):
         return TTFont(path, fontNumber=face, lazy=True)
 
 
-def inventory(cmaps, extra=(), charset=("all",), only=None):
+def inventory(cmaps, sources, only=None):
     """The characters to draw, keyed and sorted, and the census that found them."""
     def have(cp: int) -> bool:
         # A character outside the basic plane is two UTF-16 code units, and the
@@ -210,23 +372,17 @@ def inventory(cmaps, extra=(), charset=("all",), only=None):
         # refusal Scratch makes, made here where it is visible.
         return cp <= 0xFFFF and any(cp in cm for cm in cmaps)
 
-    whole = "all" in charset
     census: list[tuple[str, int]] = []
     chars: set[str] = set()
-    for lo, hi, name, group in list(UNICODE_RANGES) + list(extra):
-        # ASCII is always in, whatever was asked for: a table with no space, no
-        # digit and no full stop cannot set a line however narrow it is.
-        # `--charset ascii` is then the smallest table there is.
-        if name != "ASCII" and not (whole or group in charset):
-            continue
-        take = [chr(c) for c in range(lo, hi + 1) if have(c)]
+    for src in sources:
+        if src[0] == "u":
+            _, lo, hi, name = src
+            take = [chr(c) for c in range(lo, hi + 1) if have(c)]
+        else:
+            _, enc, first, second, name = src
+            take = [c for c in two_byte_codec(enc, first, second) if have(ord(c))]
         chars.update(take)
         census.append((name, len(take)))
-    if whole or "cjk" in charset:
-        for name, enc, first, second in STANDARDS:
-            take = [c for c in two_byte_codec(enc, first, second) if have(ord(c))]
-            chars.update(take)
-            census.append((name, len(take)))
     if only:
         take = [c for c in only if have(ord(c))]
         chars.update(take)
@@ -844,7 +1000,10 @@ def main() -> int:
                     help="a second face, keyed `\\b` and the ordinary key, so a "
                          "caller builds the key and the engine needs no change")
     ap.add_argument("--charset", default="all",
-                    help="comma-separated: all, ascii, latin, cjk, icons (default all)")
+                    help="comma-separated glyph sets or bundles; --list-charsets "
+                         "prints them with their sizes (default all)")
+    ap.add_argument("--list-charsets", action="store_true",
+                    help="print every set and bundle, with the size this font gives it")
     ap.add_argument("--text", metavar="CHARS",
                     help="add these characters to the inventory")
     ap.add_argument("--chars-file", metavar="FILE",
@@ -861,9 +1020,6 @@ def main() -> int:
     args = ap.parse_args()
 
     charset = [c.strip() for c in args.charset.split(",") if c.strip()]
-    bad = [c for c in charset if c not in CHARSETS]
-    if bad:
-        raise SystemExit(f"unknown --charset {', '.join(bad)}; try one of {', '.join(CHARSETS)}")
 
     project = Path(args.project) if args.project else None
     out = Path(args.out) if args.out else (project / DEFAULT_OUT if project else DEFAULT_OUT)
@@ -893,7 +1049,17 @@ def main() -> int:
         sources.append((path, face))
         fonts.append(load_font(path, face))
     cmaps = [f.getBestCmap() for f in fonts]
-    keys, census = inventory(cmaps, chosen["extra"], charset, only)
+    registry = glyph_registry(chosen["extra"])
+    if args.list_charsets:
+        rows, bundles = charset_catalogue(registry, cmaps)
+        print(f"{args.set}: {len(fonts)} fonts")
+        for name, what, n in rows:
+            print(f"  {name:<12} {n:>6}  {what}")
+        print("  " + "-" * 68)
+        for name, what, n in bundles:
+            print(f"  {name:<12} {n:>6}  {what}")
+        return 0
+    keys, census = inventory(cmaps, resolve_charset(charset, registry), only)
     if args.limit:
         keys = keys[: args.limit]
 

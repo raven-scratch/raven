@@ -6,7 +6,7 @@
 //
 // There are two things to look at, and B turns between them. One is the page of
 // text, laid out and wrapped. The other is the sheet: every glyph the font has,
-// twelve by eight to a page and 162 pages of them, with a find that searches the
+// twelve by eight to a page and 116 pages of them, with a find that searches the
 // table and turns to the page the character is on.
 
 use penfont::engine;
