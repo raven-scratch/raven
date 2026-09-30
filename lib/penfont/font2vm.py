@@ -36,7 +36,8 @@ languages it sets. `GLYPH_SETS` below is the whole of it, one row a set, and
 `--list-charsets` prints them all with the size the chosen font gives each.
 
     ascii, latin1, punct, maths, shapes, fullwidth, cjkpunct, kana, bopomofo,
-    jamo, and the font's own extra blocks -- the Nerd Font icons, for Maple;
+    jamo, and the thirteen `nf-` sets that are the Nerd Font icons, one to an
+    upstream icon family;
 
     then the codecs, which is what makes the CJK sets mean what their standards
     say rather than what a block happens to contain, read out of Python's own
@@ -50,18 +51,20 @@ languages it sets. `GLYPH_SETS` below is the whole of it, one row a set, and
     ideographs         every CJK Unified Ideograph the font has, wherever from.
 
 The bundles in `GLYPH_BUNDLES` name several sets at once -- `basic`, `latin`,
-`fullwidth`, `korean`, `japanese`, `chinese`, `hanzi`, `cjk`, `all` -- because
-that is what a project usually asks for. `--text` or `--chars-file` adds
+`fullwidth`, `korean`, `japanese`, `chinese`, `hanzi`, `cjk`, `icons`, `all` --
+because that is what a project usually asks for. `--text` or `--chars-file` adds
 characters of your own. ASCII is always in, so a table always has a space, a
 digit and a full stop however narrow it is.
 
 Case: Scratch compares two strings case-insensitively, so `A` and `a` are one
 string to the only lookup there is and a table cannot be keyed on the character.
 A capital is keyed as the two characters `\\c` and the lowercase letter, and the
-text marks it the same way, as `\\cHello`. The keys are sorted by their lowercased
-form -- the order Scratch's `<` compares in -- so `engine.rav` binary-searches the
-list: a lookup by value (`index_of`) is a generated procedure that walks the
-list, far too slow to run for every character of every line.
+text marks it the same way, as `\\cHello`. The keys are sorted by `sort_key`,
+which is the lowercased key as UTF-16 bytes -- the order Scratch's `<` compares
+in, which is why a character outside the basic plane sorts by its first code unit
+and not last by its code point -- so `engine.rav` binary-searches the list: a
+lookup by value (`index_of`) is a generated procedure that walks the list, far
+too slow to run for every character of every line.
 
 Output, in the `--out` directory:
 
@@ -117,11 +120,9 @@ SETS = {
             (r"C:\Users\Dilem\AppData\Local\Microsoft\Windows\Fonts\MapleMono-NF-CN-Regular.ttf", 0),
             (r"C:\Windows\Fonts\malgun.ttf", 0),
         ],
-        "extra": [(0xE000, 0xF8FF, "Nerd Font icons", "icons")],
     },
     "yahei": {
         "fonts": [(r"C:\Windows\Fonts\msyh.ttc", 0), (r"C:\Windows\Fonts\malgun.ttf", 0)],
-        "extra": [],
     },
 }
 
@@ -220,6 +221,44 @@ GLYPH_SETS = [
      [("c", "euc_kr", _KR_HANJA, EUC_TAIL, "KS X 1001 hanja")]),
     ("ideographs", "every CJK Unified Ideograph the font has, wherever it comes from",
      [("u", 0x4E00, 0x9FFF, "CJK Unified Ideographs")]),
+
+    # The Nerd Font icons, one set an upstream icon set, because that is what
+    # Nerd Font is: a bundle of other people's icon fonts patched into the
+    # private use area. The ranges are the ones `ryanoasis/nerd-fonts` states in
+    # its own `bin/scripts/lib/i_*.sh`, not the runs this font happens to have,
+    # so a set means the set and the font decides how much of it is there.
+    #
+    # `nf-md` is the Material Design Icons, and it is the one icon family outside
+    # the basic plane: 6,880 of them at U+F0001 and up, which is why the engine
+    # reads a surrogate pair. U+F0001 is two UTF-16 code units, a Scratch string
+    # cannot hold it in one, and `letter of` hands back half at a time.
+    ("nf-md", "Nerd Font: Material Design Icons, U+F0001 to U+F1AF0",
+     [("u", 0xF0001, 0xF1AF0, "Material Design Icons")]),
+    ("nf-fa", "Nerd Font: Font Awesome, U+ED00 to U+F2FF",
+     [("u", 0xED00, 0xF2FF, "Font Awesome")]),
+    ("nf-dev", "Nerd Font: Devicons, U+E700 to U+E958",
+     [("u", 0xE700, 0xE958, "Devicons")]),
+    ("nf-cod", "Nerd Font: Codicons, U+EA60 to U+EC84",
+     [("u", 0xEA60, 0xEC84, "Codicons")]),
+    ("nf-oct", "Nerd Font: Octicons, U+F400 to U+F533",
+     [("u", 0xF400, 0xF533, "Octicons")]),
+    ("nf-weather", "Nerd Font: Weather Icons, U+E300 to U+E3E3",
+     [("u", 0xE300, 0xE3E3, "Weather Icons")]),
+    ("nf-seti", "Nerd Font: Seti-UI and Custom, U+E5FA to U+E6BB",
+     [("u", 0xE5FA, 0xE6BB, "Seti-UI")]),
+    ("nf-fae", "Nerd Font: Font Awesome Extension, U+E200 to U+E2A9",
+     [("u", 0xE200, 0xE2A9, "Font Awesome Extension")]),
+    ("nf-logos", "Nerd Font: Font Logos, U+F300 to U+F385",
+     [("u", 0xF300, 0xF385, "Font Logos")]),
+    ("nf-ple", "Nerd Font: Powerline Extra Symbols, U+E0A0 to U+E0D7",
+     [("u", 0xE0A0, 0xE0D7, "Powerline Extra")]),
+    ("nf-pom", "Nerd Font: Pomicons, U+E000 to U+E00A",
+     [("u", 0xE000, 0xE00A, "Pomicons")]),
+    ("nf-extra", "Nerd Font: Fira Code progress indicators, U+EE00 to U+EE0B",
+     [("u", 0xEE00, 0xEE0B, "progress indicators")]),
+    ("nf-iec", "Nerd Font: IEC power symbols, U+23FB to U+23FE and U+2B58",
+     [("u", 0x23FB, 0x23FE, "IEC power symbols"),
+      ("u", 0x2B58, 0x2B58, "IEC power off")]),
 ]
 
 # A bundle is a name for several sets at once, which is what a project usually
@@ -244,8 +283,10 @@ GLYPH_BUNDLES = [
      ["ascii", "latin1", "punct", "maths", "shapes", "fullwidth", "cjkpunct",
       "kana", "bopomofo", "jamo", "gb1", "gb2", "big5-1", "big5-2", "jis1",
       "jis2", "hangul", "hanja"]),
-    ("all", "every set there is, including the font's own extra blocks",
-     None),  # None means "all of them", resolved against the font in use
+    ("icons", "every Nerd Font icon set -- the `nf-` sets, and the old name for them",
+     ["nf-md", "nf-fa", "nf-dev", "nf-cod", "nf-oct", "nf-weather", "nf-seti",
+      "nf-fae", "nf-logos", "nf-ple", "nf-pom", "nf-extra", "nf-iec"]),
+    ("all", "every set there is, icons included", None),
 ]
 
 # Old names, kept working: 0.3 shipped `all`, `ascii`, `latin`, `cjk`, `icons`.
@@ -256,20 +297,6 @@ CHARSET_ALIASES = {"all": "all", "ascii": "ascii", "latin": "latin", "cjk": "cjk
 # while; this is what says so at import rather than at the end of a build.
 assert not ({name for name, _, _ in GLYPH_SETS} & {name for name, _, _ in GLYPH_BUNDLES}), \
     "a glyph set and a bundle share a name"
-
-
-def glyph_registry(extra):
-    """The sets this font can offer, the set's own extras last.
-
-    A font set brings blocks of its own -- the Nerd Font icons, for Maple -- and
-    they are one more set, so `--charset latin,icons` is how a project asks for
-    the icons without the CJK.
-    """
-    sets = list(GLYPH_SETS)
-    if extra:
-        sets.append(("icons", "the font's own extra blocks -- the Nerd Font icons, for Maple",
-                     [("u", lo, hi, name) for lo, hi, name, *_ in extra]))
-    return sets
 
 
 def resolve_charset(names, registry):
@@ -313,7 +340,7 @@ def charset_catalogue(registry, cmaps):
     """
     have = set()
     for cm in cmaps:
-        have |= {c for c in cm if c <= 0xFFFF}
+        have |= set(cm)
 
     def chars_of(src):
         if src[0] == "u":
@@ -354,6 +381,17 @@ def key_of(ch: str) -> str:
     return ch if low == ch else CAP + low
 
 
+def sort_key(s: str) -> bytes:
+    """What Scratch's `<` compares two keys by, so the table can be searched.
+
+    Not the code point. A Scratch string is a string of UTF-16 code units, so a
+    character outside the basic plane is two of them and orders by the first --
+    below U+E000, where its code point would put it last. Both sides lowercase
+    before comparing, which is why this is on the lowercased key.
+    """
+    return s.lower().encode("utf-16-be")
+
+
 def load_font(path: str, face: int):
     """A font from either a plain file or a collection, by face index."""
     from fontTools.ttLib import TTFont
@@ -367,10 +405,12 @@ def load_font(path: str, face: int):
 def inventory(cmaps, sources, only=None):
     """The characters to draw, keyed and sorted, and the census that found them."""
     def have(cp: int) -> bool:
-        # A character outside the basic plane is two UTF-16 code units, and the
-        # one lookup the engine has reads one. Leaving it out is the same
-        # refusal Scratch makes, made here where it is visible.
-        return cp <= 0xFFFF and any(cp in cm for cm in cmaps)
+        # A lone surrogate is not a character and has no key: it is half of one,
+        # and a table keyed on half a character draws half an icon. Everything
+        # else is in, including outside the basic plane -- a Scratch string is
+        # UTF-16, so an icon there is two code units and the engine reads a pair
+        # as one character.
+        return not (0xD800 <= cp <= 0xDFFF) and any(cp in cm for cm in cmaps)
 
     census: list[tuple[str, int]] = []
     chars: set[str] = set()
@@ -396,7 +436,7 @@ def inventory(cmaps, sources, only=None):
         if cp < 0x20 or cp == 0x7F or len(ch.lower()) != 1:
             continue
         by_key.setdefault(key_of(ch).lower(), ch)
-    return sorted(by_key, key=str.lower), census
+    return sorted(by_key, key=sort_key), census
 
 
 # ------------------------------------------------------------- outline -> ink --
@@ -668,8 +708,9 @@ def self_check(glyphs: list[Glyph]) -> None:
             row_seen, col = row, b
 
     by_key = {g.key.lower(): g for g in glyphs}
-    keys = [g.key.lower() for g in glyphs]
-    assert keys == sorted(keys), "the keys are not in Scratch's comparison order"
+    keys = [g.key for g in glyphs]
+    assert keys == sorted(keys, key=sort_key), \
+        "the keys are not in Scratch's comparison order"
     assert len(set(keys)) == len(keys), "two glyphs share a key"
 
     # The hole in `o` is the point of the winding rule: a row through the middle
@@ -1049,7 +1090,7 @@ def main() -> int:
         sources.append((path, face))
         fonts.append(load_font(path, face))
     cmaps = [f.getBestCmap() for f in fonts]
-    registry = glyph_registry(chosen["extra"])
+    registry = GLYPH_SETS
     if args.list_charsets:
         rows, bundles = charset_catalogue(registry, cmaps)
         print(f"{args.set}: {len(fonts)} fonts")
@@ -1073,7 +1114,7 @@ def main() -> int:
         bold = load_font(bold_path, bold_face)
         sources += [(bold_path, bold_face)]
         glyphs += build([bold], keys, BOLD, len(sources) - 1)
-        glyphs.sort(key=lambda g: g.key.lower())
+        glyphs.sort(key=lambda g: sort_key(g.key))
 
     runs = sum(len(g.runs) for g in glyphs)
     blank = sum(1 for g in glyphs if not g.runs)

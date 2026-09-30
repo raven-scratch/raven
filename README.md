@@ -269,7 +269,8 @@ Korean, Latin, symbols and icons, filled in one line per scan row, from tables a
 Python tool generates into the project's own arena, with a glyph sheet you can
 page through and search. One command installs it into any project, and
 `--charset` decides which glyph sets it carries, so a project that sets English
-is 322 glyphs and one that sets the common Chinese is 15,964:
+is 322 glyphs, one that sets the common Chinese is 15,964, and the Nerd Font
+icons are thirteen sets of their own:
 
 ```sh
 python lib/penfont/font2vm.py --project path/to/your/project --charset basic

@@ -6,7 +6,7 @@
 //
 // There are two things to look at, and B turns between them. One is the page of
 // text, laid out and wrapped. The other is the sheet: every glyph the font has,
-// twelve by eight to a page and 116 pages of them, with a find that searches the
+// twelve by eight to a page and 121 pages of them, with a find that searches the
 // table and turns to the page the character is on.
 
 use penfont::engine;
@@ -24,7 +24,7 @@ sprite "Text" {
 
     /// The line being drawn, in the escape language the engine reads — `\c` for
     /// a capital, `\\` for a backslash, `\n` or a real newline for a break.
-    var text: str = "\\cThe quick brown fox\n简体中文：通用规范汉字\n繁體中文：常用國字標準字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ①";
+    var text: str = "\\cThe quick brown fox\n简体中文：规范汉字\n繁體中文：常用國字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ① 󰒓 󰉋 󰈙 󰊤  ";
 
     /// The em size in stage units, the ink, and how wide a line may get before
     /// it wraps. The wrap counts a glyph's whole advance, so no character is put
@@ -34,16 +34,17 @@ sprite "Text" {
     var limit: num = 448;
 
     /// The stock lines, cycled with Enter. Between them they are every script
-    /// the font carries. The later ones are longer than the stage, so they wrap
+    /// the font carries and the icons. The later ones are longer than the stage, so they wrap
     /// and the tail of the page is cut at the box — which is what the engine
     /// does with a line that does not fit, rather than drawing it elsewhere.
     var samples: list<str> = [
-        "\\cThe quick brown fox\n简体中文：通用规范汉字\n繁體中文：常用國字標準字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ①",
-        "简体中文：通用规范汉字，一二三四五六七八九十，天地人和，風雲龍鳳。",
+        "\\cThe quick brown fox\n简体中文：规范汉字\n繁體中文：常用國字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ①",
+        "简体中文：规范汉字，一二三四五六七八九十，天地人和，風雲龍鳳。",
         "繁體中文：常用國字標準字體，壹貳參肆伍陸柒捌玖拾，臺灣香港。",
         "日本語：ひらがな カタカナ 常用漢字、東京大阪名古屋。",
         "한국어: 가나다라마바사 아자차카타파하 서울 부산 제주",
         "記号: ← ↑ → ↓ ⇒ ∞ ≠ ≤ ≥ ∑ ∏ √ ∫ ≈ ° ※ ★ ☆ ♠ ♥ ♦ ♣ ① ② ③ ⓐ ⓑ ㈠ ㈡",
+        "󰒓 󰉋 󰈙 󰊤 󰌠 󰓎 󰄬 󰑣    ",
         "\\cA capital starts with \\c\\c, a backslash is \\\\, and \\n breaks the line."
     ];
 

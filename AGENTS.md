@@ -184,7 +184,8 @@ is because neither has any — and one run installs both halves into a project:
 
 ```sh
 python lib/penfont/font2vm.py --project examples/raven/penfont \
-  --charset chinese,japanese,korean        # the tables and the engine
+  --charset chinese,japanese,korean,nf-dev \
+  --chars-file examples/raven/penfont/icons.txt   # the tables and the engine
 python lib/penfont/font2vm.py --project examples/raven/penfont --list-charsets
 python lib/penfont/font2vm.py --project examples/raven/penfont --stats
 cargo run -p raven -- check -m examples/raven/penfont/raven.toml
@@ -196,24 +197,29 @@ SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/penfo
 
 `--charset` is how a project pays for what it sets and nothing else: twenty named
 sets, from `ascii` at 95 glyphs to `ideographs` at every CJK ideograph the font
-has, and bundles over them (`basic`, `latin`, `chinese`, `hanzi`, `cjk`, `all`).
-The demo takes `chinese,japanese,korean`, which is 11,083 glyphs and 14.5 MB
-where `all` is 28,711 and 41 MB. `engine.rav` is a binary search over the keys,
-the rows as pen lines cut at the box the pen may move inside, and the layout;
-Scratch compares two strings case-insensitively, so a capital is marked in the
-text as `\cH` and keyed that way in the table, and the table is sorted in the
-order that comparison puts it in, which is what makes the search valid. The table
-is also an inventory: B turns to the sheet, every glyph twelve by eight to a page
-and 116 pages of them, drawn by index and not looked up at all, and a find sends
-one character through the same search and turns to its page. The order of the
-checks is the order that finds things: `--stage` renders the page twice, from the
-tables and through FreeType, and refuses to pass if the ink leaves the box;
-`tools/check.mjs` then drives the built project through every mode with the
-renderer's own fence rule, rasterises the strokes the VM actually made, and holds
-the stage against that page — which is 1.000 when every link in the chain agrees
-— checks the sheet's ninety-six cells and the ring a find draws, and fails if the
-sprite stamped. `examples/raven/penfont` is only the demo: a stage, a mode switch
-and some keys over that engine.
+has, thirteen more for the Nerd Font icon families (`nf-md` at 6,880 down to
+`nf-iec` at 5), and bundles over them (`basic`, `latin`, `chinese`, `hanzi`,
+`cjk`, `icons`, `all`). The demo takes `chinese,japanese,korean,nf-dev` and its
+own `icons.txt`, which is 11,587 glyphs and 15 MB where `all` is 35,592 and 41 MB.
+`--stats` and `--stage` write nothing, so the install is the run without either
+of them. `engine.rav` is a binary search over the keys, the rows as pen lines cut
+at the box the pen may move inside, and the layout; Scratch compares two strings
+case-insensitively, so a capital is marked in the text as `\cH` and keyed that
+way in the table, and the table is sorted in the order that comparison puts it
+in, which is what makes the search valid. A Scratch string is UTF-16 code units,
+so the one icon family above the basic plane arrives as two and `draw_text` and
+`glyph_of` join the pair before looking it up. The table is also an inventory: B
+turns to the sheet, every glyph twelve by eight to a page and 121 pages of them,
+drawn by index and not looked up at all, and a find sends one character through
+the same search and turns to its page. The order of the checks is the order that
+finds things: `--stage` renders the page twice, from the tables and through
+FreeType, and refuses to pass if the ink leaves the box; `tools/check.mjs` then
+drives the built project through every mode with the renderer's own fence rule,
+rasterises the strokes the VM actually made, and holds the stage against that page
+— which is 1.000 when every link in the chain agrees — checks the sheet's
+ninety-six cells and the ring a find draws, and fails if the sprite stamped.
+`examples/raven/penfont` is only the demo: a stage, a mode switch and some keys
+over that engine.
 
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is

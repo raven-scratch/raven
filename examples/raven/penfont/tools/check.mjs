@@ -168,9 +168,16 @@ function walk(text) {
   let cap = false;
   let i = 0;
   while (i < text.length) {
-    const c = text[i];
+    let c = text[i];
     let step = 1;
     let show = true;
+    // A character outside the basic plane is two UTF-16 code units and this
+    // reads one at a time, exactly as the engine does: put the pair back
+    // together, because the key for such a glyph is the whole pair.
+    if (c > "\uD7FF" && c < "\uE000") {
+      c += text[i + 1] || "";
+      step = 2;
+    }
     if (c === "\n" || c === "\r") {
       out.push({ newline: true });
       cap = false;

@@ -52,6 +52,19 @@ use penfont::font;
 pub const PF_EDGE_X: num = 225;
 pub const PF_EDGE_Y: num = 165;
 
+/// The code units either side of the surrogate range, which is how this tells a
+/// character outside the basic plane from one inside it.
+///
+/// A Scratch string is a string of UTF-16 code units and `letter of` reads one
+/// of them, so an icon at U+F0001 arrives as two halves and neither half is a
+/// character. The two halves are put back together -- and the way to recognise
+/// the first half is that it lies between these two characters. They are written
+/// as the boundaries rather than as something in the range because a `\u{D800}`
+/// is not a character and raven, spelling one, refuses it: `char::from_u32` has
+/// nothing to return.
+pub const ASTRAL_LO: str = "\u{D7FF}";
+pub const ASTRAL_HI: str = "\u{E000}";
+
 /// Baseline to baseline, in ems. This is the font's own leading: the tallest ink
 /// the tables carry reaches about 1.06 em above the baseline and 0.3 below, so a
 /// line that would be comfortable for Latin alone collides with a CJK one.
@@ -123,6 +136,9 @@ pub proc glyph_of(pf_text: str) -> num warp {
         return 0;
     }
     let c: str = operators::letter_of(1, pf_text);
+    if num(c) > num(ASTRAL_LO) && num(c) < num(ASTRAL_HI) {
+        return find_glyph(operators::join(c, operators::letter_of(2, pf_text)));
+    }
     if c == "\\" {
         return find_glyph(operators::join("\\c", operators::letter_of(2, pf_text)));
     }
@@ -216,6 +232,13 @@ pub proc draw_text(pf_content: str, pf_x: num, pf_y: num, pf_em: num, pf_colour:
         let c: str = operators::letter_of(i, pf_content);
         let step: num = 1;
         let show: num = 1;
+        // A character outside the basic plane is two UTF-16 code units and this
+        // reads one at a time, so the pair is put back together: the key for
+        // such a glyph is the whole pair, and half of one is not a character.
+        if num(c) > num(ASTRAL_LO) && num(c) < num(ASTRAL_HI) {
+            c = operators::join(c, operators::letter_of(i + 1, pf_content));
+            step = 2;
+        }
         // A string in raven can hold a real line break as easily as the two
         // characters `\n`, and a line is written both ways, so both break.
         if c == "\n" || c == "\r" {

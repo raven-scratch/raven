@@ -1,0 +1,21 @@
+The icons this demo draws, one to a line, with the Nerd Font name after it.
+`font2vm.py --chars-file` reads the whole file, so the names and the `#` add
+nothing: those characters are in the ASCII set whatever else is asked for.
+
+# Material Design Icons, the one icon family outside the basic plane. `letter of`
+# reads one UTF-16 code unit, so U+F0001 arrives as two halves; putting one in the
+# table is what has the engine join the pair before it looks the character up.
+󰒓  mdi cog
+󰉋  mdi folder
+󰈙  mdi file-document
+󰊤  mdi github
+󰌠  mdi language-python
+󰓎  mdi star
+󰄬  mdi check
+󰑣  mdi rocket
+
+# Devicons, which are in the basic plane and come from `--charset nf-dev`.
+  devicon terminal
+  devicon git
+  devicon rust
+  devicon docker

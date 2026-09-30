@@ -4,14 +4,13 @@ Scratch has no text primitive. A costume cannot carry `<text>`, the pen draws a
 line and **has no fill block at all**, so there is nothing to draw a character
 with that is not a picture of one. This library draws characters as ink: every
 glyph of a real font, filled in one horizontal line per scan row, from tables the
-project carries in its own arena. Fifteen thousand glyphs of Chinese, Japanese,
-Korean, Latin and icons, and the project never sees a font file, an outline or a
-curve.
+project carries in its own arena. Chinese, Japanese and Korean, Latin, symbols
+and the Nerd Font icons — 35,592 glyphs in all, and a project takes the sets it
+draws — and the project never sees a font file, an outline or a curve.
 
 Two things come out of it. **Text**, laid out and wrapped, at any size and in any
-colour. And the **sheet**: every glyph the font has, twelve by eight to a page
-and 116 pages of them, with a **find** that searches the table and turns to the
-page a character is on.
+colour. And the **sheet**: every glyph the table has, twelve by eight to a page,
+with a **find** that searches the table and turns to the page a character is on.
 
 ## Installing it
 
@@ -182,10 +181,26 @@ not:
 | `cjkpunct` 211 | CJK punctuation and compatibility | `big5-1` 5,495 | Big5 level 1, traditional common |
 | `kana` 189 | hiragana and katakana | `big5-2` 7,689 | Big5 level 2 |
 | `bopomofo` 43 | bopomofo | `ideographs` 20,976 | every CJK ideograph the font has |
-| `jamo` 94 | hangul compatibility jamo | `icons` 3,499 | the font's own extras, the Nerd Font icons |
+| `jamo` 94 | hangul compatibility jamo | | |
+
+and thirteen more for the icons a Nerd Font adds, which are one set per upstream
+family so a project pays only for the family it draws:
+
+| set | | set | |
+| --- | --- | --- | --- |
+| `nf-md` 6,880 | Material Design Icons | `nf-seti` 191 | Seti-UI and Custom |
+| `nf-fa` 1,487 | Font Awesome | `nf-fae` 170 | Font Awesome Extension |
+| `nf-dev` 496 | Devicons | `nf-logos` 130 | Font Logos |
+| `nf-cod` 438 | Codicons | `nf-ple` 40 | Powerline Extra Symbols |
+| `nf-oct` 308 | Octicons | `nf-pom` 11 | Pomicons |
+| `nf-weather` 228 | Weather Icons | `nf-extra` 12 | Fira Code progress indicators |
+| | | `nf-iec` 5 | IEC power symbols |
 
 The counts are Maple Mono NF CN's; `--list-charsets` prints the same table for
-whatever font you point it at.
+whatever font you point it at. The icon sets overlap, because the families do:
+`nf-fa` reaches from `0xED00` to `0xF2FF` and so crosses `nf-weather`, `nf-dev`
+and `nf-cod`, and the range in an `nf-` name is the upstream range rather than a
+claim of disjointness.
 
 Bundles name several at once, which is what a project usually wants:
 
@@ -198,20 +213,35 @@ Bundles name several at once, which is what a project usually wants:
 | `chinese` | plus the simplified and traditional common sets | 7,953 |
 | `hanzi` | the common Chinese sets, both scripts, both levels | 15,964 |
 | `cjk` | everything CJK | 20,541 |
-| `all` | everything, including the font's own extra blocks | 28,711 |
+| `icons` | every Nerd Font icon set, the basic plane and the supplementary one | 10,384 |
+| `all` | everything, icons included | 35,592 |
 
 Sizes are the *union*, not the sum: every CJK set carries the same punctuation,
 and what a reader wants to know is how big the table will be. The table is
 roughly 1.3 KB a glyph, so `basic` is about 400 KB and the whole Chinese
-inventory about 20 MB; the demo takes `chinese,japanese,korean`, which is 11,083
-glyphs and 14.5 MB.
+inventory about 20 MB; the demo takes `chinese,japanese,korean,nf-dev`, which is
+11,587 glyphs and 15 MB.
+
+Every icon family but one lives in the basic plane. `nf-md` is the one that does
+not, and that is where Scratch stops being free. A Scratch string is a sequence
+of UTF-16 code units, so one of those characters is *two* of them, `letter of`
+hands back one code unit, and a table lookup on half a character finds nothing. `font2vm.py`
+keeps the character whole in the keys — it sorts in the same code-unit order
+Scratch compares in, so the binary search still holds — and `draw_text` and
+`glyph_of` in `engine.rav`, and the copy of `walk` in a project's checker,
+recognise a high surrogate followed by a low one and look up the pair as one
+character. A lone surrogate is refused by the generator rather than written as
+half a glyph.
+
+`--chars-file` is the other way to say what a project draws, and it is what a
+project with a handful of icons should use rather than a whole family: the demo
+here takes `chinese,japanese,korean,nf-dev` and its `icons.txt`, which is twelve
+icons and not the 6,880 of a set.
 
 ASCII is in every table whatever you ask for — a table with no space, no digit
 and no full stop cannot set a line, and it is 95 glyphs. That also makes
 `--charset ascii` the smallest table there is, which is what chess takes: two
 weights of the 95 printable characters, 106 KB.
-
-`--text` and `--chars-file` add characters of your own to whatever the sets give.
 
 The three checks read `--lay`, a raven file holding `const LEFT`, `const TOP`,
 `const CAP`, `var size`, `var limit`, `var ink` and `var text`, so that the page

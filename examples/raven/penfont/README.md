@@ -5,23 +5,25 @@ the library itself: [read its README](../../../lib/penfont/README.md) to use it
 in a project of your own. What is here is the page around it — a stage, a mode
 switch and some keys — over the same engine every consumer gets.
 
-11,083 glyphs of English, digits, punctuation, symbols, simplified and
-traditional Chinese, Japanese and Korean, each filled in with pen lines from
-tables the project carries in its own arena. No costumes, no stamps, and the
-project never sees a font file, an outline or a curve.
+11,587 glyphs of English, digits, punctuation, symbols, simplified and
+traditional Chinese, Japanese, Korean and the Nerd Font icons, each filled in
+with pen lines from tables the project carries in its own arena. No costumes, no
+stamps, and the project never sees a font file, an outline or a curve.
 
 ```
-src/penfont/font.rav      generated: 11,083 glyphs as 1,173,546 pen runs (14.5 MB)
+src/penfont/font.rav      generated: 11,587 glyphs as 1,215,772 pen runs (15.0 MB)
 src/penfont/engine.rav    the library, copied in — do not edit it here
 src/sprites/text.rav      the demo: the page layout, the two modes, the keys
 src/stage.rav             the paper
+icons.txt                 the icons the page draws, which no glyph set gives it
 tools/check.mjs           runs the built project in a real Scratch VM and renders the stage
 ```
 
 ```sh
 # install the library, taking the glyph sets this page actually sets
 python lib/penfont/font2vm.py --project examples/raven/penfont \
-  --charset chinese,japanese,korean
+  --charset chinese,japanese,korean,nf-dev \
+  --chars-file examples/raven/penfont/icons.txt
 python lib/penfont/font2vm.py --project examples/raven/penfont --list-charsets
 python lib/penfont/font2vm.py --project examples/raven/penfont --stats
 cargo run -p raven -- check -m examples/raven/penfont/raven.toml
@@ -35,12 +37,20 @@ SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
 The first command writes both files under `src/penfont/`, so it is how the
 library is installed *and* how it is updated: edit `lib/penfont/engine.rav`, run
 it again, and this project has the change. The copy here is generated, so do not
-edit it in place.
+edit it in place. `--stats` and `--stage` write nothing; they are the font
+checked against FreeType, so they are not the install.
 
-`--charset chinese,japanese,korean` is the point of the sets: the demo writes
-those three scripts and the symbols that go with them, and nothing else. The
-whole inventory is 28,711 glyphs and 41 MB; this is 11,083 and 14.5. `--list-charsets`
-prints every set and bundle with the size this font gives it.
+`--charset chinese,japanese,korean,nf-dev` is the point of the sets: the demo
+writes those three scripts, the symbols that go with them, and one icon family,
+and nothing else. The whole inventory is 35,592 glyphs and 41 MB; this is 11,587
+and 15. `--list-charsets` prints every set and bundle with the size this font
+gives it.
+
+`icons.txt` is the other half of that: the demo draws eight Material Design
+Icons, which are outside the basic plane, and four Devicons, and those twelve
+characters are what `--chars-file` adds. Eight of them at U+F0001 and up are two
+UTF-16 code units each, which is the case the engine has to join before it can
+look one up; taking the whole `nf-md` set for them would be 6,880 glyphs.
 
 The order of the rest matters, and it is the order that catches things. `--stage`
 renders the page the project opens on and writes `dist/page.gray`; `check.mjs`
@@ -52,7 +62,7 @@ that the VM produced.
 | --- | --- | --- |
 | B | | turn between the two |
 | click the stage, or Space | type a line; it is drawn as you enter it | **find**: type a character and it turns to its page and rings it |
-| Enter | cycle the stock lines, one per script | back to the first page |
+| Enter | cycle the stock lines, one per script, and one of icons | back to the first page |
 | Up / Down | larger, smaller | ten pages at a time |
 | Left / Right | wrap earlier, wrap later | the next, the previous page |
 | 1 – 6 | the ink | the ink |
@@ -67,8 +77,10 @@ the block is pinned to the top-left of the stage and the first baseline sits 0.9
 ems under it. The library is given the baseline and does not care where it is.
 The stage is 480 by 360 and the pen may only be moved inside the library's
 `PF_EDGE_X` by `PF_EDGE_Y`, which is 225 by 165 either side of the middle, so the
-default page is five short lines: 330 units of box, 45 units of leading at the
-default size, and seven lines is the most that can ever fit.
+default page is five lines that draw as six rows: 330 units of box, 45 units of
+leading at the default size, and seven rows is the most that can ever fit. The
+icons row is the sixth and the last one that does — an eleventh glyph on either
+Chinese line is 448 units, the measure exactly, and that one wrapped.
 
 **The mode.** `mode` is 0 for the page of text and 1 for the sheet, and B turns
 between them. The library draws whichever it is asked for and keeps no state of
@@ -92,8 +104,8 @@ FreeType, and asks the question that has to be asked first — does the ink stay
 inside the box — and then whether the two pictures are the same:
 
 ```
-page: 70 glyphs, 14290 inked pixels at size 34
-page: ink x -221.4..183.5, y -152.5..146.5 in a box of +/-225 by +/-165
+page: 77 glyphs, 14902 inked pixels at size 34
+page: ink x -223.5..181.4, y -104.8..146.5 in a box of +/-225 by +/-165
 page: tables against FreeType, 1.000 of the pen's ink on the font's,
       1.000 of the font's on the pen's, within a pixel
 ```
@@ -115,10 +127,10 @@ it finds a character — the ring has to be round the cell that character is in,
 the page it is on, which is a page the sheet had to turn to get to.
 
 ```
-drawn       4302 lines at pen size 1, 0 stamps
-expected    4302 lines, scale 0.708
-stage       x -222..181, y -152..147, page overlap 1.000
-sheet       96 cells, 12966 strokes, x -217..195, y -139..149
+drawn       4172 lines at pen size 1, 0 stamps
+expected    4172 lines, scale 0.708
+stage       x -224..181, y -104..147, page overlap 1.000
+sheet       96 cells, 12866 strokes, x -217..195, y -139..149
 find        "中" at 1444, page 16
 ```
 
