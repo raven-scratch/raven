@@ -50,11 +50,17 @@ pub proc square(size: num) warp {
 }
 ```
 
-A module has no target, so it cannot give one a costume, a sound or a
-sprite-local variable. A `pub var` is the state it *can* declare, because
-project-wide state belongs to the stage and there is only one stage. A costume, a
-sound or a non-`pub` `var` written in a module file is accepted and then ignored —
-nothing in the project changes — so those belong in the target file.
+A module has no target, so it cannot give one a sprite-local variable. A `pub var`
+is the state it *can* declare, because project-wide state belongs to the stage and
+there is only one stage. A sound or a non-`pub` `var` written in a module file is
+accepted and then ignored — nothing in the project changes — so those belong in
+the target file.
+
+A **costume** is the one thing a module declares that a target really wears: every
+target that `use`s the module gets its costumes, after the target's own, which is
+how `lib/case` brings the 53 costumes its case lookup switches between and why
+`use case::engine;` is that library's whole install. A name the target declares
+itself wins, so a project's own `cs_A` is the one that ends up in the file.
 
 ## `use`
 

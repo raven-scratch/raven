@@ -1,0 +1,9 @@
+// case — a case-sensitive comparison, in a language whose `=` is not.
+//
+// The stage owns the paper and nothing else. The comparison itself is
+// `src/case/engine.rav`, and `src/case/sense.rav` is the 52 sprites it reads the
+// case out of — the stage never names one.
+
+stage {
+    costume "paper" = "assets/backdrop.svg";
+}

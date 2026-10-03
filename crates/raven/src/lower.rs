@@ -463,6 +463,19 @@ impl Globals {
 
         for plan in &program.targets {
             visit(&plan.main, &mut globals)?;
+            // A module's costumes are worn by the target that uses it, and on
+            // the stage that makes them backdrops the bodies may name.
+            if plan.kind == ast::TargetKind::Stage {
+                for module in &plan.modules {
+                    for item in items_of(module) {
+                        if let Item::Costume(costume) = item {
+                            if !globals.stage_costumes.contains(&costume.name) {
+                                globals.stage_costumes.push(costume.name.clone());
+                            }
+                        }
+                    }
+                }
+            }
             globals.console |= items_use_console(&items_of(&plan.main));
         }
         for unit in program.modules() {
@@ -2191,6 +2204,33 @@ impl<'a> Unit<'a> {
                     }));
                 }
                 _ => {}
+            }
+        }
+
+        // A module's costumes belong to the targets that use it: the library
+        // declares the costume, the project wears it. `lib/case` is 53 of them —
+        // the case of every letter, as the costume a `switch` resolves by name —
+        // and the names have to be known before the bodies, for the same reason
+        // the target's own are. A name the target already declares wins.
+        for module in &self.plan.modules {
+            for item in items_of(module) {
+                let Item::Costume(decl) = item else {
+                    continue;
+                };
+                if self.costumes.iter().any(|name| name == &decl.name) {
+                    continue;
+                }
+                self.costumes.push(decl.name.clone());
+                out.push(rasm::Item::Costume(rasm::CostumeDecl {
+                    name: decl.name.clone(),
+                    path: self.asset_path(&decl.path),
+                    center: decl
+                        .center
+                        .as_ref()
+                        .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))),
+                    pos: decl.span.pos,
+                    path_pos: decl.path_span.pos,
+                }));
             }
         }
 
@@ -4633,31 +4673,38 @@ impl<'a> Unit<'a> {
 
         // A name the project declares is written as the literal of the name, and
         // checked against what this target declares. There is no second spelling
-        // of an author's name to get wrong.
+        // of an author's name to get wrong. A literal stays checked; a name the
+        // program computes cannot be, and Scratch's own slot takes a reporter for
+        // it, so the check is Scratch's at run time — see `docs/raven/std.md`.
         if domain.declares_names() {
             if let Expr::Str { text, .. } = expr {
                 let name = text.clone();
                 self.declared_name(menu_id, &name, expr, source)?;
                 return Ok(mk_str(name));
             }
-            return Err(Error::new(
-                source
-                    .error(
-                        expr.span().pos,
-                        format!(
-                            "this input takes the name of a {}",
-                            menu::type_name(menu_id)
+            if !(wire == Wire::Input && menu::accepts_reporters(menu_id)) {
+                return Err(Error::new(
+                    source
+                        .error(
+                            expr.span().pos,
+                            format!(
+                                "this input takes the name of a {}",
+                                menu::type_name(menu_id)
+                            ),
+                        )
+                        .span(expr.span().len)
+                        .note(format!(
+                            "write it as a string: {}",
+                            self.declared_list(menu_id)
+                        ))
+                        .note(
+                            "a value raven knows is written as a variant, as in `Goto::MousePointer`",
+                        )
+                        .note(
+                            "or compute the name, because this slot takes a reporter",
                         ),
-                    )
-                    .span(expr.span().len)
-                    .note(format!(
-                        "write it as a string: {}",
-                        self.declared_list(menu_id)
-                    ))
-                    .note(
-                        "a value raven knows is written as a variant, as in `Goto::MousePointer`",
-                    ),
-            ));
+                ));
+            }
         }
 
         // An open menu takes a literal or, in an input slot, any expression.

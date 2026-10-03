@@ -1,0 +1,10 @@
+[project]
+name = "case"
+output = "dist"
+extensions = []
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/check.rav",
+]

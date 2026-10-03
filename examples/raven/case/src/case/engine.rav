@@ -1,0 +1,210 @@
+// case — the case of a character, as a costume. `switch costume to` resolves a
+// *name* exactly, `costume #` reads the number back, and Scratch's `=` cannot
+// fold what that number says.
+//
+// Scratch lowercases both sides of a string comparison, so `"Raven"` and
+// `"raven"` are one string and a table cannot be keyed on a character. One
+// lookup does not lowercase: a name the runtime resolves — a costume, a sprite,
+// a backdrop — is matched with `===` on the exact string. So a costume named
+// `cs_a` and one named `cs_A` are two different costumes, and the number of the
+// one a sprite is wearing is a number the case of the character decided.
+//
+// This module declares 53 of them: `cs_none`, then `cs_A` … `cs_Z`, then `cs_a`
+// … `cs_z`. A costume a *module* declares is worn by every target that uses the
+// module, so `use case::engine;` is the whole install, and every sprite that
+// compares wears them. `cs_code` switches to `cs_none` (a known place), reads
+// that number, switches to `cs_` + the character, reads the number again, and
+// puts back what the sprite was wearing: the difference between the two numbers
+// is the code. A name Scratch cannot resolve is a `switch` that does nothing, so
+// 0 means "this character has no case" — a digit, a space, an accented letter —
+// rather than an error.
+//
+// The API is macros, and a macro is inlined into the script that calls it. Each
+// one takes the cell to leave its answer in, because a macro that *returns* a
+// value can contain only one expression, and the switch is a statement:
+//
+//     let exact = false;
+//     cs_eq(sensing::answer(), "Raven", exact);
+//     if exact { … }
+//
+// A switch costs three `switch` blocks and three reads per character, which is
+// what asking a question Scratch's `=` cannot answer costs. `lib/penfont` pays a
+// different price for the same reason — it marks a capital in the text, because
+// it has no costume to spend.
+
+/// The `cs_` costumes are named for the character they answer for, and this is
+/// what goes in front of it.
+pub const CS_PREFIX: str = "cs_";
+
+/// The last code an uppercase letter has: `A` is 1 and `Z` is 26, so 1 to 26 is
+/// a capital and 27 to 52 is not.
+pub const CS_UPPER: num = 26;
+
+// The 53 costumes, in the order the codes count in. `cs_none` is not a letter:
+// it is the place a lookup starts from and the one a miss leaves the sprite
+// wearing, which is why a code is a difference and not an index.
+costume "cs_none" = "assets/cs_blank.svg";
+costume "cs_A" = "assets/cs_blank.svg";
+costume "cs_B" = "assets/cs_blank.svg";
+costume "cs_C" = "assets/cs_blank.svg";
+costume "cs_D" = "assets/cs_blank.svg";
+costume "cs_E" = "assets/cs_blank.svg";
+costume "cs_F" = "assets/cs_blank.svg";
+costume "cs_G" = "assets/cs_blank.svg";
+costume "cs_H" = "assets/cs_blank.svg";
+costume "cs_I" = "assets/cs_blank.svg";
+costume "cs_J" = "assets/cs_blank.svg";
+costume "cs_K" = "assets/cs_blank.svg";
+costume "cs_L" = "assets/cs_blank.svg";
+costume "cs_M" = "assets/cs_blank.svg";
+costume "cs_N" = "assets/cs_blank.svg";
+costume "cs_O" = "assets/cs_blank.svg";
+costume "cs_P" = "assets/cs_blank.svg";
+costume "cs_Q" = "assets/cs_blank.svg";
+costume "cs_R" = "assets/cs_blank.svg";
+costume "cs_S" = "assets/cs_blank.svg";
+costume "cs_T" = "assets/cs_blank.svg";
+costume "cs_U" = "assets/cs_blank.svg";
+costume "cs_V" = "assets/cs_blank.svg";
+costume "cs_W" = "assets/cs_blank.svg";
+costume "cs_X" = "assets/cs_blank.svg";
+costume "cs_Y" = "assets/cs_blank.svg";
+costume "cs_Z" = "assets/cs_blank.svg";
+costume "cs_a" = "assets/cs_blank.svg";
+costume "cs_b" = "assets/cs_blank.svg";
+costume "cs_c" = "assets/cs_blank.svg";
+costume "cs_d" = "assets/cs_blank.svg";
+costume "cs_e" = "assets/cs_blank.svg";
+costume "cs_f" = "assets/cs_blank.svg";
+costume "cs_g" = "assets/cs_blank.svg";
+costume "cs_h" = "assets/cs_blank.svg";
+costume "cs_i" = "assets/cs_blank.svg";
+costume "cs_j" = "assets/cs_blank.svg";
+costume "cs_k" = "assets/cs_blank.svg";
+costume "cs_l" = "assets/cs_blank.svg";
+costume "cs_m" = "assets/cs_blank.svg";
+costume "cs_n" = "assets/cs_blank.svg";
+costume "cs_o" = "assets/cs_blank.svg";
+costume "cs_p" = "assets/cs_blank.svg";
+costume "cs_q" = "assets/cs_blank.svg";
+costume "cs_r" = "assets/cs_blank.svg";
+costume "cs_s" = "assets/cs_blank.svg";
+costume "cs_t" = "assets/cs_blank.svg";
+costume "cs_u" = "assets/cs_blank.svg";
+costume "cs_v" = "assets/cs_blank.svg";
+costume "cs_w" = "assets/cs_blank.svg";
+costume "cs_x" = "assets/cs_blank.svg";
+costume "cs_y" = "assets/cs_blank.svg";
+costume "cs_z" = "assets/cs_blank.svg";
+
+/// Put the case-sensitive code of `$char` in `$code`: 1 to 26 for `A` to `Z`, 27
+/// to 52 for `a` to `z`, 0 for a character with no `cs_` costume of its own.
+///
+/// The sprite's own costume is put back before this returns — by name, which is
+/// exact — so the switch is invisible: a frame is drawn after the script that
+/// runs in it, and a script does not yield in the middle of a macro.
+///
+/// `$code` is written, not declared: `let code = 0;` above the call.
+pub macro cs_code($char: expr<str>, $code: ident) -> stmts {
+    let c: str = $char;
+    let was: str = looks::costume_number_name(NumberName::Name);
+    looks::switch_costume_to("cs_none");
+    let base: num = num(looks::costume_number_name(NumberName::Number));
+    looks::switch_costume_to(operators::join(CS_PREFIX, c));
+    $code = num(looks::costume_number_name(NumberName::Number)) - base;
+    looks::switch_costume_to(was);
+}
+
+/// Put the case-sensitive key of `$text` in `$key`: the text itself, with the
+/// case of every letter written into it, `U` or `l`, right after the letter.
+///
+/// `cs_fold("Raven")` is `RUalvlelnl`, and the `U` is what the capital `R` is
+/// doing there. Two keys are equal — under Scratch's own `=`, which lowercases
+/// both — only when the two texts are the same text in the same case, so a list
+/// of keys, a `match` on a key, or a `<` between two keys is a case-sensitive
+/// table, which is the thing Scratch does not have.
+///
+/// A letter with no `cs_` costume gets no case written into it, so a text
+/// outside ASCII folds exactly as Scratch compares it.
+pub macro cs_fold($text: expr<str>, $key: ident) -> stmts {
+    let t: str = $text;
+    let k: str = "";
+    let i: num = 1;
+    let n: num = operators::length(t);
+    repeat_until i > n {
+        let c: str = operators::letter_of(i, t);
+        k = operators::join(k, c);
+        let code: num = 0;
+        cs_code(c, code);
+        if code > 0 {
+            if code <= CS_UPPER {
+                k = operators::join(k, "U");
+            } else {
+                k = operators::join(k, "l");
+            }
+        }
+        i = i + 1;
+    }
+    $key = k;
+}
+
+/// Put `true` in `$same` when `$a` and `$b` are the same character in the same
+/// case.
+pub macro cs_same($a: expr<str>, $b: expr<str>, $same: ident) -> stmts {
+    let x: str = $a;
+    let y: str = $b;
+    let ca: num = 0;
+    let cb: num = 0;
+    cs_code(x, ca);
+    cs_code(y, cb);
+    $same = x == y && ca == cb;
+}
+
+/// Put `true` in `$same` when `$a` and `$b` are the same text in the same case.
+///
+/// Scratch's own `=` answers the cheap half — two texts that differ in anything
+/// but the case of a letter are different texts — and the keys answer the half
+/// it cannot.
+pub macro cs_eq($a: expr<str>, $b: expr<str>, $same: ident) -> stmts {
+    let x: str = $a;
+    let y: str = $b;
+    $same = x == y;
+    if $same {
+        let ka: str = "";
+        let kb: str = "";
+        cs_fold(x, ka);
+        cs_fold(y, kb);
+        $same = ka == kb;
+    }
+}
+
+/// Put in `$at` where `$needle` first appears in `$text` counting from 1 and
+/// including the case, or 0 when it is not there, or the needle is empty.
+pub macro cs_find($text: expr<str>, $needle: expr<str>, $at: ident) -> stmts {
+    let t: str = $text;
+    let w: str = $needle;
+    let n: num = operators::length(w);
+    $at = 0;
+    if n > 0 {
+        let last: num = operators::length(t) - n + 1;
+        let i: num = 1;
+        repeat_until i > last || $at > 0 {
+            let k: num = 1;
+            let hit: num = 1;
+            repeat_until k > n {
+                let ca: str = operators::letter_of(i + k - 1, t);
+                let cb: str = operators::letter_of(k, w);
+                let same: bool = false;
+                cs_same(ca, cb, same);
+                if !same {
+                    hit = 0;
+                }
+                k = k + 1;
+            }
+            if hit == 1 {
+                $at = i;
+            }
+            i = i + 1;
+        }
+    }
+}

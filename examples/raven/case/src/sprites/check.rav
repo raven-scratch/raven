@@ -1,0 +1,27 @@
+// The demo: it asks for a word and says which of three things you typed.
+//
+// `Raven` and `raven` are one string to Scratch, so `given == "Raven"` cannot
+// tell them apart — that test is there to show the difference. `cs_eq` can, and
+// the middle answer is the one this project exists to give.
+
+use case::engine;
+
+sprite "Check" {
+    // No costume of its own: the library's 53 are what this sprite wears, and
+    // the one it is seen in — `cs_none` — is a transparent unit square.
+    on flag_clicked {
+        sensing::ask_and_wait("Type Raven");
+        let given = sensing::answer();
+        let exact = false;
+        cs_eq(given, "Raven", exact);
+        if exact {
+            looks::say_for_secs("exact — capital R, the rest lower", 3);
+        } else {
+            if given == "Raven" {
+                looks::say_for_secs("the right word, in the wrong case", 3);
+            } else {
+                looks::say_for_secs("not the word", 3);
+            }
+        }
+    }
+}

@@ -2666,6 +2666,121 @@ fn a_declared_name_written_as_a_variant_says_how_to_write_it() {
     );
     assert!(rendered.contains("write one of \"beep\""), "{rendered}");
 }
+/// A name Scratch resolves exactly can also be *computed*: the slot takes a
+/// reporter, and only a literal is checked. This is what makes `lib/case`
+/// possible — a costume name is matched with `===` too, so a sprite that wears
+/// the library's costumes can ask for one the project computed.
+#[test]
+fn a_computed_name_fills_a_menu_that_accepts_a_reporter() {
+    let project = Project::new("menu-reporter").sprite(
+        "Player",
+        r#"sprite "Player" {
+            costume "blank" = "assets/blank.svg";
+            var who: str = "Player";
+
+            on flag_clicked {
+                looks::switch_costume_to(who);
+                motion::goto(who);
+                looks::say(sensing::of("costume name", operators::join("cs_", who)));
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(!asm.contains("looks_switchcostumeto(\"Player\")"), "{asm}");
+    assert!(!asm.contains("motion_goto(\"Player\")"), "{asm}");
+    assert!(asm.contains("operator_join(\"cs_\", "), "{asm}");
+    assert!(asm.contains("sensing_of(\"costume name\", "), "{asm}");
+}
+
+/// A costume a *module* declares is worn by every target that uses it, which is
+/// how `lib/case` brings its 53 and how `use case::engine;` is the whole install.
+/// A target's own costumes are its own and are not shared the same way: a module
+/// has no target to wear anything.
+#[test]
+fn a_module_costume_is_worn_by_the_target_that_uses_it() {
+    let project = Project::new("module-costume")
+        .module(
+            "lib/case",
+            r#"costume "cs_none" = "assets/blank.svg";
+costume "cs_A" = "assets/blank.svg";"#,
+        )
+        .sprite(
+            "A",
+            r#"use lib::case;
+
+            sprite "A" {
+                costume "idle" = "assets/blank.svg";
+
+                on flag_clicked {
+                    looks::switch_costume_to("cs_A");
+                }
+            }"#,
+        );
+    project.write();
+    let mut options = project.options();
+    options.debug = true;
+    driver::build(&options).expect("the module's costume is the target's");
+    let text =
+        std::fs::read_to_string(project.dir.join("dist/project.json")).expect("--debug writes it");
+    let built: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    let sprite = built["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["name"] == "A")
+        .expect("the sprite");
+    let costumes: Vec<&str> = sprite["costumes"]
+        .as_array()
+        .expect("costumes")
+        .iter()
+        .filter_map(|costume| costume["name"].as_str())
+        .collect();
+    // Own first, then the module's: `lib/case` counts from `cs_none`, so the
+    // order of what it brings is the code it answers with.
+    assert_eq!(costumes, ["idle", "cs_none", "cs_A"], "{costumes:?}");
+}
+
+/// The `case` library is macros, and a macro has to expand wherever it is called:
+/// a `let` is a `_vms` cell inside a `proc` and a `_stackN` cell inside a script,
+/// and both are where an answer lands. This compiles the shipped module rather
+/// than a copy of its shape.
+#[test]
+fn the_case_library_expands_inside_a_proc_and_a_script() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/case/engine.rav");
+    let library = std::fs::read_to_string(&path).expect("lib/case/engine.rav");
+    let project = Project::new("case-macros")
+        .module("case/engine", &library)
+        .sprite(
+            "A",
+            r#"use case::engine;
+
+            sprite "A" {
+                var n: num = 0;
+
+                proc scan(t: str) -> num warp {
+                    let code = 0;
+                    let key = "";
+                    let at = 0;
+                    cs_code("A", code);
+                    cs_fold(t, key);
+                    cs_find(t, "a", at);
+                    return code + at + operators::length(key);
+                }
+
+                on flag_clicked {
+                    let same = false;
+                    cs_same("a", "A", same);
+                    cs_eq("a", "A", same);
+                    n = scan("Raven");
+                }
+            }"#,
+        );
+    let asm = project.expand();
+    assert!(asm.contains("looks_switchcostumeto(\"cs_none\")"), "{asm}");
+    assert!(asm.contains("looks_costumenumbername(\"number\")"), "{asm}");
+    assert!(asm.contains("operator_join(\"cs_\", "), "{asm}");
+}
+
 /// A condition that needs statements of its own — a value-returning `proc` call
 /// — has to run again for every test of the loop, not once before it.
 #[test]

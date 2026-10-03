@@ -221,6 +221,28 @@ ninety-six cells and the ring a find draws, and fails if the sprite stamped.
 `examples/raven/penfont` is only the demo: a stage, a mode switch and some keys
 over that engine.
 
+`lib/case` is the same shape and much smaller, and it is the one to read when a
+program has to ask a question Scratch's `=` cannot answer. Scratch lowercases
+both sides of a string comparison, but a *name* the runtime resolves — a costume,
+a sprite, a backdrop — is matched with `===`, so `cs_a` and `cs_A` are two
+different costumes and the number one of them answers with is a number the case
+of the character decided. The library is one module: 53 costumes (`cs_none`, then
+`cs_A`…`cs_Z`, then `cs_a`…`cs_z`) that every target using it wears, and macros
+`cs_code`, `cs_fold`, `cs_same`, `cs_eq` and `cs_find` that switch a costume,
+read `costume #`, and put the sprite's own costume back — a macro because the
+switch is statements, and each takes the cell to answer in:
+
+```rav
+let exact = false;
+cs_eq(sensing::answer(), "Raven", exact);
+```
+
+```sh
+cargo run -p raven -- check -m examples/raven/case/raven.toml
+cargo run -p raven -- build -m examples/raven/case/raven.toml --debug
+node tools/validate-sb3.js examples/raven/case/dist/case.sb3 --steps 300
+```
+
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
 raven-asm, not raven, and it is the example to read when a reversal has to encode
@@ -296,10 +318,11 @@ generated from the binding table, and the docs are checked against the code.
 
 * `for x in items` takes the list's *name*, not an expression: the macro reads the
   list's length through an `ident` parameter, so `items.at(2)` is refused.
-* A `costume`, a `sound` or a non-`pub` `var` written in a *module* file is
-  accepted and then ignored. So is a non-`pub` `proc`, `fn`, `const` or `macro`,
-  with no diagnostic at all — `lib/penfont/engine.rav` is `pub` everywhere for
-  that reason.
+* A `sound` or a non-`pub` `var` written in a *module* file is accepted and then
+  ignored. So is a non-`pub` `proc`, `fn`, `const` or `macro`, with no diagnostic
+  at all — `lib/penfont/engine.rav` is `pub` everywhere for that reason. A
+  `costume` is the exception: every target that uses the module wears it, which is
+  how `lib/case` installs 53 costumes with one `use`.
 * A module is compiled into each target that uses it, and a procedure parameter
   does not survive that as a local: if the target has a variable of the same
   name, the *target's* wins inside the procedure, silently. `lib/penfont` spells

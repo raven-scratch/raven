@@ -58,6 +58,24 @@ block, with no slot for a reporter, so it takes a `Key` variant and nothing else
 The hat also fires on a mouse-wheel scroll, which Scratch reports as an up or
 down arrow; the boolean never sees one.
 
+A menu that names something in the project works the same way, and Scratch's
+catalog says which ones are inputs. A **literal** is still checked against what
+the target declares, because a typo should stay a compile error:
+
+```rav
+looks::switch_costume_to("idle");   // this target declares it, or it is a typo
+looks::switch_costume_to(name);     // a name the program computes
+motion::goto(f"seat-{i}");          // and one it builds
+sensing::of("costume name", "Player");
+```
+
+A computed name cannot be checked, so the check is Scratch's own, when the block
+runs: a name no target, costume or sound has is a block that does nothing rather
+than an error. That is the one thing a literal buys over a reporter, and it is
+the reason `lib/case` can exist at all — a *name* is the one string Scratch
+matches with `===`, so `cs_A` and `cs_a` are two different costumes, and only a
+computed name can choose between them.
+
 ## The console
 
 `console` is not a Scratch block and not in the catalog: it is three functions
