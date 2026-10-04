@@ -74,7 +74,8 @@ fn rules() -> String {
          # Sprite names are unique and `Stage` is reserved: `sprite \"Stage\"` is an error.\n\
          # `return` is only allowed in a `proc` that declares `-> <type>`.\n\
          # There is no `break`, no `continue`, no conditional expression, no `as` cast, no\n\
-         # attributes and no string `+`: use `if`, `num(x)`, `str(x)` and `f\"…\"`.\n\
+         # attributes and no string `+`: use `if`, `num(x)`, `str(x)` and `f\"…\"`. The one\n\
+         # thing shaped like an attribute is the `@scratch` decorator on a `var`.\n\
          # `&&` and `||` are eager; comparisons do not chain (`a < b < c` is an error).\n\
          # A statement-only method has no value: `l.push`, `l.pop`, `l.insert`, `l.remove`,\n\
          # `l.clear`, `m.set`, `m.remove`, `m.clear`. `let v = l.pop();` is an error; the value\n\
@@ -83,8 +84,13 @@ fn rules() -> String {
          # outer loop as `repeat n {{ … }}`. Expansion is capped at 32 levels deep.\n\
          # `pub` is meaningful on `var`, `list`, `const`, `fn`, `macro`, `proc` and `struct`;\n\
          # a `pub struct` parses but cannot be imported.\n\
-         # A program cannot name a Scratch variable. `watch a, b;` is the one exception: it\n\
-         # declares a visible Scratch variable per name, to be looked at, and nothing else.\n\
+         # A decorator is written on the line above a `var` as `@name` or `@name(args)`.\n\
+         # `@scratch var x: num = 0;` stores that variable as a real Scratch variable, and\n\
+         # the same for a `list`; every statement that reads or writes it is unchanged.\n\
+         # `@scratch` takes no arguments and goes on nothing but a `var`; a struct cannot\n\
+         # be one Scratch variable.\n\
+         # A program cannot name a Scratch variable. `watch a, b;` declares a visible\n\
+         # Scratch variable per name, to be looked at, and nothing else.\n\
          # The five blocks that name a Scratch variable are refused with a note saying what\n\
          # to write instead.\n\
          # A struct occupies at most 64 cells and is a place, not a value: build it in a\n\
@@ -114,8 +120,9 @@ fn grammar() -> String {
 
 file        = { use } { item }
 use         = \"use\" path [ \"::\" \"{\" ident { \",\" ident } \"}\" ] \";\"
-item        = target | var_decl | const_decl | struct_decl | broadcast | costume
-            | sound | proc_def | fn_def | macro_def | script | watch
+item        = { decorator } ( target | var_decl | const_decl | struct_decl | broadcast
+            | costume | sound | proc_def | fn_def | macro_def | script | watch )
+decorator   = \"@\" IDENT [ \"(\" [ expr { \",\" expr } ] \")\" ]
 
 target      = \"stage\" block | \"sprite\" STRING block
 var_decl    = [ \"pub\" ] \"var\" IDENT \":\" type \"=\" initializer \";\"
@@ -281,12 +288,13 @@ fn types() -> String {
 fn memory() -> String {
     "
 ## memory
-# A raven program declares no Scratch variable a program can name. Every value it
-# stores is a cell of a Scratch list, addressed by a constant index chosen at
-# compile time.
-#   _vms    one per target: its `var`s, every `proc` frame, and every list or map
-#           that is only ever read or written in place. Declared with one item
-#           per cell, so a table costs nothing to start.
+# A raven program cannot name a Scratch variable. Every value it stores is a cell
+# of a Scratch list, addressed by a constant index chosen at compile time — unless
+# the declaration is written `@scratch`, which stores it in a Scratch variable or
+# list of its own name instead.
+#   _vms    one per target: its `var`s that are not `@scratch`, every `proc` frame,
+#           and every list or map that is only ever read or written in place.
+#           Declared with one item per cell, so a table costs nothing to start.
 #   _heap   one per target: the runs that grow. It is a list of its own because
 #           Scratch refuses to add to a list of 200,000 items, so a large table
 #           in `_vms` would stop every list from growing.
@@ -296,8 +304,11 @@ fn memory() -> String {
 #           pushes onto it and the matching `data_deleteoflist` pops when the
 #           block ends. Numbering starts at _stack1.
 #   _console the log, declared only when something logs.
-# None of them exists unless used. A `watch` is the one place a real Scratch
-# variable or list is declared, and it exists to be displayed.
+# None of them exists unless used. `watch` is where a real Scratch variable or
+# list is declared to be displayed, and `@scratch` is where one is declared to
+# be stored in: `@scratch var x` is data_variable/data_setvariableto by name,
+# `@scratch var xs: list<T>` is the Scratch list itself, and no cell of an arena
+# is laid out for either.
 # Reading a cell is data_itemoflist; writing one is data_replaceitemoflist. A
 # `let` in a script is data_addtolist + data_deleteoflist, not a replace.
 # A `list<T>` or a `map<K,V>` is a run of cells: a handle of (base, length,

@@ -1,0 +1,7 @@
+dist/
+# Written one image at a time by tools/build.mjs, so it is never the same twice.
+src/rv32/image.rav
+
+images/mini-kernel
+images/mini-download/
+images/mini.cpio

@@ -192,8 +192,9 @@ fn _unused(_: &Project) {}
 // The memory system's headline law
 // ---------------------------------------------------------------------------
 
-/// A built project declares no Scratch variable except the mirrors `watch`
-/// asked for, and no list that is not an arena or one the source named.
+/// A built project declares no Scratch variable except the ones the source
+/// asked for: the mirrors `watch` asked for, and the names `@scratch` bound.
+/// Nothing else may appear in the editor's variable pane.
 #[test]
 fn a_built_project_declares_no_scratch_variables() {
     let project = Project::new("no-scratch-vars").sprite(
@@ -201,10 +202,13 @@ fn a_built_project_declares_no_scratch_variables() {
         r#"sprite "A" {
             var score: num = 0;
             var trail: list<num> = [];
+            @scratch
+            var bound: num = 0;
             watch score;
 
             on flag_clicked {
                 score += 1;
+                bound += 1;
                 trail.push(1);
                 let local = score * 2;
                 looks::say(f"{local}");
@@ -219,23 +223,23 @@ fn a_built_project_declares_no_scratch_variables() {
         .expect("--debug writes project.json");
     let built: serde_json::Value = serde_json::from_str(&text).expect("valid json");
 
-    // A `watch` is the one thing that may declare a Scratch variable: it exists
-    // so the value can be seen on the stage.
-    let watched = ["score"];
+    // A `watch` mirror and a `@scratch` binding are the two things that may
+    // declare a Scratch variable, and both exist on purpose.
+    let watched = ["score", "bound"];
     for target in built["targets"].as_array().expect("targets") {
         for value in target["variables"].as_object().expect("variables").values() {
             let variable = value[0].as_str().expect("a variable name");
             assert!(
                 watched.contains(&variable),
-                "`{}` declares the Scratch variable `{variable}` without a `watch`",
+                "`{}` declares the Scratch variable `{variable}` without a `watch` or `@scratch`",
                 target["name"]
             );
         }
         for list in target["lists"].as_object().expect("lists").values() {
             let list_name = list[0].as_str().expect("a list name");
             // The only lists a project declares are the arenas, the console,
-            // one stack per script that needs one, and the lists a `watch`
-            // asked to see. `trail` is none of those.
+            // one stack per script that needs one, and the lists a `watch` or a
+            // `@scratch` asked to see. `trail` is none of those.
             let arena = list_name == "_vms"
                 || list_name == "_gvm"
                 || list_name == "_heap"
@@ -244,7 +248,7 @@ fn a_built_project_declares_no_scratch_variables() {
                 || list_name.starts_with("_stack");
             assert!(
                 arena || watched.contains(&list_name),
-                "`{list_name}` declares a Scratch list without a `watch`"
+                "`{list_name}` declares a Scratch list without a `watch` or `@scratch`"
             );
         }
     }
@@ -2508,6 +2512,222 @@ fn watching_something_undeclared_is_an_error() {
         rendered.contains("watched but never declared"),
         "{rendered}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `@scratch`: storage, not syntax
+// ---------------------------------------------------------------------------
+
+/// `@scratch` moves a `var` or a `list` out of the virtual memory system and
+/// into a real Scratch variable or list. Nothing else changes: the name, the
+/// type, and every statement that reads or writes it are the ones a cell would
+/// have lowered to.
+#[test]
+fn a_scratch_decorator_stores_a_var_and_a_list_in_scratch() {
+    let project = Project::new("scratch-deco").sprite(
+        "A",
+        r#"sprite "A" {
+            @scratch
+            var score: num = 7;
+            @scratch
+            var trail: list<num> = [1, 2];
+
+            on flag_clicked {
+                score += 1;
+                trail.push(score);
+                let first = trail[1];
+                looks::say(f"{first}");
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    // The declaration is Scratch's, with its starting value.
+    assert!(asm.contains("var score = 7;"), "{asm}");
+    assert!(asm.contains("list trail = [1, 2];"), "{asm}");
+    // A read is the reporter, a write is the setter, a push is the list's own.
+    assert!(
+        asm.contains(r#"data_setvariableto("score", operator_add(data_variable("score"), 1))"#),
+        "{asm}"
+    );
+    assert!(
+        asm.contains(r#"data_addtolist(data_variable("score"), "trail")"#),
+        "{asm}"
+    );
+    assert!(asm.contains(r#"data_itemoflist(1, "trail")"#), "{asm}");
+    // And no arena is declared: nothing in the target is a cell any more.
+    assert!(!asm.contains("_vms"), "no cell is left over: {asm}");
+    let _ = project.build();
+}
+
+/// A `@scratch` name is a Scratch variable in `project.json`, not just in the
+/// raven-asm: the editor's variable pane is where the user goes to see it.
+#[test]
+fn a_scratch_decorator_declares_a_real_scratch_name() {
+    let project = Project::new("scratch-declared")
+        .stage(
+            r#"@scratch
+            pub var best: num = 0;
+            stage { }"#,
+        )
+        .sprite(
+            "A",
+            r#"sprite "A" {
+                @scratch
+                var live: bool = false;
+                @scratch
+                var trail: list<str> = [];
+                on flag_clicked { live = 1 > 0; trail.push("x"); }
+            }"#,
+        );
+    project.write();
+    let mut options = project.options();
+    options.debug = true;
+    driver::build(&options).expect("the fixture builds");
+    let text = std::fs::read_to_string(project.dir.join("dist/project.json")).expect("json");
+    let built: serde_json::Value = serde_json::from_str(&text).expect("parse");
+    let names = |target: &serde_json::Value, field: &str| -> Vec<String> {
+        target[field]
+            .as_object()
+            .expect(field)
+            .values()
+            .map(|v| v[0].as_str().expect("a name").to_string())
+            .collect()
+    };
+    for target in built["targets"].as_array().expect("targets") {
+        let name = target["name"].as_str().expect("a target name");
+        match name {
+            "Stage" => {
+                assert_eq!(names(target, "variables"), ["best"], "the global scalar");
+                assert!(names(target, "lists").is_empty(), "no list is global here");
+            }
+            "A" => {
+                assert_eq!(names(target, "variables"), ["live"], "the sprite scalar");
+                let lists = names(target, "lists");
+                assert!(lists.contains(&"trail".to_string()), "{lists:?}");
+                // Only the sprite's own stack joins it: no arena is declared.
+                assert!(
+                    lists
+                        .iter()
+                        .all(|l| l == "trail" || l.starts_with("_stack")),
+                    "{lists:?}"
+                );
+            }
+            other => panic!("unexpected target `{other}`"),
+        }
+    }
+}
+
+/// A boolean out of a `@scratch` variable is read back as a block, the same way
+/// one out of a cell is: Scratch stores a value, and a condition needs a block.
+#[test]
+fn a_scratch_boolean_is_read_back_as_a_comparison() {
+    let project = Project::new("scratch-bool").sprite(
+        "A",
+        r#"sprite "A" {
+            @scratch
+            var live: bool = false;
+            on flag_clicked { if live { looks::say("yes"); } }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains(r#"control_if(operator_equals(data_variable("live"), "true"))"#),
+        "{asm}"
+    );
+    let _ = project.build();
+}
+
+/// `watch` is about the monitor and `@scratch` about the storage, so they
+/// compose: a watched `@scratch` name is declared visible, and nothing writes a
+/// mirror of the variable onto itself.
+#[test]
+fn a_watch_on_a_scratch_variable_only_shows_its_monitor() {
+    let project = Project::new("scratch-watch").sprite(
+        "A",
+        r#"sprite "A" {
+            @scratch
+            var score: num = 0;
+            @scratch
+            var trail: list<num> = [];
+            watch score, trail;
+            on flag_clicked { score += 1; trail.push(score); }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(asm.contains("visible var score = 0;"), "{asm}");
+    assert!(asm.contains("visible list trail = [];"), "{asm}");
+    assert!(
+        !asm.contains(r#"data_setvariableto("score", data_variable("score"))"#),
+        "a Scratch variable is its own mirror: {asm}"
+    );
+    let _ = project.build();
+}
+
+#[test]
+fn a_decorator_that_is_not_scratch_is_an_error() {
+    let project = Project::new("deco-unknown").sprite(
+        "A",
+        r#"sprite "A" {
+            @cloud
+            var score: num = 0;
+            on flag_clicked { looks::hide(); }
+        }"#,
+    );
+    let rendered = project.expect_error().render();
+    assert!(
+        rendered.contains("there is no decorator called `@cloud`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("`@scratch`"), "{rendered}");
+}
+
+#[test]
+fn a_decorator_goes_on_a_var_declaration() {
+    for (source, what) in [
+        (
+            r#"sprite "A" { @scratch proc p() { } on flag_clicked { looks::hide(); } }"#,
+            "a procedure",
+        ),
+        (
+            r#"sprite "A" { @scratch struct P { x: num } on flag_clicked { looks::hide(); } }"#,
+            "a struct",
+        ),
+        (
+            r#"sprite "A" { @scratch costume "c" = "assets/blank.svg"; on flag_clicked { looks::hide(); } }"#,
+            "a costume",
+        ),
+    ] {
+        let project = Project::new("deco-place").sprite("A", source);
+        let rendered = project.expect_error().render();
+        assert!(rendered.contains("cannot take one"), "`{what}`: {rendered}");
+    }
+}
+
+#[test]
+fn scratch_decorator_diagnostics_are_specific() {
+    let cases = [
+        (
+            "var with an argument",
+            r#"sprite "A" { @scratch(1) var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "`@scratch` takes no arguments",
+        ),
+        (
+            "written twice",
+            r#"sprite "A" { @scratch @scratch var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "decorated with `@scratch` twice",
+        ),
+        (
+            "on a struct variable",
+            r#"sprite "A" { @scratch var p: P = P { x: 0 }; on flag_clicked { looks::hide(); } }
+               struct P { x: num }"#,
+            "cannot be a Scratch variable",
+        ),
+    ];
+    for (what, source, needle) in cases {
+        let project = Project::new("deco-diag").sprite("A", source);
+        let rendered = project.expect_error().render();
+        assert!(rendered.contains(needle), "`{what}`: {rendered}");
+    }
 }
 
 /// A list literal is a list of items, not one string. Scratch keeps a list's

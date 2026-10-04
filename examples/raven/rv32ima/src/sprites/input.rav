@@ -1,0 +1,132 @@
+// The keyboard: what the reader typed, as the bytes the guest's console reads.
+//
+// The guest is a VT, so a key is not a letter but a byte, or a short sequence of
+// them: `a` is 0x61, Enter is 0x0A, Backspace is 0x7F, and the arrows are the
+// four escape sequences `ESC [ A` to `ESC [ D`. Every key pushes what it makes
+// onto `input_buffer`, and the machine's console CSR pops it back off.
+//
+// Two mechanisms, because Scratch gives a hat a fixed dropdown and gives the
+// `key pressed?` block a slot that takes an answer.
+//
+//   * The hats below are the keys the dropdown *names*: the letters, the digits,
+//     space, Enter and the four arrows. None of those has a spelling of its own
+//     outside the dropdown -- `Key::A` is the only way to write the hat -- so the
+//     hats are all there is.
+//   * Everything else has no name in that dropdown: `backspace`, `delete`
+//     (which is `ESC [ 3 ~`, not a byte) and the thirty-three symbols. For those
+//     a script polls `key pressed?`, whose menu does accept an answer, and the
+//     answer is the key's own name. The name is built rather than written
+//     because the point is that it is not a dropdown: `"backspace"` reaches the
+//     block as a value, which is what the dropdown will not do.
+//
+// The poll is edge-triggered against `held`, so a key that is down for several
+// frames makes one byte, which is what a key hat does too.
+
+use rv32::io;
+
+sprite "Input" {
+    costume "blank" = "assets/blank.svg";
+
+    @scratch var held_delete: num = 0;
+    @scratch var held: list<num> = [];
+
+    /// Every key the poll watches: the ones with no dropdown name, and the byte
+    /// each one makes. `delete` is not here -- it is four bytes and not one, and
+    /// the poll handles it on its own.
+    var special_keys: list<str> = [
+        "backspace",
+        "_", "-", ",", ";", ":", "!", "?", ".", "'", "\"", "(", ")", "[", "]", "{", "}",
+        "@", "*", "/", "\\", "&", "#", "%", "`", "^", "+", "<", "=", ">", "|", "~", "$"
+    ];
+    var special_codes: list<num> = [
+        127,
+        95, 45, 44, 59, 58, 33, 63, 46, 39, 34, 40, 41, 91, 93, 123, 125,
+        64, 42, 47, 92, 38, 35, 37, 96, 94, 43, 60, 61, 62, 124, 126, 36
+    ];
+
+    proc key_event(p_code: num) warp {
+        input_buffer.push(p_code);
+    }
+
+    /// A key that is an escape sequence: `ESC [ <p_code>`.
+    proc escape_key(p_code: num) warp {
+        input_buffer.push(27);
+        input_buffer.push(91);
+        input_buffer.push(p_code);
+    }
+
+    /// The keys the dropdown has no name for, one turn each, edge-triggered.
+    proc poll_special() warp {
+        let i: num = 1;
+        repeat special_keys.len() {
+            let down: num = 0;
+            if sensing::key_pressed(special_keys[i]) { down = 1; }
+            if down == 1 && held[i] == 0 { key_event(special_codes[i]); }
+            held[i] = down;
+            i += 1;
+        }
+        let down_delete: num = 0;
+        if sensing::key_pressed(operators::join("delete", "")) { down_delete = 1; }
+        if down_delete == 1 && held_delete == 0 {
+            input_buffer.push(27);
+            input_buffer.push(91);
+            input_buffer.push(51);
+            input_buffer.push(126);
+        }
+        held_delete = down_delete;
+    }
+
+    on flag_clicked {
+        looks::hide();
+        forever { poll_special(); }
+    }
+
+    // ------------------------------------------------------------------
+    // The keys the hat menu names
+    // ------------------------------------------------------------------
+
+    on key_pressed(Key::A) { key_event(97); }
+    on key_pressed(Key::B) { key_event(98); }
+    on key_pressed(Key::C) { key_event(99); }
+    on key_pressed(Key::D) { key_event(100); }
+    on key_pressed(Key::E) { key_event(101); }
+    on key_pressed(Key::F) { key_event(102); }
+    on key_pressed(Key::G) { key_event(103); }
+    on key_pressed(Key::H) { key_event(104); }
+    on key_pressed(Key::I) { key_event(105); }
+    on key_pressed(Key::J) { key_event(106); }
+    on key_pressed(Key::K) { key_event(107); }
+    on key_pressed(Key::L) { key_event(108); }
+    on key_pressed(Key::M) { key_event(109); }
+    on key_pressed(Key::N) { key_event(110); }
+    on key_pressed(Key::O) { key_event(111); }
+    on key_pressed(Key::P) { key_event(112); }
+    on key_pressed(Key::Q) { key_event(113); }
+    on key_pressed(Key::R) { key_event(114); }
+    on key_pressed(Key::S) { key_event(115); }
+    on key_pressed(Key::T) { key_event(116); }
+    on key_pressed(Key::U) { key_event(117); }
+    on key_pressed(Key::V) { key_event(118); }
+    on key_pressed(Key::W) { key_event(119); }
+    on key_pressed(Key::X) { key_event(120); }
+    on key_pressed(Key::Y) { key_event(121); }
+    on key_pressed(Key::Z) { key_event(122); }
+
+    on key_pressed(Key::Digit0) { key_event(48); }
+    on key_pressed(Key::Digit1) { key_event(49); }
+    on key_pressed(Key::Digit2) { key_event(50); }
+    on key_pressed(Key::Digit3) { key_event(51); }
+    on key_pressed(Key::Digit4) { key_event(52); }
+    on key_pressed(Key::Digit5) { key_event(53); }
+    on key_pressed(Key::Digit6) { key_event(54); }
+    on key_pressed(Key::Digit7) { key_event(55); }
+    on key_pressed(Key::Digit8) { key_event(56); }
+    on key_pressed(Key::Digit9) { key_event(57); }
+
+    on key_pressed(Key::Space) { key_event(32); }
+    on key_pressed(Key::Enter) { key_event(10); }
+    on key_pressed(Key::UpArrow) { escape_key(65); }
+    on key_pressed(Key::DownArrow) { escape_key(66); }
+    on key_pressed(Key::RightArrow) { escape_key(67); }
+    on key_pressed(Key::LeftArrow) { escape_key(68); }
+}

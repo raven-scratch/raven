@@ -235,6 +235,21 @@ pub struct VarDecl {
     pub name: Ident,
     pub ty: Ty,
     pub init: Initializer,
+    /// `@scratch` and any other decorator written on the line above, in order.
+    pub decorators: Vec<Decorator>,
+    pub span: Span,
+}
+
+/// `@scratch var score: num = 0;` — a decorator on a declaration.
+///
+/// A decorator is written on the line above the item it changes, one per line,
+/// as `@name` or `@name(arg, arg)`. It changes what the compiler emits for that
+/// declaration and nothing about how the name is spelled or used afterwards.
+#[derive(Clone, Debug)]
+pub struct Decorator {
+    pub name: Ident,
+    /// The arguments, in the order written; empty for `@name`.
+    pub args: Vec<Expr>,
     pub span: Span,
 }
 
@@ -276,8 +291,9 @@ pub struct StructDecl {
 /// A raven `var` is a cell of the virtual memory system, so the editor has
 /// nothing to show for it. Naming it here declares a **monitor hook**: a real
 /// Scratch variable of the same name, whose monitor starts visible, and which
-/// every write to the cell keeps in step. It is the one place raven declares a
-/// Scratch variable, and it exists to be looked at, not to be programmed with.
+/// every write to the cell keeps in step. It is one of the two ways raven
+/// declares a Scratch variable — the other is the `@scratch` decorator, which
+/// moves the storage itself into Scratch.
 #[derive(Clone, Debug)]
 pub struct WatchDecl {
     pub names: Vec<Ident>,

@@ -1,0 +1,15 @@
+// The guest's two byte streams.
+//
+// They live on the stage -- a `pub var` is a global, and the stage is where a
+// global is declared -- because two sprites own the two ends of each one. The
+// input sprite pushes what the keyboard typed and the core pops it when the
+// guest reads a console CSR; the core pushes what the guest printed and the
+// terminal drains it once a frame.
+//
+// Codes rather than characters: the guest writes a byte to `0x10000000` and the
+// core has to hand the terminal the same byte, and Scratch cannot make a
+// character out of a number. `rv32::data`'s `byte_chars` is the table that
+// turns one into the other, and the terminal is the only thing that needs it.
+
+pub var input_buffer: list<num> = [];
+pub var output_buffer: list<num> = [];

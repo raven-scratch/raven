@@ -108,14 +108,23 @@ with `data_itemoflist` and written with `data_replaceitemoflist`. The one Scratc
 variable a project can declare is the mirror `watch` asks for, and that exists to
 be looked at on the stage rather than programmed with.
 
+There is exactly one deliberate exception, and it is written down: the
+[`@scratch`](/raven/syntax#scratch) decorator on a `var` or a `list` stores that
+declaration in a real Scratch variable or list of its own name instead of a cell.
+The name, its type and every statement that uses it are unchanged — `raven
+expand` shows `data_variable` where a cell would show `data_itemoflist` — so the
+exception is visible in the expansion, and a declaration that takes it gives up
+the finite, compiled-in arena on purpose. It is there for a value another
+Scratch program, an extension or the editor has to reach.
+
 There are five lists, and the split between them is by **lifetime** and by
 whether the storage *grows*:
 
 | | |
 | --- | --- |
-| `_vms` | the target's arena: its `var`s, every `proc`'s frame, and every list or map that is only ever read or written in place. Declared with one item per cell, so a table costs nothing to start. |
+| `_vms` | the target's arena: its `var`s that are not `@scratch`, every `proc`'s frame, and every list or map that is only ever read or written in place. Declared with one item per cell, so a table costs nothing to start. |
 | `_heap` | the target's heap: the runs that grow. A list of its own, because Scratch refuses to add to a list of 200,000 items — one large table in `_vms` would otherwise stop every list in the program from growing. |
-| `_gvm` | the project's arena, declared on the stage: every `pub var`, and every stage `var` |
+| `_gvm` | the project's arena, declared on the stage: every `pub var`, and every stage `var`, that is not `@scratch` |
 | `_gheap` | the project's heap, declared on the stage |
 | `_stack1`, `_stack2`, … | one per script: everything block-scoped. **It grows and shrinks with the scopes that use it.** |
 | `_console` | the log, when something logs |
@@ -159,10 +168,11 @@ share it too — so a procedure that waits, and is called from more than one pla
 should take what it needs as a parameter, or be written `warp` so it cannot yield
 halfway.
 
-The payoff is that the storage of a raven program is *finite and known*. There is
-no way to make a variable the editor can see, no way to reach one by name, and no
-way for a macro to quietly add one. `raven expand` prints every cell, and the
-count of them is the count in the source.
+The payoff is that the storage of a raven program is *finite and known*. Nothing
+makes a variable the editor can see unless the source wrote `watch` or
+`@scratch`, nothing reaches one by name unless `@scratch` bound it, and no macro
+can quietly add either. `raven expand` prints every cell, and the count of them
+is the count in the source.
 
 ### A list is a run of cells
 

@@ -227,6 +227,14 @@ built-in monitor. The one Scratch variable a project can have is the mirror
 `watch` declares, which exists so a cell can be read on the stage — see
 [the design laws](/raven/design#_7-there-is-no-raw-variable-access-only-the-virtual-memory-system).
 
+The one way to put a `var` or a `list` in Scratch's own storage is the
+[`@scratch`](/raven/syntax#scratch) decorator. It changes where the value lives
+and nothing else: the name, its type and every statement that uses it are the
+same, and a `@scratch` list is a real Scratch list, so its methods lower to the
+list blocks. It is the escape hatch from law 7, for a value another Scratch
+program or the editor has to see, and it gives up the compiled-in arena for that
+declaration.
+
 An initializer is a literal or a list of literals, or a struct literal. raven
 does not compute them, because the editor does not: if you want a computed
 starting value, assign it in an `on flag_clicked` script. Because the starting

@@ -231,9 +231,11 @@ A `proc` is emitted once per target that calls it, and only if it is called. A
 
 A program that declares no state at all does not declare `_vms`, and looks exactly
 like a raven-asm project of the same shape. Nothing a program *writes* can name a
-Scratch variable; the one it can declare is the mirror `watch` asks for, and that
-exists to be looked at. A `bool` is kept like anything else, converted back into a
-block when it is read; see
+Scratch variable; the ones it can declare are the mirror `watch` asks for, which
+exists to be looked at, and the name `@scratch` binds, which is a real Scratch
+variable or list and lowers to `data_variable`/`data_setvariableto` (or the list
+blocks) in place of a cell. A `bool` is kept like anything else, converted back
+into a block when it is read; see
 [types](/raven/types#booleans-stored-as-a-value-converted-on-the-way-out).
 
 ### Where a cell is spent, and why a map is the expensive one

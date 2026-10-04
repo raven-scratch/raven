@@ -1,0 +1,109 @@
+#!/bin/sh
+# screenfetch, in the shell this rootfs actually has.
+#
+# Upstream `screenfetch` is a bash script: it uses arrays, `[[ ]]` and `awk`, and
+# this machine's userland has none of the three -- its `bash` is busybox's ash
+# and its busybox is built without `awk`. So this is the same fetch written for
+# POSIX sh and the applets that are here: the same banner, the same separator,
+# the same labels, read from the same `/proc` files, in the same colours, with
+# the logo beside them the way upstream puts it.
+#
+# The art is not upstream's. Upstream's logo set has no Buildroot entry -- the
+# word does not appear in `screenfetch-dev` at all -- so an unrecognised distro
+# gets a penguin drawn in `#` above its name in a slanted face, both of them
+# ASCII art at terminal-cell resolution. This is ascii.co.uk's Tux instead, the
+# sixteen rows by jgs (Joan Stark), verbatim down to the `jgs` and `a:f` credit
+# rows, which are part of the piece. It is denser and reads as a penguin rather
+# than as a pattern of hashes.
+#
+# Every character of it is plain ASCII -- a, 8, P, Y, d, :, _, /, \, ., ", |, -,
+# ' -- and that is a requirement here and not a preference: this console's cells
+# hold *bytes*, `code_of` looks a byte up in a 256-entry table, so a UTF-8 block
+# element would arrive as three bytes, occupy three cells and draw nothing. Two
+# earlier attempts at a mark were wrong for exactly that reason.
+#
+# Upstream prints each row of art as a printf format string with one `%s` where
+# the row of information goes. This prints the row and the information as one
+# line instead, because the art is full of backslashes that a shell's `printf`
+# would eat out of a format string -- and its backticks and quotes, which the
+# rows below escape because they are characters of the piece and not shell
+# syntax.
+#
+# It is not upstream and does not pretend to be: what it is is ascii.co.uk's art
+# beside upstream's labels, drawn by tools the guest has. `tools/mini-image.sh`
+# puts it in the image as `/usr/bin/screenfetch`.
+
+user=$(whoami 2>/dev/null || echo root)
+host=$(uname -n 2>/dev/null || echo localhost)
+os=$(sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release 2>/dev/null | head -1)
+[ -n "$os" ] || os=$(uname -s)
+kernel=$(uname -r)
+machine=$(uname -m)
+shell=$(basename "${SHELL:-/bin/sh}")
+
+uptime_s=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+[ -n "$uptime_s" ] || uptime_s=0
+days=$((uptime_s / 86400))
+hours=$(((uptime_s % 86400) / 3600))
+minutes=$(((uptime_s % 3600) / 60))
+if [ "$days" -gt 0 ]; then
+    uptime="${days}d ${hours}h ${minutes}m"
+else
+    uptime="${hours}h ${minutes}m"
+fi
+
+mem_total=$(sed -n 's/^MemTotal: *\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null)
+mem_free=$(sed -n 's/^MemFree: *\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null)
+[ -n "$mem_total" ] || mem_total=0
+[ -n "$mem_free" ] || mem_free=0
+mem_used=$((mem_total - mem_free))
+memory="$((mem_used / 1024))MB / $((mem_total / 1024))MB"
+
+cpu=$(sed -n 's/^isa *: *\(.*\)/\1/p' /proc/cpuinfo 2>/dev/null | head -1)
+[ -n "$cpu" ] || cpu="$machine (no /proc/cpuinfo)"
+
+# The colours upstream uses for the keys and the separator, which this terminal
+# has a palette for.
+key=$(printf '\033[1;34m')
+value=$(printf '\033[0m')
+off=$(printf '\033[0m')
+
+# The art and the information, a row of each per pair, in the order they are
+# printed. Sixteen rows of Tux against eight rows of facts, so the facts are
+# centred beside the art: four rows of penguin, then the facts one to a row, then
+# four more. The `\`, the backtick, the `"` and the `'` are escaped because a
+# double-quoted word would otherwise end or command-substitute on them.
+set -- \
+"              a8888b." "" \
+"             d888888b." "" \
+"             8P\"YP\"Y88" "" \
+"             8|o||o|88" "" \
+"             8'    .88" "${key}${user}${value}@${key}${host}${value}" \
+"             8\`.\\_.' Y8." " ${key}OS${value}: ${os}" \
+"            d/      \`8b." " ${key}Kernel${value}: ${kernel}" \
+"           dP   .    Y8b." " ${key}Uptime${value}: ${uptime}" \
+"          d8:'  \"  \`::88b" " ${key}Shell${value}: ${shell}" \
+"         d8\"         'Y88b" " ${key}CPU${value}: ${cpu}" \
+"        :8P    '      :888" " ${key}Memory${value}: ${memory}${off}" \
+"         8a.   :     \\_a88P" " ${key}------------${value}" \
+"       .\\_/\"Yaa\\_:   .| 88P|" "" \
+"  jgs  \\    YP\"    \`| 8P  \`." "" \
+"  a:f  /     \\.\\_\\_\\_.d|    .'" "" \
+"       \`--..\\_\\_)8888P\`.\\_.'" ""
+
+# The fetch starts from the top of a clean screen -- `ESC [ 2 J` clears it and
+# `ESC [ H` puts the cursor back in the corner -- because the block is sixteen
+# rows and a prompt that a screen of boot log has already pushed down would leave
+# only the top of the penguin on the paper: a row below the last one is lost and
+# not scrolled.
+printf '\033[2J\033[H'
+
+# The art is padded to thirty columns, its widest row, so the information starts
+# at a fixed column whatever row it is on; thirty plus the longest fact, the CPU
+# line, is sixty-three of the console's sixty-four.
+while [ $# -gt 1 ]; do
+    art=$1
+    while [ ${#art} -lt 30 ]; do art="$art "; done
+    printf '%s\n' "$art$2"
+    shift 2
+done

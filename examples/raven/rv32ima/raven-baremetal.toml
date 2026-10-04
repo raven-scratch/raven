@@ -1,0 +1,15 @@
+# The same machine carrying the bare metal image: `node tools/build.mjs
+# baremetal` is what puts it in src/rv32/image.rav, and this manifest is what
+# builds it into its own `.sb3`.
+[project]
+name = "rv32baremetal"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/riscv.rav",
+    "src/sprites/terminal.rav",
+    "src/sprites/input.rav",
+]

@@ -175,6 +175,7 @@ pub enum P {
     Gt,
     Ge,
     Underscore,
+    At,
 }
 
 impl P {
@@ -212,6 +213,7 @@ impl P {
             P::Gt => ">",
             P::Ge => ">=",
             P::Underscore => "_",
+            P::At => "@",
         }
     }
 }
@@ -729,6 +731,7 @@ impl<'a> Lexer<'a> {
                 (P::Ge, 2)
             }
             '>' => (P::Gt, 1),
+            '@' => (P::At, 1),
             '&' | '|' => {
                 return Err(self
                     .error(start, format!("unexpected `{c}`"))

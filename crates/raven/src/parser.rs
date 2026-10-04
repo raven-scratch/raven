@@ -245,11 +245,13 @@ impl Parser<'_> {
     }
 
     fn item(&mut self) -> Result<Item> {
+        let decorators = self.decorators()?;
         let public = self.eat_kw(Kw::Pub);
         if self.at_kw(Kw::Stage) || self.at_kw(Kw::Sprite) {
             if public {
                 return Err(self.err(self.span(), "`pub` does not apply to a target"));
             }
+            self.reject_decorators(&decorators, "a target")?;
             return Ok(Item::Target(self.target()?));
         }
         if self.at_kw(Kw::Use) {
@@ -260,37 +262,61 @@ impl Parser<'_> {
         }
         let span = self.span();
         let item = match self.peek().clone() {
-            Tok::Kw(Kw::Var) => Item::Var(self.var_decl(public)?),
-            Tok::Kw(Kw::Const) => Item::Const(self.const_decl(public)?),
-            Tok::Kw(Kw::Struct) => Item::Struct(self.struct_decl(public)?),
+            Tok::Kw(Kw::Var) => {
+                let mut decl = self.var_decl(public)?;
+                decl.decorators = decorators;
+                Item::Var(decl)
+            }
+            Tok::Kw(Kw::Const) => {
+                self.reject_decorators(&decorators, "a constant")?;
+                Item::Const(self.const_decl(public)?)
+            }
+            Tok::Kw(Kw::Struct) => {
+                self.reject_decorators(&decorators, "a struct")?;
+                Item::Struct(self.struct_decl(public)?)
+            }
             Tok::Kw(Kw::Watch) => {
+                self.reject_decorators(&decorators, "a `watch`")?;
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a `watch`"));
                 }
                 Item::Watch(self.watch_decl()?)
             }
             Tok::Kw(Kw::Broadcast) => {
+                self.reject_decorators(&decorators, "a broadcast")?;
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a broadcast"));
                 }
                 Item::Broadcast(self.broadcast_decl()?)
             }
             Tok::Kw(Kw::Costume) => {
+                self.reject_decorators(&decorators, "a costume")?;
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a costume"));
                 }
                 Item::Costume(self.costume_decl()?)
             }
             Tok::Kw(Kw::Sound) => {
+                self.reject_decorators(&decorators, "a sound")?;
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a sound"));
                 }
                 Item::Sound(self.sound_decl()?)
             }
-            Tok::Kw(Kw::Proc) => Item::Proc(self.proc_decl(public)?),
-            Tok::Kw(Kw::Fn) => Item::Fn(self.fn_decl(public)?),
-            Tok::Kw(Kw::Macro) => Item::Macro(self.macro_decl(public)?),
+            Tok::Kw(Kw::Proc) => {
+                self.reject_decorators(&decorators, "a procedure")?;
+                Item::Proc(self.proc_decl(public)?)
+            }
+            Tok::Kw(Kw::Fn) => {
+                self.reject_decorators(&decorators, "a function")?;
+                Item::Fn(self.fn_decl(public)?)
+            }
+            Tok::Kw(Kw::Macro) => {
+                self.reject_decorators(&decorators, "a macro")?;
+                Item::Macro(self.macro_decl(public)?)
+            }
             Tok::Kw(Kw::On) => {
+                self.reject_decorators(&decorators, "a script")?;
                 if public {
                     return Err(self.err(span, "`pub` does not apply to a script"));
                 }
@@ -311,6 +337,57 @@ impl Parser<'_> {
             }
         };
         Ok(item)
+    }
+
+    /// `@scratch`, `@name(a, b)`: decorators on the line above a declaration.
+    ///
+    /// One decorator per line, each an `@`, a name, and optional arguments. They
+    /// are parsed here, where every item passes, so a decorator on something that
+    /// cannot take one is refused rather than quietly dropped.
+    fn decorators(&mut self) -> Result<Vec<Decorator>> {
+        let mut out = Vec::new();
+        while self.at_punct(P::At) {
+            let start = self.bump().span;
+            let name = self.expect_ident("a decorator name")?;
+            let mut args = Vec::new();
+            let mut end = name.span;
+            if self.eat(P::LParen) {
+                if !self.at_punct(P::RParen) {
+                    loop {
+                        args.push(self.expr()?);
+                        if !self.eat(P::Comma) {
+                            break;
+                        }
+                    }
+                }
+                end = self.expect(P::RParen)?.span;
+            }
+            let len = if end.pos.line == start.pos.line {
+                end.pos.col.saturating_sub(start.pos.col) + end.len
+            } else {
+                1
+            };
+            out.push(Decorator {
+                name,
+                args,
+                span: Span::new(start.pos, len.max(1)),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Refuse decorators on an item that cannot take one.
+    fn reject_decorators(&self, decorators: &[Decorator], what: &str) -> Result<()> {
+        let Some(first) = decorators.first() else {
+            return Ok(());
+        };
+        Err(self
+            .err(
+                first.span,
+                format!("`@{}` is a decorator, and {what} cannot take one", first.name.name),
+            )
+            .note("a decorator goes on the line above a `var` declaration")
+            .note("the one decorator is `@scratch`, which stores a `var` or a `list` as a real Scratch variable or list"))
     }
 
     fn target(&mut self) -> Result<TargetDecl> {
@@ -495,6 +572,9 @@ impl Parser<'_> {
             name,
             ty,
             init,
+            // A decorator is parsed by `item`; a `var` inside a macro body is a
+            // hygienic temporary and has nowhere to put one.
+            decorators: Vec::new(),
 
             span: Span::new(
                 start.pos,

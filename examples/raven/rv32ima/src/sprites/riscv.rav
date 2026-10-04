@@ -1,0 +1,1109 @@
+// The machine: a 32 bit RISC-V hart with no MMU, the way mini-rv32ima is one.
+//
+// This is the Scratch project's core, translated, and the Scratch project is
+// itself a translation of mini-rv32ima. The guest is whatever image
+// `rv32::image` holds -- Linux 6.1.14, or the bare metal greeting -- and the
+// only devices it can see are the ones mini-rv32ima gives it: a console whose
+// bytes go in and out through `rv32::io`, a CLINT at `0x1100_0000` with a cycle
+// counter and a timer that the frame loop drives, and a pair of magic addresses
+// the kernel writes to reboot and to power off.
+//
+// Four things are different from the Scratch project, and each is said again
+// where it happens:
+//
+//   * There is no `Unicode of` table and no `case sensing` dance. The console
+//     speaks bytes and penfont speaks characters, so `byte_chars` does the
+//     translation on the terminal's side, which is where the font is.
+//   * The long-multiply and long-divide helpers are gone. They produced a
+//     decimal string and then Scratch read it back as a double, which loses
+//     exactly the bits they were written to keep.
+//   * `mulh`, `mulhu` and `mulhsu` are computed from a 16 bit split and are
+//     signed or unsigned as the instruction says. The Scratch project routes
+//     all three through one helper fed with the raw registers, so its `mulh` is
+//     a `mulhu`; the split here is exact either way.
+//   * `div` and `rem` truncate toward zero, which is what the C and the Rust do
+//     and what the ISA says. Scratch's `mod` and `floor` do not, so the two are
+//     written out.
+//
+// Two things are deliberately *not* different, and both were learned the hard
+// way. The device tree stays in the last 1728 bytes of RAM, because the image
+// decompresses itself over everything up to `0x8100_0000` and a tree in the way
+// is a tree full of code. And `lr.w` writes nothing back, because a load that
+// stores what it loaded turns a spinlock into an `ebreak` loop. Both are
+// commented where they happen.
+
+use rv32::io;
+use rv32::tables;
+use rv32::image;
+
+sprite "RISCV" {
+    costume "blank" = "assets/blank.svg";
+
+    // ------------------------------------------------------------------
+    // The hart
+    // ------------------------------------------------------------------
+    //
+    // Every one of these is a Scratch variable of its own -- `@scratch` --
+    // rather than a cell of the arena. A cell costs a list read to look at and
+    // a list write to change, and the inner loop of an interpreter does both
+    // several times per instruction, so the arena would multiply the cost of
+    // the one thing this project spends all its time doing.
+
+    @scratch var pc: num = 0;
+    @scratch var ir: num = 0;
+    @scratch var ofs_pc: num = 0;
+    @scratch var rdid: num = 0;
+    @scratch var exec_opcode: num = 0;
+    @scratch var op_switch: num = 0;
+    @scratch var load_switch: num = 0;
+    @scratch var store_switch: num = 0;
+    @scratch var branch_switch: num = 0;
+    @scratch var rv32a_switch: num = 0;
+    @scratch var microop: num = 0;
+    @scratch var csrno: num = 0;
+    @scratch var imm: num = 0;
+    @scratch var imm_se: num = 0;
+    @scratch var immm4: num = 0;
+    @scratch var reladdy: num = 0;
+    @scratch var addy: num = 0;
+    @scratch var rs1: num = 0;
+    @scratch var rs2: num = 0;
+    @scratch var rs1imm: num = 0;
+    @scratch var rsval: num = 0;
+    @scratch var rval: num = 0;
+    @scratch var write_val: num = 0;
+    @scratch var is_reg: num = 0;
+    @scratch var irmid: num = 0;
+    @scratch var dowrite: num = 0;
+    @scratch var trap: num = 0;
+    @scratch var a_work: num = 0;
+    @scratch var exec_return: num = 0;
+    @scratch var step_return: num = 0;
+    @scratch var start_mstatus: num = 0;
+    @scratch var start_extraflags: num = 0;
+    @scratch var csr_ptr: num = 0;
+    @scratch var csr_char: num = 0;
+    @scratch var instruction_n: num = 0;
+    @scratch var rt: num = 0;
+    @scratch var instct: num = -1;
+    @scratch var rv_state: num = 0;
+    @scratch var rv_khz: num = 0;
+
+    // ------------------------------------------------------------------
+    // Memory and time
+    // ------------------------------------------------------------------
+
+    /// 64 MiB of RAM, one list item to the byte, and the RAM image starts at
+    /// `0x8000_0000` in the guest's address space.
+    @scratch var ram_amount: num = 67108864;
+    @scratch var ram_offset: num = 2147483648;
+
+    /// Where in RAM the device tree sits: the last 1728 bytes of it, the way
+    /// rv32ima places it, and the address the kernel is handed in `a1`.
+    ///
+    /// This one address is the whole reason the image is not simply the kernel.
+    /// The bytes at `0x8000_0000` are a stub that unpacks the kernel to
+    /// `0x8100_0000`, so RAM above the image is the stub's to write and anything
+    /// left in its way is overwritten. Putting the tree immediately past the
+    /// image -- which is where a loader would normally put it, and where this
+    /// port put it first -- has the decompressor walk straight through it, and
+    /// the kernel then faults on a device tree full of code. Measured, not
+    /// reasoned: the boot reaches a login prompt with the tree at the top of RAM
+    /// and dies in an `ebreak` loop with it anywhere else.
+    @scratch var dtb_ptr: num = 0;
+
+    @scratch var elapsed_us: num = 0;
+    @scratch var last_time: num = 0;
+    @scratch var new_timer: num = 0;
+    @scratch var runframe_start: num = 0;
+    @scratch var runframe_elapsed: num = 0;
+
+    /// How long the machine may hold one frame before handing it back, in
+    /// milliseconds: a little under the 33 ms the runtime steps at, so that the
+    /// frame it is a slice of has room left for the console to draw.
+    ///
+    /// The reference gives the machine 50 ms and lets it keep the frame for
+    /// 200 ms when it has nothing to show, and both are longer than the frame
+    /// itself -- so the console, the cursor's blink and everything else the page
+    /// draws wait for the machine, and a boot whose pen work is a *tenth* of the
+    /// clock runs at the five frames a second the machine's own slice sets. The
+    /// run the machine gets per second is the same either way: it is the frame
+    /// that gets shorter, not the arithmetic.
+    @scratch var frame_ms: num = 30;
+    @scratch var runframe_state: num = 0;
+
+    // The CSR file. Everything the guest can read or write is one variable.
+    @scratch var state_pc: num = 0;
+    @scratch var state_mstatus: num = 0;
+    @scratch var state_cyclel: num = 0;
+    @scratch var state_cycleh: num = 0;
+    @scratch var state_timerl: num = 0;
+    @scratch var state_timerh: num = 0;
+    @scratch var state_timermatchl: num = 0;
+    @scratch var state_timermatchh: num = 0;
+    @scratch var state_mscratch: num = 0;
+    @scratch var state_mtvec: num = 0;
+    @scratch var state_mie: num = 0;
+    @scratch var state_mip: num = 0;
+    @scratch var state_mepc: num = 0;
+    @scratch var state_mtval: num = 0;
+    @scratch var state_mcause: num = 0;
+    @scratch var state_extraflags: num = 3;
+
+    /// The registers, `reg[1]` to `reg[32]`, so `reg[12]` is `a1`. `x0` is a
+    /// slot like any other and is never written.
+    @scratch var reg: list<num> = [];
+
+    /// `2^i`, so that a shift is one lookup rather than a loop.
+    @scratch var powers: list<num> = [];
+
+    /// The RAM image itself. A write past the end grows the list through
+    /// raven's own extent helper, which pushes the empty string -- Scratch
+    /// reads that as zero -- so the guest may touch any byte of the 64 MiB
+    /// without the image being filled in first.
+    @scratch var ram: list<num> = [];
+
+    // ------------------------------------------------------------------
+    // 32 bit readings
+    // ------------------------------------------------------------------
+
+    /// The signed reading of a 32 bit value: `0xFFFF_FFFF` is `-1`.
+    ///
+    /// Two things need it. A signed comparison does, obviously. So does a
+    /// branch or an atomic whose operands are the raw registers, because the
+    /// register file holds `0xFFFF_FFFF` as a positive number and `<` on two
+    /// positives is the *unsigned* order. Pushing both operands through here
+    /// first is what makes `<` the signed one, and it is why an unsigned
+    /// comparison is the one that compares the registers as they stand.
+    proc sign32(p_n: num) -> num warp {
+        if p_n > 2147483647 { return p_n - 4294967296; }
+        return p_n;
+    }
+
+    /// The low 32 bits of a number, which is where a Scratch negative becomes
+    /// the unsigned value the guest means.
+    proc truncate32(p_n: num) -> num warp {
+        return p_n % 4294967296;
+    }
+
+    // ------------------------------------------------------------------
+    // Memory
+    // ------------------------------------------------------------------
+
+    proc read16(p_addr: num) -> num warp {
+        return ram[p_addr + 1] + ram[p_addr + 2] * 256;
+    }
+
+    proc read32(p_addr: num) -> num warp {
+        return ram[p_addr + 4] * 16777216 + ram[p_addr + 3] * 65536 +
+            ram[p_addr + 2] * 256 + ram[p_addr + 1];
+    }
+
+    proc write16(p_value: num, p_addr: num) warp {
+        ram[p_addr + 1] = p_value % 256;
+        ram[p_addr + 2] = floor(p_value / 256) % 256;
+    }
+
+    proc write32(p_value: num, p_addr: num) warp {
+        ram[p_addr + 4] = floor(p_value / 16777216);
+        ram[p_addr + 3] = floor(p_value / 65536) % 256;
+        ram[p_addr + 2] = floor(p_value / 256) % 256;
+        ram[p_addr + 1] = p_value % 256;
+    }
+
+    // ------------------------------------------------------------------
+    // The ALU's tables
+    // ------------------------------------------------------------------
+    //
+    // Scratch has no bitwise operator and raven does not add one, so a 32 bit
+    // AND is four lookups into a 64 KiB table indexed by the two bytes of a
+    // 16 bit pair. The byte extraction is `% 256` on a floor division, which
+    // is also what makes a negative operand read as the unsigned value -- the
+    // reference leaves the top byte unmodded and so reads the wrong table
+    // entry for a negative operand.
+
+    /// The byte of `p_value` that starts at `p_shift`.
+    fn byte_at(p_value: num, p_shift: num) -> num {
+        floor(p_value / p_shift) % 256
+    }
+
+    proc band(p_a: num, p_b: num) -> num warp {
+        return and_lut[byte_at(p_a, 16777216) * 256 + byte_at(p_b, 16777216) + 1] * 16777216 +
+            and_lut[byte_at(p_a, 65536) * 256 + byte_at(p_b, 65536) + 1] * 65536 +
+            and_lut[byte_at(p_a, 256) * 256 + byte_at(p_b, 256) + 1] * 256 +
+            and_lut[byte_at(p_a, 1) * 256 + byte_at(p_b, 1) + 1];
+    }
+
+    proc bor(p_a: num, p_b: num) -> num warp {
+        return or_lut[byte_at(p_a, 16777216) * 256 + byte_at(p_b, 16777216) + 1] * 16777216 +
+            or_lut[byte_at(p_a, 65536) * 256 + byte_at(p_b, 65536) + 1] * 65536 +
+            or_lut[byte_at(p_a, 256) * 256 + byte_at(p_b, 256) + 1] * 256 +
+            or_lut[byte_at(p_a, 1) * 256 + byte_at(p_b, 1) + 1];
+    }
+
+    proc bxor(p_a: num, p_b: num) -> num warp {
+        return xor_lut[byte_at(p_a, 16777216) * 256 + byte_at(p_b, 16777216) + 1] * 16777216 +
+            xor_lut[byte_at(p_a, 65536) * 256 + byte_at(p_b, 65536) + 1] * 65536 +
+            xor_lut[byte_at(p_a, 256) * 256 + byte_at(p_b, 256) + 1] * 256 +
+            xor_lut[byte_at(p_a, 1) * 256 + byte_at(p_b, 1) + 1];
+    }
+
+    // ------------------------------------------------------------------
+    // Multiply
+    // ------------------------------------------------------------------
+
+    /// The reference routes a product of two large positives through a decimal
+    /// string long multiplication and then reads that string back as a double,
+    /// so the round trip only ever loses the bits it was written to keep. A
+    /// plain product is the same answer and one block.
+    fn multiply(p_a: num, p_b: num) -> num {
+        p_a * p_b
+    }
+
+    /// The top 32 bits of a 32 by 32 product, in 16 bit pieces so that every
+    /// intermediate is exact. The two halves of an operand are its high 16
+    /// bits and its low 16, and their product is a real number either way: an
+    /// operand that is negative splits into a negative high half, so the same
+    /// sums answer for a signed operand and an unsigned one.
+    proc multiply_upper32(p_a: num, p_b: num) -> num warp {
+        let a1: num = floor(p_a / 65536);
+        let a0: num = p_a % 65536;
+        let b1: num = floor(p_b / 65536);
+        let b0: num = p_b % 65536;
+        let p0: num = a0 * b0;
+        let p1: num = a0 * b1;
+        let p2: num = a1 * b0;
+        let p3: num = a1 * b1;
+        return truncate32(p3 + floor((p0 + (p1 + p2) * 65536) / 4294967296));
+    }
+
+    // ------------------------------------------------------------------
+    // The console's other end
+    // ------------------------------------------------------------------
+
+    proc write_char(p_code: num) warp {
+        output_buffer.push(p_code);
+    }
+
+    /// A run of text as bytes, with `\c` marking the next character as a
+    /// capital -- the convention penfont already uses, for the same reason.
+    ///
+    /// The reason is that Scratch cannot compare two strings with their case.
+    /// `byte_chars` is ordered by code, so a search for `h` answers with the
+    /// item for `H` because the two compare equal, and every letter of every
+    /// line would come out a capital -- which is exactly what the first version
+    /// of this did. The marker is the only way left to say which was meant, and
+    /// a line that is all lowercase needs none.
+    proc write_text(p_text: str) warp {
+        let i: num = 1;
+        let n: num = operators::length(p_text);
+        let cap: num = 0;
+        repeat_until i > n {
+            let c: str = operators::letter_of(i, p_text);
+            if c == "\\" {
+                if operators::letter_of(i + 1, p_text) == "c" {
+                    cap = 1;
+                    i += 2;
+                } else {
+                    output_buffer.push(92);
+                    i += 1;
+                }
+            } else {
+                output_buffer.push(code_of(c, cap));
+                cap = 0;
+                i += 1;
+            }
+        }
+    }
+
+    /// The byte a character means.
+    ///
+    /// Two things the search cannot do. A letter comes back a capital's code
+    /// whatever it was, because a capital and a lowercase letter compare equal,
+    /// so one that was not marked goes back down. And the digit zero comes back
+    /// as the table's *tab*: `scratch-vm` reads a lone tab as the number zero,
+    /// for compatibility with a Scratch 2 project that relied on it, so the
+    /// search finds item 10 before it finds item 49. That one is written out
+    /// rather than searched for, which is why the first line is here at all.
+    proc code_of(p_c: str, p_cap: num) -> num warp {
+        if p_c == "0" { return 48; }
+        let code: num = byte_chars.index_of(p_c) - 1;
+        if code > 64 && code < 91 && p_cap == 0 { return code + 32; }
+        return code;
+    }
+
+    proc write_crlf() warp {
+        output_buffer.push(13);
+        output_buffer.push(10);
+    }
+
+    /// One of our own lines, which is a line and not a guest's print.
+    proc write_line(p_text: str) warp {
+        write_text(p_text);
+        write_crlf();
+    }
+
+    /// `0x136` is the reference's "print this number": decimal, no newline.
+    proc write_number(p_value: num) warp {
+        let digits: str = operators::join("", p_value);
+        let i: num = 1;
+        repeat operators::length(digits) {
+            output_buffer.push(num(operators::letter_of(i, digits)) + 48);
+            i += 1;
+        }
+    }
+
+    /// `0x137` is the reference's "print this as an address": eight hexadecimal
+    /// digits, no newline, which is how the bare metal image prints where its
+    /// own `main` is. The Scratch project folded this into `0x136` and printed
+    /// it in decimal; the Rust and the C both print it in hex, so this does.
+    proc write_hex(p_value: num) warp {
+        let v: num = truncate32(p_value);
+        let shift: num = 268435456;
+        repeat 8 {
+            let d: num = floor(v / shift);
+            if d < 10 { output_buffer.push(48 + d); }
+            else { output_buffer.push(87 + d); }
+            v = v % shift;
+            shift = shift / 16;
+        }
+    }
+
+    /// `0x1000_0000` is the console's data register; anything else is the
+    /// kernel writing where nothing is listening.
+    proc handle_control_store(p_addy: num, p_val: num) warp {
+        if p_addy == 268435456 { write_char(p_val); }
+    }
+
+    /// The status register answers with a bit saying whether a byte is waiting,
+    /// and the data register hands the next byte over.
+    proc handle_control_load(p_addy: num) -> num warp {
+        if p_addy == 268435461 {
+            if input_buffer.len() > 0 { return 97; }
+            return 96;
+        }
+        if p_addy == 268435456 && input_buffer.len() > 0 {
+            let byte: num = input_buffer[1];
+            input_buffer.remove(1);
+            return byte;
+        }
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Instruction fetch and dispatch
+    // ------------------------------------------------------------------
+
+    proc execute_instruction() warp {
+        instruction_n += 1;
+        ir = read32(ofs_pc);
+        rdid = floor(ir / 128) % 32;
+        exec_opcode = ir % 128;
+        if exec_opcode == 55 { op_lui(); return; }
+        if exec_opcode == 23 { op_auipc(); return; }
+        if exec_opcode == 111 { op_jal(); return; }
+        if exec_opcode == 103 { op_jalr(); return; }
+        if exec_opcode == 99 { op_branch(); return; }
+        if exec_opcode == 3 { op_load(); return; }
+        if exec_opcode == 35 { op_store(); return; }
+        if exec_opcode == 19 || exec_opcode == 51 { op(); return; }
+        if exec_opcode == 15 { rdid = 0; return; }
+        if exec_opcode == 115 { op_zicsr(); return; }
+        if exec_opcode == 47 { op_rv32a(); return; }
+        trap = 3;
+    }
+
+    /// `lui`: the top 20 bits straight into the destination.
+    proc op_lui() warp {
+        rval = (floor(ir / 4096) % 1048576) * 4096;
+    }
+
+    /// `auipc`: the same 20 bits, added to the address of this instruction.
+    proc op_auipc() warp {
+        rval = (pc + (floor(ir / 4096) % 1048576) * 4096) % 4294967296;
+    }
+
+    /// `jal`: the return address, then a 21 bit signed jump. The jump lands at
+    /// the target minus 4 because `step` adds 4 after the instruction.
+    proc op_jal() warp {
+        rval = pc + 4;
+        reladdy = floor(ir / 2147483648) * 1048576 +
+            (floor(ir / 2097152) % 1024) * 2 +
+            (floor(ir / 1048576) % 2) * 2048 +
+            (floor(ir / 4096) % 256) * 4096;
+        if floor(reladdy / 1048576) % 2 > 0 { reladdy -= 2097152; }
+        pc = pc + reladdy - 4;
+    }
+
+    /// `jalr`: `(rs1 + imm) & ~1`, minus 4 for the same reason.
+    proc op_jalr() warp {
+        rval = pc + 4;
+        let offset: num = floor(ir / 1048576);
+        if offset > 2047 { offset -= 4096; }
+        let target: num = reg[(floor(ir / 32768) % 32) + 1] + offset;
+        pc = target - target % 2 - 4;
+    }
+
+    /// The six conditional branches, and a trap for the other two encodings.
+    ///
+    /// `bltu` and `bgeu` compare the registers as they stand, which is the
+    /// unsigned order; `blt` and `bge` go through `sign32` first, which is the
+    /// signed one.
+    proc op_branch() warp {
+        rdid = 0;
+        immm4 = (floor(ir / 256) % 16) * 2 +
+            (floor(ir / 33554432) % 64) * 32 +
+            floor(ir / 2147483648) * 4096 +
+            (floor(ir / 128) % 2) * 2048;
+        if floor(immm4 / 4096) % 2 > 0 { immm4 -= 8192; }
+        rs1 = reg[(floor(ir / 32768) % 32) + 1];
+        rs2 = reg[(floor(ir / 1048576) % 32) + 1];
+        branch_switch = floor(ir / 4096) % 8;
+        if branch_switch == 6 {
+            if rs1 < rs2 { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        if branch_switch == 7 {
+            if rs1 >= rs2 { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        if branch_switch == 4 {
+            if sign32(rs1) < sign32(rs2) { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        if branch_switch == 5 {
+            if sign32(rs1) >= sign32(rs2) { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        if branch_switch == 1 {
+            if rs1 != rs2 { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        if branch_switch == 0 {
+            if rs1 == rs2 { pc = (pc + immm4) % 4294967296 - 4; }
+            return;
+        }
+        trap = 3;
+    }
+
+    /// `lb`, `lh`, `lw`, `lbu`, `lhu`, and the memory-mapped devices above the
+    /// top of RAM. `rsval` is the RAM index the address maps to.
+    proc op_load() warp {
+        imm_se = floor(ir / 1048576);
+        if floor(ir / 2147483648) > 0 { imm_se -= 4096; }
+        rsval = truncate32(sign32(reg[(floor(ir / 32768) % 32) + 1] + imm_se - ram_offset));
+        if rsval > ram_amount - 4 {
+            rsval = sign32(rsval - ram_offset);
+            if rsval >= 268435456 && rsval < 301989888 {
+                if rsval == 285261820 { rval = state_timerh; return; }
+                if rsval == 285261816 { rval = state_timerl; return; }
+                rval = handle_control_load(rsval);
+                return;
+            }
+            trap = 6;
+            rval = rsval;
+            return;
+        }
+        load_switch = floor(ir / 4096) % 8;
+        if load_switch == 0 {
+            a_work = ram[rsval + 1];
+            if a_work > 127 { rval = 4294967296 - (255 - a_work + 1); return; }
+            rval = a_work;
+            return;
+        }
+        if load_switch == 1 {
+            a_work = read16(rsval);
+            if a_work > 32767 { rval = 4294967296 - (65535 - a_work + 1); return; }
+            rval = a_work;
+            return;
+        }
+        if load_switch == 2 { rval = read32(rsval); return; }
+        if load_switch == 4 { rval = ram[rsval + 1]; return; }
+        if load_switch == 5 { rval = read16(rsval); return; }
+        trap = 3;
+    }
+
+    /// `sb`, `sh`, `sw`, and the CLINT's timer match registers, the two magic
+    /// addresses the kernel writes to reboot and to power off, and the console.
+    proc op_store() warp {
+        rs1 = reg[(floor(ir / 32768) % 32) + 1];
+        rs2 = reg[(floor(ir / 1048576) % 32) + 1];
+        addy = (floor(ir / 33554432) % 128) * 32 + floor(ir / 128) % 32;
+        if floor(addy / 2048) % 2 > 0 { addy -= 4096; }
+        addy = truncate32(addy + sign32(rs1 - ram_offset));
+        // The reference zeroes `rdid` here so that a store writes no register.
+        rdid = 0;
+        if addy > ram_amount - 4 {
+            addy = truncate32(sign32(addy - ram_offset));
+            if addy >= 268435456 && addy < 301989888 {
+                if addy == 285229060 { state_timermatchh = rs2; return; }
+                if addy == 285229056 { state_timermatchl = rs2; return; }
+                // `0x1110_0000` is how the kernel ends the machine: the value
+                // written becomes the exit status the frame loop reads.
+                if addy == 286261248 { exec_return = rs2; return; }
+                handle_control_store(addy, rs2);
+                return;
+            }
+            trap = 8;
+            rval = addy + ram_offset;
+            return;
+        }
+        store_switch = floor(ir / 4096) % 8;
+        if store_switch == 0 { ram[addy + 1] = rs2 % 256; return; }
+        if store_switch == 1 { write16(rs2 % 65536, addy); return; }
+        if store_switch == 2 { write32(rs2, addy); return; }
+        trap = 3;
+    }
+
+    /// The integer opcodes, which share an encoding space with the multiply and
+    /// divide ones.
+    ///
+    /// `is_reg` is the low bit of the opcode, so it separates `OP` from
+    /// `OP-IMM`; when it is clear the second operand is the immediate, kept as
+    /// its unsigned 32 bit reading the way the reference keeps it. Every
+    /// comparison below that has to know the sign tests `> 0x7FFF_FFFF`, so
+    /// the two halves agree on that reading.
+    proc op() warp {
+        imm = floor(ir / 1048576);
+        if imm > 2047 { imm += 4294963200; }
+        rs1 = reg[(floor(ir / 32768) % 32) + 1];
+        is_reg = floor(ir / 32) % 2;
+        if is_reg > 0 { rs2 = reg[(floor(ir / 1048576) % 32) + 1]; }
+        else { rs2 = imm; }
+        op_switch = floor(ir / 4096) % 8;
+        // `funct7` bit 0 is the M extension, and it is bit 25 of the word.
+        if is_reg > 0 && floor(ir / 33554432) % 2 > 0 { op_multiply(); return; }
+        if op_switch == 0 {
+            if is_reg > 0 && floor(ir / 1073741824) % 2 > 0 { rval = rs1 - rs2; return; }
+            rval = rs1 + rs2;
+            return;
+        }
+        if op_switch == 1 { rval = rs1 * powers[(rs2 % 32) + 1]; return; }
+        if op_switch == 2 {
+            if sign32(rs1) < sign32(rs2) { rval = 1; return; }
+            rval = 0;
+            return;
+        }
+        if op_switch == 3 {
+            if rs1 < rs2 { rval = 1; return; }
+            rval = 0;
+            return;
+        }
+        if op_switch == 4 { rval = bxor(rs1, rs2); return; }
+        if op_switch == 5 {
+            let shift: num = rs2 % 32;
+            if floor(ir / 1073741824) % 2 > 0 {
+                rval = truncate32(floor(sign32(rs1) / powers[shift + 1]));
+                return;
+            }
+            rval = floor(rs1 / powers[shift + 1]);
+            return;
+        }
+        if op_switch == 6 { rval = bor(rs1, rs2); return; }
+        rval = band(rs1, rs2);
+    }
+
+    /// The M extension: `mul`, `mulh`, `mulhsu`, `mulhu`, and the four
+    /// divisions. A divide by zero answers with the RISC-V values rather than
+    /// trapping.
+    proc op_multiply() warp {
+        if op_switch == 0 { rval = multiply(rs1, rs2); return; }
+        if op_switch == 1 { rval = multiply_upper32(sign32(rs1), sign32(rs2)); return; }
+        if op_switch == 2 { rval = multiply_upper32(sign32(rs1), rs2); return; }
+        if op_switch == 3 { rval = multiply_upper32(rs1, rs2); return; }
+        if op_switch == 4 {
+            if rs2 == 0 { rval = 4294967295; return; }
+            rval = truncate32(idiv(sign32(rs1), sign32(rs2)));
+            return;
+        }
+        if op_switch == 5 {
+            if rs2 == 0 { rval = 4294967295; return; }
+            rval = floor(rs1 / rs2);
+            return;
+        }
+        if op_switch == 6 {
+            if rs2 == 0 { rval = rs1; return; }
+            // `rem` is the leftover the ISA's division left, so it is taken
+            // from that division rather than from Scratch's `mod`, which keeps
+            // the sign of the divisor instead of the dividend.
+            let a: num = sign32(rs1);
+            let b: num = sign32(rs2);
+            rval = truncate32(a - b * idiv(a, b));
+            return;
+        }
+        if rs2 == 0 { rval = rs1; return; }
+        rval = rs1 % rs2;
+    }
+
+    /// Division that truncates toward zero, which is what the ISA says and what
+    /// the C and the Rust do. Scratch's `floor` rounds down, so every negative
+    /// quotient would come out one too small -- and a remainder taken from it
+    /// would come out wrong with it.
+    proc idiv(p_a: num, p_b: num) -> num warp {
+        let q: num = p_a / p_b;
+        if q < 0 { return ceil(q); }
+        return floor(q);
+    }
+
+    /// The CSR instructions. `CSRRW`, `CSRRS` and `CSRRC`, in both their
+    /// register and their immediate forms: read the old value, work out the
+    /// new one, and write it back through `zicsr_set_writeval`, which is where
+    /// the named registers are and where anything else falls through to
+    /// `handle_other_csr_write`.
+    proc op_zicsr() warp {
+        csrno = floor(ir / 1048576);
+        microop = floor(ir / 4096) % 8;
+        if microop % 4 > 0 {
+            rs1imm = floor(ir / 32768) % 32;
+            rs1 = reg[rs1imm + 1];
+            write_val = rs1;
+            zicsr_get_rval();
+            zicsr_get_writeval();
+            write_val = truncate32(write_val);
+            zicsr_set_writeval();
+            return;
+        }
+        if microop == 0 {
+            rdid = 0;
+            // `0x105` is the extension the kernel uses for the supervisor and
+            // user interrupt masks, which this machine keeps folded into
+            // `mstatus` and `extraflags`.
+            if csrno == 261 {
+                state_mstatus = floor(state_mstatus / 16) * 16 + state_mstatus % 8 + 8;
+                state_extraflags = floor(state_mstatus / 8) * 8 + state_mstatus % 4 + 4;
+                exec_return = 1;
+                return;
+            }
+            // Anything ending in `2` is a trap-return: restore the previous
+            // privilege from `extraflags` and jump back to `mepc`.
+            if csrno % 256 == 2 {
+                start_mstatus = state_mstatus;
+                start_extraflags = state_extraflags;
+                a_work = start_extraflags % 4 * 2048 + floor(start_mstatus / 128) % 2 * 8;
+                state_mstatus = floor(a_work / 256) * 256 + a_work % 128 + 128;
+                state_extraflags = floor(start_mstatus / 2048) % 4 + floor(start_extraflags / 4) % 1073741824 * 4;
+                pc = state_mepc - 4;
+                return;
+            }
+            if csrno == 0 {
+                if state_extraflags % 4 > 0 { trap = 12; return; }
+                trap = 9;
+                return;
+            }
+            if csrno == 1 { trap = 4; return; }
+            trap = 3;
+            return;
+        }
+        trap = 3;
+    }
+
+    proc zicsr_get_rval() warp {
+        if csrno == 832 { rval = state_mscratch; return; }
+        if csrno == 773 { rval = state_mtvec; return; }
+        if csrno == 772 { rval = state_mie; return; }
+        if csrno == 3072 { rval = state_cyclel; return; }
+        if csrno == 836 { rval = state_mip; return; }
+        if csrno == 833 { rval = state_mepc; return; }
+        if csrno == 768 { rval = state_mstatus; return; }
+        if csrno == 834 { rval = state_mcause; return; }
+        if csrno == 835 { rval = state_mtval; return; }
+        // `mimpid` and `misa`, which the kernel reads once at boot.
+        if csrno == 3857 { rval = 4279238655; return; }
+        if csrno == 769 { rval = 1077940481; return; }
+        handle_other_csr_read(csrno);
+    }
+
+    proc zicsr_get_writeval() warp {
+        if microop == 1 { write_val = rs1; return; }
+        if microop == 2 { write_val = bor(rval, rs1); return; }
+        if microop == 3 { write_val = band(rval, 4294967295 - rs1); return; }
+        if microop == 5 { write_val = rs1imm; return; }
+        if microop == 6 { write_val = bor(rval, rs1imm); return; }
+        if microop == 7 { write_val = band(rval, 4294967295 - rs1imm); return; }
+        write_val = rval;
+    }
+
+    proc zicsr_set_writeval() warp {
+        if csrno == 832 { state_mscratch = write_val; return; }
+        if csrno == 773 { state_mtvec = write_val; return; }
+        if csrno == 772 { state_mie = write_val; return; }
+        if csrno == 836 { state_mip = write_val; return; }
+        if csrno == 833 { state_mepc = write_val; return; }
+        if csrno == 768 { state_mstatus = write_val; return; }
+        if csrno == 834 { state_mcause = write_val; return; }
+        if csrno == 835 { state_mtval = write_val; return; }
+        handle_other_csr_write(csrno, write_val);
+    }
+
+    /// `0x140` is the console's input register: a byte queue whose head is what
+    /// the keyboard typed.
+    proc handle_other_csr_read(p_csrno: num) warp {
+        if p_csrno == 320 && input_buffer.len() > 0 {
+            rval = input_buffer[1];
+            input_buffer.remove(1);
+            return;
+        }
+        rval = 0;
+    }
+
+    /// The three console CSRs the reference's own extension implements, exactly
+    /// as it implements them: `0x136` prints a number in decimal, `0x137` an
+    /// address in eight hexadecimal digits, and `0x138` the C string it points
+    /// at; none of the three adds a line of its own except the last, which ends
+    /// with one newline the way the reference's `println!` does.
+    proc handle_other_csr_write(p_csrno: num, p_value: num) warp {
+        if p_csrno == 310 { write_number(p_value); return; }
+        if p_csrno == 311 { write_hex(p_value); return; }
+        if p_csrno == 312 {
+            csr_ptr = p_value - ram_offset;
+            repeat_until csr_ptr >= ram_amount {
+                csr_char = ram[csr_ptr + 1];
+                if csr_char == 0 {
+                    write_crlf();
+                    return;
+                }
+                write_char(csr_char);
+                csr_ptr += 1;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The atomics
+    // ------------------------------------------------------------------
+
+    /// `lr.w`, `sc.w` and the eight `amo` operations. The reference's
+    /// reservation is not modelled -- a load-reserved always succeeds and a
+    /// store-conditional always writes -- which is all a uniprocessor with one
+    /// thread can tell.
+    ///
+    /// The `dowrite` flag is the whole of this proc's shape, and it is the one
+    /// place the port went wrong in a way that looked like the kernel's fault:
+    /// `lr.w` is a *load*, so it must leave `dowrite` at zero and write nothing
+    /// back. Without that it stored the second register into the word it had
+    /// just read, and Linux's spinlock -- `lr.w; bne; sc.w; bne; fence; beq;
+    /// ebreak`, with the `ebreak` as `BUG()` when the compare failed -- turned
+    /// the clobbered lock into an `ebreak` loop inside its own trap handler.
+    proc op_rv32a() warp {
+        rs1 = reg[(floor(ir / 32768) % 32) + 1];
+        rs2 = reg[(floor(ir / 1048576) % 32) + 1];
+        irmid = floor(ir / 134217728) % 32;
+        rs1 = sign32(rs1 - ram_offset);
+        if rs1 > ram_amount - 4 {
+            trap = 8;
+            rval = rs1 + ram_offset;
+            return;
+        }
+        rval = read32(rs1);
+        rv32a_switch = irmid;
+        dowrite = 1;
+        if rv32a_switch == 2 {
+            // `lr.w`: a load, and nothing goes back to memory.
+            dowrite = 0;
+        } else {
+            if rv32a_switch == 3 {
+                // `sc.w`: the value written is the one in the register, and
+                // the destination gets 0 for a store that took.
+                rval = 0;
+            } else {
+                if rv32a_switch == 0 { rs2 = truncate32(rs2 + rval); }
+                else {
+                    if rv32a_switch == 4 { rs2 = bxor(rs2, rval); }
+                    else {
+                        if rv32a_switch == 12 { rs2 = band(rs2, rval); }
+                        else {
+                            if rv32a_switch == 8 { rs2 = bor(rs2, rval); }
+                            else {
+                                if rv32a_switch == 16 {
+                                    if sign32(rs2) > sign32(rval) { rs2 = rval; }
+                                } else {
+                                    if rv32a_switch == 20 {
+                                        if sign32(rs2) < sign32(rval) { rs2 = rval; }
+                                    } else {
+                                        if rv32a_switch == 24 {
+                                            if rs2 < rval { rs2 = rval; }
+                                        } else {
+                                            if rv32a_switch == 28 {
+                                                if rs2 > rval { rs2 = rval; }
+                                            } else {
+                                                // `1` is `amoswap.w`, whose new
+                                                // value is the register as it
+                                                // stands; anything else is not
+                                                // an atomic this machine has.
+                                                if rv32a_switch != 1 {
+                                                    trap = 3;
+                                                    dowrite = 0;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if dowrite > 0 { write32(rs2, rs1); }
+    }
+
+    // ------------------------------------------------------------------
+    // One step, one frame
+    // ------------------------------------------------------------------
+
+    /// `p_count` instructions, or until a trap or a control transfer says stop.
+    ///
+    /// The reference reaches the same places through `stop this script` inside
+    /// a `repeat`; a `return` here is the same escape and says which reading of
+    /// the loop it left.
+    proc step(p_count: num) warp {
+        repeat p_count {
+            rval = 0;
+            state_cyclel += 1;
+            if state_cyclel == 0 { state_cycleh += 1; }
+            ofs_pc = pc - ram_offset;
+            if ofs_pc > ram_amount - 1 { trap = 2; return; }
+            if pc % 4 > 0 { trap = 1; return; }
+            exec_return = 0;
+            execute_instruction();
+            if exec_return > 0 {
+                state_pc = pc + 4;
+                step_return = exec_return;
+                return;
+            }
+            if trap > 0 { return; }
+            if rdid > 0 { reg[rdid + 1] = truncate32(rval); }
+            pc += 4;
+        }
+    }
+
+    proc get_time_us() -> num warp {
+        return round(sensing::days_since_2000() * 86400000000);
+    }
+
+    /// One frame of the machine.
+    ///
+    /// The shape is the reference's, and each numbered step is one of its own:
+    /// hand the CLINT its microseconds since the last frame, raise the timer
+    /// interrupt if the match has passed, take a pending and enabled interrupt,
+    /// otherwise run the guest until the frame's clock or an outgoing byte says
+    /// to stop, then deliver any trap.
+    proc run_frame() warp {
+        runframe_start = sensing::days_since_2000();
+        runframe_state = 0;
+        while runframe_state == 0 {
+            // 1. The timer's wall clock, in microseconds, and its carry.
+            let now: num = get_time_us();
+            elapsed_us = floor(now - last_time);
+            last_time = now;
+            new_timer = state_timerl + elapsed_us;
+            if new_timer < state_timerl { state_timerh += 1; }
+            state_timerl = new_timer;
+            // 2. Has the timer reached its match? Then the interrupt is pending.
+            if (state_timerh > state_timermatchh ||
+                (state_timerh == state_timermatchh && state_timerl > state_timermatchl)) &&
+                (state_timermatchh > 0 || state_timermatchl > 0) {
+                state_extraflags = state_extraflags - state_extraflags % 8 + state_extraflags % 4;
+                state_mip = state_mip - state_mip % 256 + state_mip % 128 + 1;
+            } else {
+                state_mip = state_mip - state_mip % 256 + state_mip % 128;
+            }
+            // 3. A halted machine is this flag; set it and the frame is over.
+            if floor(state_extraflags / 4) % 2 > 0 { runframe_state = 1; }
+            else {
+                pc = state_pc;
+                trap = 0;
+                // 4. A pending and enabled timer interrupt arrives as a trap
+                //    with the interrupt bit set.
+                if floor(state_mip / 128) % 2 > 0 && floor(state_mie / 128) % 2 > 0 &&
+                    floor(state_mstatus / 8) % 2 > 0 {
+                    trap = 2147483655;
+                    pc -= 4;
+                } else {
+                    // 5. Run for one frame's worth of wall clock. The pen's
+                    //    share of the frame is drawn after this, in another
+                    //    thread, so the slice has to leave it room: a slice the
+                    //    length of the whole frame is a frame the console never
+                    //    gets to draw in.
+                    step_return = 0;
+                    while trap == 0 && step_return == 0 && runframe_state == 0 {
+                        runframe_elapsed = (sensing::days_since_2000() - runframe_start) * 86400000;
+                        if runframe_elapsed > frame_ms {
+                            runframe_state = 1;
+                        } else {
+                            step(1024);
+                            // A step that came back with something other than
+                            // zero instructions is a `wfi` or a write to the
+                            // system controller, and either one is the guest
+                            // asking to stop. Ending the frame here is what
+                            // carries that ask out to the check below: looping
+                            // again would clear `step_return` and run straight
+                            // on, which is why the Scratch project's own bare
+                            // metal image never powered off.
+                            if step_return != 0 { runframe_state = 1; }
+                        }
+                    }
+                }
+                // 6. Deliver the trap: `mcause`, `mtval` and `mepc`, then the
+                //    trap vector. An exit request arrives here as an interrupt
+                //    and leaves through the same door.
+                if trap > 0 {
+                    if floor(trap / 2147483648) > 0 {
+                        state_mcause = trap;
+                        state_mtval = 0;
+                        pc += 4;
+                    } else {
+                        state_mcause = trap - 1;
+                        if trap > 5 && trap < 9 { state_mtval = rval; }
+                        else { state_mtval = pc; }
+                    }
+                    state_mepc = pc;
+                    state_mstatus = floor(state_mstatus / 8) % 2 * 128;
+                    state_mstatus = bor(state_extraflags % 4 * 2048, state_mstatus);
+                    state_extraflags = floor(state_extraflags / 4) * 4 + 3;
+                    pc = state_mtvec;
+                }
+                state_pc = pc;
+            }
+        }
+        // 7. The kernel's shutdown path is not a trap: it writes a magic value
+        //    where the console would be, and the frame loop turns it into a
+        //    message and stops the machine.
+        if step_return > 2 {
+            if step_return == 3 { instct = 0; }
+            else {
+                write_line("");
+                if step_return == 30583 {
+                    write_line(f"\\cReboot {pc}");
+                    rv_state = 2;
+                } else {
+                    if step_return == 21845 {
+                        write_line(f"\\cPoweroff {pc}");
+                        rv_state = 0;
+                    } else {
+                        write_line(f"\\cUnknown failure {step_return} @ {pc}");
+                        rv_state = 0;
+                    }
+                }
+                return;
+            }
+        }
+        if !(rt < instct + 1 || instct < 0) {
+            write_line("");
+            write_line(f"\\cTerminated {pc}");
+            rv_state = 0;
+        }
+        rv_khz = round(instruction_n / sensing::timer() / 1000) / 1000;
+    }
+
+    /// The outer loop: a frame per pass, until the guest powers off or reboots.
+    ///
+    /// The one procedure in the machine that is *not* `warp`. Everything below
+    /// it runs to the end of its slice without yielding, which is the only way
+    /// an interpreter gets any work done in Scratch -- a plain `repeat` hands
+    /// the frame back after every turn. This loop is the one that hands it
+    /// back, once per frame, so the terminal gets to draw.
+    proc run_loop() {
+        rv_khz = 0;
+        instruction_n = 0;
+        sensing::reset_timer();
+        last_time = get_time_us();
+        while rv_state == 1 { run_frame(); }
+    }
+
+    // ------------------------------------------------------------------
+    // Power on
+    // ------------------------------------------------------------------
+
+    /// Every register, CSR and list back to the state the image boots from.
+    proc reset() warp {
+        instruction_n = 0;
+        state_pc = 0;
+        state_mstatus = 0;
+        state_cyclel = 0;
+        state_cycleh = 0;
+        state_timerl = 0;
+        state_timerh = 0;
+        state_timermatchl = 0;
+        state_timermatchh = 0;
+        state_mscratch = 0;
+        state_mtvec = 0;
+        state_mie = 0;
+        state_mip = 0;
+        state_mepc = 0;
+        state_mtval = 0;
+        state_mcause = 0;
+        state_extraflags = 3;
+        state_pc = ram_offset;
+        reg.clear();
+        repeat 32 { reg.push(0); }
+        powers.clear();
+        let p: num = 1;
+        repeat 32 {
+            powers.push(p);
+            p *= 2;
+        }
+        dtb_ptr = ram_amount - 1728;
+        // `a1` carries the device tree's guest address, which is the first
+        // thing the kernel reads.
+        reg[12] = dtb_ptr + ram_offset;
+        instct = -1;
+        rt = 0;
+    }
+
+    /// Lay the image into RAM and put the device tree where `a1` points.
+    ///
+    /// The reference does this too -- `0.Reset RAM` -- and its `RAM` list
+    /// arrives already 64 MiB long, because the project that was uploaded was
+    /// saved after one run. Here the list is built: the image is pushed, and
+    /// the tree at the top of RAM is the first thing that needs an index past
+    /// everything else, which brings the rest of the 64 MiB into being through
+    /// raven's own extent helper.
+    ///
+    /// A byte of RAM the guest has not written is therefore not in the list at
+    /// all, and Scratch reads a missing item as zero, which is what a fresh
+    /// machine's memory is. So the list costs what has been touched and the
+    /// guest is told about, and the 64 MiB is reached once, at the write that
+    /// needs it.
+    proc reset_ram() warp {
+        ram.clear();
+        let i: num = 1;
+        repeat rom.len() {
+            ram.push(rom[i]);
+            i += 1;
+        }
+        i = 1;
+        repeat dtb.len() {
+            ram[dtb_ptr + i] = dtb[i];
+            i += 1;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Scripts
+    // ------------------------------------------------------------------
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("RISCV.powerOn") {
+        write_line("");
+        write_line("\\cmini-rv32ima on \\cScratch, in raven");
+        write_line("the terminal redrawn in penfont");
+        write_line("");
+        control::wait(0);
+        reset();
+        write_line("\\cResetting \\cRAM...");
+        control::wait(0);
+        reset_ram();
+        write_line("\\cStarting emulation...");
+        write_line("");
+        rv_state = 1;
+    }
+
+    on broadcast_received("RISCV.run") {
+        run_loop();
+    }
+}
+

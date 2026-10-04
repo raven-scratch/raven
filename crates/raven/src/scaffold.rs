@@ -145,9 +145,10 @@ raven expand          # print the raven-asm this lowers to
 Open `dist/{name}.sb3` in the Scratch editor or TurboWarp and click the green
 flag. The guide is at https://raven-scratch.github.io/raven/raven/.
 
-There is no Scratch variable in this project, and no way to make one: a `var` or
-a `let` is a cell of the target's `_vms` list, addressed by a constant index that
-`raven expand` prints.
+There is no Scratch variable in this project: a `var` or a `let` is a cell of the
+target's `_vms` list, addressed by a constant index that `raven expand` prints.
+To store a declaration in a real Scratch variable or list instead, write
+`@scratch` on the line above it.
 "#
     )
 }
@@ -157,7 +158,8 @@ fn stage() -> String {
 //
 // There are no Scratch variables in a raven project. A `var` declared here is
 // one cell of `_gvm`, the arena the stage declares, and every sprite reads the
-// same cell; a `var` in a sprite is a cell of that sprite's own `_vms`.
+// same cell; a `var` in a sprite is a cell of that sprite's own `_vms`. Writing
+// `@scratch` on the line above a `var` stores it in a Scratch variable instead.
 
 stage {
     costume "backdrop1" = "assets/backdrop1.svg";

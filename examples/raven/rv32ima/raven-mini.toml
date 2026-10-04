@@ -1,0 +1,16 @@
+# The small image: the reference's kernel and rootfs, with an initramfs of our
+# own that the device tree points the kernel at. `tools/mini-image.sh` is what
+# builds `images/mini_image`, and `node examples/raven/rv32ima/tools/build.mjs mini`
+# is what puts it in a project.
+[project]
+name = "rv32mini"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/riscv.rav",
+    "src/sprites/terminal.rav",
+    "src/sprites/input.rav",
+]

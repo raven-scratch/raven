@@ -1,0 +1,850 @@
+// The console: 64 columns by 20 rows of glyphs, drawn with the pen.
+//
+// This is the reference project's terminal with the font swapped out. The
+// reference carries an 8 by 16 bitmap for each of 65536 characters -- one hex
+// string per character, each digit a run of pixels down a column -- and draws it
+// by walking the pen down a column with the transparency trick. Here the
+// characters come from penfont, which has every glyph of Maple Mono NF CN as
+// pre-computed scan lines, so a cell is `ink_glyph` at a cell's own origin and
+// the cell is whatever size the layout says.
+//
+// Everything else is the reference's: the same escape sequences, the same
+// scroll, the same byte buffer behind it. Nine things changed along with the
+// font, and each is said again where it happens:
+//
+//   * The buffers hold byte codes, not characters, so a cell can be tested and
+//     compared without Scratch's case folding getting in the way -- a capital
+//     is only a capital if its *code* says so.
+//   * The cursor is the font's own U+2588 FULL BLOCK, showing and disappearing
+//     on the blink, with the glyph under it drawn back on top in the paper's
+//     black. The reference stamped a costume; a rectangle of pen lines is not
+//     the same shape as a cell, and the font already carries the shape that is.
+//   * Nothing is ever drawn back off the paper. A cell that has to go -- an
+//     `ESC [ J`, a character arriving where one already is, the cursor leaving a
+//     cell, the blink turning it off -- asks for the page again, and the page is
+//     the buffer drawn out whole after the pen is cleared. Three things went
+//     wrong trying to erase a cell instead, and the third of them is why: the
+//     first drew a round-capped line as wide as the cell is tall, which is a
+//     disc two and a half cells across, and punched black holes through the
+//     letters either side; the second drew the font's own FULL BLOCK in black,
+//     which is the right ink in sixty-three runs a cell and 126 renderer calls;
+//     and the third drew a rectangle of the cell's own box, which cannot be
+//     right either, because the em is fourteen units in a sixteen unit cell and
+//     a tall glyph's ink leaves the box. The reference stamps a `clear` costume,
+//     which is an empty SVG in the project that was uploaded, so its `Clear`
+//     erases nothing and its page could drift the same way.
+//   * The blink's phase test is the reference's with one character changed, from
+//     `mod(seconds, 2) > 1` -- which `mod` by two can never satisfy, so its
+//     cursor never blinked -- to `>= 1`.
+//   * A `stop this script` in the middle of the reference's `ESC [ J` opened
+//     the way to fix a real bug in it; the return is where it was meant to go.
+//   * `ESC [ J` erases from the cursor to the end of the screen and clears
+//     nothing else. The reference reads its parameter with `item 1 of` and asks
+//     whether it is zero, and Scratch's `=` says the empty string is *not* the
+//     number zero: the parameterless `ESC [ J` -- which is exactly what a shell
+//     erasing a character at the prompt sends -- fell past both of its branches
+//     into the whole-screen clear. One backspace wiped the page.
+//   * Erasing a blank cell is not work. The region an `ESC [ J` covers is mostly
+//     blank already, and a cell that is already blank has nothing to say.
+//   * A clear behind an escape sequence leaves the guest's byte streams alone.
+//     They belong to the machine. A clear that empties the console's own output
+//     is the other half of the same backspace: the rest of the write it came out
+//     of is thrown away, and a guest with nothing more to say leaves the page
+//     blank until it does.
+//   * The page is drawn once a frame and only when it changed. A burst of lines
+//     that scrolls twenty times redraws once, and a character arriving on a
+//     blank cell is drawn where it lands, because that is the one write the pen
+//     can make without taking something off the paper first.
+
+use penfont::engine;
+use rv32::io;
+use rv32::tables;
+
+sprite "Terminal" {
+    costume "blank" = "assets/blank.svg";
+    sound "beep" = "assets/beep.wav";
+
+    // ------------------------------------------------------------------
+    // The page
+    // ------------------------------------------------------------------
+    //
+    // 64 columns at 7 units and 20 rows at 16 is 448 by 320 of a stage the pen
+    // may only be moved inside 450 by 330 of, so the whole grid clears the
+    // fence with room at every edge. The em is 14: two columns to the em, so
+    // the 7 unit advance is what a monospace glyph asks for, and the baseline
+    // sits `BASE_DROP` under a cell's top -- enough for the font's descender
+    // and little enough that a capital is not clipped.
+
+    const COLS: num = 64;
+    const ROWS: num = 20;
+    const CELL_W: num = 7;
+    const CELL_H: num = 16;
+    const EM: num = 14;
+    const LEFT: num = -224;
+    const TOP: num = 160;
+    const BASE_DROP: num = 12;
+    const CELLS: num = 1280;
+
+    /// U+2588 FULL BLOCK, drawn as the cursor. It is a character like any
+    /// other and goes through the same table, so the table has to carry it:
+    /// the `latin` set is what `font2vm.py` is given and it includes the block
+    /// elements.
+    const BLOCK: str = "\u{2588}";
+
+    /// How many scan rows U+2588's ink covers -- the em's 48 and the leading's
+    /// 15 under the baseline -- which is what the cursor is scaled by to become
+    /// a cell rather than a line of text. `font2vm.py --stats` is what would
+    /// say if a different font's block were a different height.
+    const BLOCK_ROWS: num = 63;
+
+    // The ANSI palette, the sixteen a terminal is expected to have. The
+    // reference's was eight inks all white except the third, which is the one
+    // green its SGR handler could reach, and a page drawn only in white is a
+    // page no full-screen program can draw: colour is how a TUI says what is
+    // selected, and how screenfetch says anything at all. An ANSI colour is
+    // `colors[n]` for 30+n and `colors_bright[n]` for 90+n, and `colors[8]` --
+    // the eighth of eight -- is the default ink the reset returns to.
+    var colors: list<str> = ["#000000", "#AA0000", "#00AA00", "#AA5500", "#0000AA", "#AA00AA", "#00AAAA", "#FFFFFF"];
+    var colors_bright: list<str> = ["#555555", "#FF5555", "#55FF55", "#FFFF55", "#5555FF", "#FF55FF", "#55FFFF", "#FFFFFF"];
+
+    @scratch var cursor_x: num = 0;
+    @scratch var cursor_y: num = 0;
+    @scratch var last_cursor_x: num = 0;
+    @scratch var last_cursor_y: num = 0;
+    @scratch var last_cursor_state: num = 0;
+    @scratch var current_fg: str = "#FFFFFF";
+    @scratch var current_weight: num = 1;
+    @scratch var current_blinking: num = 1;
+    @scratch var blink_offset: num = 0;
+    @scratch var is_escape: num = 0;
+
+    /// Set by `ESC [ ?` and read once, at the sequence's last byte: the private
+    /// form of a sequence is a different sequence, not a public one with an odd
+    /// parameter.
+    @scratch var escape_private: num = 0;
+
+    /// Whether `ESC [ ? 25 l` has taken the cursor away. A full-screen program
+    /// draws its own cursor and does not want ours on top of it.
+    @scratch var cursor_hidden: num = 0;
+
+    /// The page the screen had before a program asked for one of its own, and
+    /// where the cursor was when it asked. `ESC [ ? 1049 h` is the swap and
+    /// `ESC [ ? 1049 l` is the swap back.
+    @scratch var alt_glyphs: list<num> = [];
+    @scratch var alt_fg: list<str> = [];
+    @scratch var alt_weight: list<num> = [];
+    @scratch var alt_cursor_x: num = 0;
+    @scratch var alt_cursor_y: num = 0;
+    @scratch var in_alt_screen: num = 0;
+
+    /// Set by anything that changes the page and read once a frame: a character
+    /// written over one already there, a cell erased, a scroll, the cursor
+    /// moving or blinking off. The page is drawn whole when it is set, because
+    /// the pen draws over and there is no such thing as a partial redraw.
+    @scratch var needs_redraw: num = 0;
+
+    /// The cells, one item to a byte of the screen: what character it is,
+    /// what colour it is drawn in, and whether it is bold. A blank cell is
+    /// code 0, which is under every printable character.
+    @scratch var glyphs: list<num> = [];
+    @scratch var fg: list<str> = [];
+    @scratch var weight: list<num> = [];
+
+    /// The parameters of the escape sequence being read, one string each. Item
+    /// 1 is the numeric parameter the sequence opened with and the rest are
+    /// what `;` separated.
+    @scratch var escape_args: list<str> = [];
+
+    // ------------------------------------------------------------------
+    // The cell grid
+    // ------------------------------------------------------------------
+
+    proc cells() -> num warp {
+        return COLS * ROWS;
+    }
+
+    /// What a cell's code looks like on screen. The guest hands the console a
+    /// byte and penfont wants a key, and a capital's key is the `\c` escape
+    /// before the lowercase letter -- which is exactly why a cell holds a code:
+    /// Scratch compares two strings without their case, so nothing but the code
+    /// can say whether this is a capital.
+    proc key_of(p_code: num) -> str warp {
+        let ch: str = byte_chars[p_code + 1];
+        if p_code > 64 && p_code < 91 { return operators::join("\\c", ch); }
+        return ch;
+    }
+
+    proc cell_index(p_col: num, p_row: num) -> num warp {
+        return p_col * ROWS + p_row + 1;
+    }
+
+    proc cell_x(p_col: num) -> num warp {
+        return LEFT + p_col * CELL_W;
+    }
+
+    /// The baseline of a cell, which is what `ink_glyph` wants and not the top
+    /// of the box.
+    proc cell_y(p_row: num) -> num warp {
+        return TOP - p_row * CELL_H - BASE_DROP;
+    }
+
+    /// One cell's glyph, if the font has it.
+    proc ink_cell(p_code: num, p_col: num, p_row: num, p_pen: num) warp {
+        if p_code > 31 {
+            let g: num = find_glyph(key_of(p_code));
+            if g > 0 { ink_glyph(g, cell_x(p_col), cell_y(p_row), EM / FONT_ROWS, p_pen); }
+        }
+    }
+
+    /// The cursor: the font's U+2588 FULL BLOCK, showing when the blink is on
+    /// and gone when it is off, with the glyph under it drawn back on top in
+    /// the paper's black so that the cell reads as inverted rather than
+    /// covered.
+    ///
+    /// The block is not drawn at the text's scale. It is the font's *line*
+    /// box and not its character box -- 63 scan rows, an em and a quarter --
+    /// because a block that filled only a capital would leave the leading
+    /// showing above and below it. So it is drawn at the scale that makes those
+    /// 63 rows the cell's 16 units, and on the baseline that puts them between
+    /// the cell's top and its bottom, which is what "the cursor is a cell"
+    /// means and what the reference got from a stamped costume.
+    ///
+    /// It is drawn on top of the page and never erased off it: the page has
+    /// just been drawn, and what is on the paper is what the next frame's
+    /// redraw will take away.
+    proc ink_cursor() warp {
+        let i: num = cell_index(cursor_x, cursor_y);
+        let g: num = find_glyph(BLOCK);
+        if g > 0 {
+            pen::set_pen_color_to_color(num(current_fg));
+            pen::set_pen_size_to(1);
+            ink_glyph(g, cell_x(cursor_x), cell_y(cursor_y) - 0.3, CELL_H / BLOCK_ROWS, 1);
+        }
+        if glyphs[i] != 0 {
+            pen::set_pen_color_to_color(num("#000000"));
+            ink_cell(glyphs[i], cursor_x, cursor_y, weight[i]);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Scrolling
+    // ------------------------------------------------------------------
+    //
+    // A row moves by being written where the row above it is, and the row the
+    // list does not name is the one left over: the destination index of a cell
+    // is the index the cell above it has. `cell_index` is the same sum in both
+    // places, so a scroll is a copy with one row taken off.
+
+    /// A scroll says the page has moved and nothing more; the redraw is the
+    /// end of the frame's job. Every line of a burst is one `scroll_up`, and
+    /// each of them used to clear the pen and draw all 1280 cells again.
+    proc scroll_up(p_n: num) warp {
+        let r: num = 1;
+        repeat ROWS - p_n {
+            let c: num = 0;
+            repeat COLS {
+                glyphs[cell_index(c, r - 1)] = glyphs[cell_index(c, r)];
+                fg[cell_index(c, r - 1)] = fg[cell_index(c, r)];
+                weight[cell_index(c, r - 1)] = weight[cell_index(c, r)];
+                c += 1;
+            }
+            r += 1;
+        }
+        r = ROWS - p_n;
+        repeat p_n {
+            let c: num = 0;
+            repeat COLS {
+                glyphs[cell_index(c, r)] = 0;
+                fg[cell_index(c, r)] = current_fg;
+                weight[cell_index(c, r)] = 1;
+                c += 1;
+            }
+            r += 1;
+        }
+        needs_redraw = 1;
+        last_cursor_y -= p_n;
+    }
+
+    proc scroll_down(p_n: num) warp {
+        let r: num = ROWS;
+        repeat ROWS - p_n {
+            let c: num = 0;
+            repeat COLS {
+                glyphs[cell_index(c, r - 1)] = glyphs[cell_index(c, r - 2)];
+                fg[cell_index(c, r - 1)] = fg[cell_index(c, r - 2)];
+                weight[cell_index(c, r - 1)] = weight[cell_index(c, r - 2)];
+                c += 1;
+            }
+            r -= 1;
+        }
+        r = 0;
+        repeat p_n {
+            let c: num = 0;
+            repeat COLS {
+                glyphs[cell_index(c, r)] = 0;
+                fg[cell_index(c, r)] = current_fg;
+                weight[cell_index(c, r)] = 1;
+                c += 1;
+            }
+            r += 1;
+        }
+        needs_redraw = 1;
+        last_cursor_y += p_n;
+    }
+
+    // ------------------------------------------------------------------
+    // The buffer
+    // ------------------------------------------------------------------
+
+    /// The page back to paper. It is the console's own state and nothing else:
+    /// the guest's byte streams belong to the machine, and a clear that emptied
+    /// the console's output dropped the rest of whatever write it arrived in.
+    proc clear_all() warp {
+        pen::clear();
+        needs_redraw = 0;
+        glyphs.clear();
+        fg.clear();
+        weight.clear();
+        repeat cells() {
+            glyphs.push(0);
+            fg.push("#FFFFFF");
+            weight.push(1);
+        }
+    }
+
+    proc redraw_buffer() warp {
+        pen::clear();
+        let r: num = 0;
+        repeat ROWS {
+            let c: num = 0;
+            repeat COLS {
+                let i: num = cell_index(c, r);
+                if glyphs[i] != 0 {
+                    pen::set_pen_color_to_color(num(fg[i]));
+                    ink_cell(glyphs[i], c, r, weight[i]);
+                }
+                c += 1;
+            }
+            r += 1;
+        }
+    }
+
+    /// One cell off the screen. The buffer is the whole of it: the page is drawn
+    /// from the buffer and never patched, so a cell goes away by the next
+    /// redraw not drawing it. A cell that is already blank says nothing.
+    proc clear_cell(p_col: num, p_row: num) warp {
+        let i: num = cell_index(p_col, p_row);
+        if glyphs[i] == 0 { return; }
+        glyphs[i] = 0;
+        fg[i] = "#FFFFFF";
+        weight[i] = 1;
+        needs_redraw = 1;
+    }
+
+    proc reset_attributes() warp {
+        current_fg = colors[8];
+        current_weight = 1;
+        current_blinking = 1;
+    }
+
+    proc reset() warp {
+        reset_attributes();
+        cursor_x = 0;
+        cursor_y = 0;
+        last_cursor_x = 0;
+        last_cursor_y = 0;
+        last_cursor_state = 0;
+        clear_all();
+        // The machine is starting from nothing, so it starts with nothing
+        // typed and nothing printed either.
+        input_buffer.clear();
+        output_buffer.clear();
+    }
+
+    proc check_bounds() warp {
+        if cursor_x > COLS - 1 { cursor_x = COLS - 1; }
+        else {
+            if cursor_x < 0 { cursor_x = 0; }
+        }
+        if cursor_y > ROWS - 1 { cursor_y = ROWS - 1; }
+        else {
+            if cursor_y < 0 { cursor_y = 0; }
+        }
+    }
+
+    /// A number as its digits' byte codes, which is what a device status report
+    /// is made of. The digits go to the guest's input, with the rest of the
+    /// answer.
+    proc output_number(p_n: num) warp {
+        let s: str = operators::join("", p_n);
+        let i: num = 1;
+        repeat operators::length(s) {
+            input_buffer.push(num(operators::letter_of(i, s)) + 48);
+            i += 1;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The escape sequences
+    // ------------------------------------------------------------------
+    //
+    // The console speaks enough of ANSI to be a Linux console: SGR, the four
+    // cursor moves, absolute and relative positioning, erase in display, the
+    // scroll commands, and the device status report that a program asks for
+    // before it will draw a menu.
+
+    /// The six levels the 256-colour cube's channels take, and the digits a
+    /// `#rrggbb` is spelled in.
+    var levels: list<num> = [0, 95, 135, 175, 215, 255];
+    var digits: list<str> = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+
+    fn hex2(p_v: num) -> str {
+        operators::join(digits[floor(p_v / 16) + 1], digits[p_v % 16 + 1])
+    }
+
+    fn rgb(p_r: num, p_g: num, p_b: num) -> str {
+        operators::join("#", operators::join(hex2(p_r), operators::join(hex2(p_g), hex2(p_b))))
+    }
+
+    /// The next attribute, taking as many parameters off the front of
+    /// `escape_args` as it needs -- one, or three, or five.
+    ///
+    /// A colour may be one of the sixteen the palette names, one of the two
+    /// hundred and fifty-six the xterm table names, or a colour of its own:
+    /// `38 ; 5 ; n` and `38 ; 2 ; r ; g ; b`. All three end as the same thing --
+    /// the `#rrggbb` string a cell holds -- because the ink a cell is drawn in
+    /// has always been a string, so a colour outside the palette is not a new
+    /// kind of thing.
+    proc handle_sgr() warp {
+        // Nothing left to read is not a reset; it is the end of the sequence.
+        // The loop that calls this stops there, and this is the guard for any
+        // other caller: an attribute that was never written is not `ESC [ 0 m`.
+        if escape_args.len() == 0 { return; }
+        // The parameter is read the way `erase_display` reads one, and for the
+        // reason it does: an absent parameter is the empty string, and Scratch's
+        // `=` says that is *not* the number zero. `ESC [ 0 m` is a reset and so
+        // is the bare `ESC [ m`, which writes no parameter at all -- read the
+        // empty string as its own case or the bare form falls through every
+        // branch below and changes nothing at all.
+        let param: num = 0;
+        if escape_args[1] != "" { param = num(escape_args[1]); }
+        if param == 0 { escape_args.remove(1); reset_attributes(); return; }
+        if param == 38 || param == 48 {
+            // `48` is the background and this terminal has none -- the page is
+            // the backdrop -- but its parameters are taken either way, or the
+            // rest of the sequence reads as attributes.
+            let ink: str = "#FFFFFF";
+            if num(escape_args[2]) == 5 {
+                let n: num = num(escape_args[3]);
+                if n < 8 { ink = colors[n + 1]; }
+                else {
+                    if n < 16 { ink = colors_bright[n - 7]; }
+                    else {
+                        if n < 232 {
+                            let c: num = n - 16;
+                            ink = rgb(levels[floor(c / 36) + 1], levels[floor(c % 36 / 6) + 1], levels[c % 6 + 1]);
+                        } else { ink = rgb(8 + (n - 232) * 10, 8 + (n - 232) * 10, 8 + (n - 232) * 10); }
+                    }
+                }
+                if param == 38 { current_fg = ink; }
+                repeat 3 { escape_args.remove(1); }
+                return;
+            }
+            if num(escape_args[2]) == 2 {
+                if param == 38 { current_fg = rgb(num(escape_args[3]), num(escape_args[4]), num(escape_args[5])); }
+                repeat 5 { escape_args.remove(1); }
+                return;
+            }
+            escape_args.remove(1);
+            return;
+        }
+        if param == 1 { current_weight = 2; }
+        else {
+            if param == 5 { current_blinking = 1; }
+            else {
+                if param == 22 { current_weight = 1; }
+                else {
+                    if param == 25 { current_blinking = 0; }
+                    else {
+                        if param > 29 && param < 38 { current_fg = colors[param - 29]; }
+                        else {
+                            if param == 39 { current_fg = colors[8]; }
+                            else {
+                                if param > 89 && param < 98 { current_fg = colors_bright[param - 89]; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        escape_args.remove(1);
+    }
+
+    proc handle_escape(p_code: num) warp {
+        // `ESC [` opens the sequence and leaves the numeric parameter empty.
+        if escape_args.len() == 0 {
+            if p_code == 91 {
+                escape_args.push("");
+                return;
+            }
+            is_escape = 0;
+            return;
+        }
+        // `ESC [ ?` is the private form, and it is the one full-screen programs
+        // use: `?1049h` is the screen a program draws on and `?25l` is the cursor
+        // taken away. A public sequence shares none of its numbers, so one flag
+        // is all it takes to tell the two apart.
+        if p_code == 63 && escape_args.len() == 1 && escape_args[1] == "" {
+            escape_private = 1;
+            return;
+        }
+        // A digit extends the last parameter.
+        if p_code > 47 && p_code < 58 {
+            let last: num = escape_args.len();
+            escape_args[last] = operators::join(escape_args[last], operators::join("", p_code - 48));
+            return;
+        }
+        // `;` starts another.
+        if p_code == 59 {
+            escape_args.push("");
+            return;
+        }
+        if p_code > 64 && p_code < 126 {
+            is_escape = 0;
+            if escape_private == 1 { private_escape(p_code); return; }
+            if p_code == 109 {
+                // Each attribute takes what it needs off the front of the list;
+                // an extended colour is three parameters or five, and this reads
+                // the length again every turn, so it ends when they are gone.
+                //
+                // "Every turn" has to mean *until the list is empty*, and not
+                // `repeat escape_args.len()`: that count is taken once, at the
+                // start, and a `38 ; 5 ; n` is three parameters eaten by one
+                // call -- so the two calls after it land on an empty list, read
+                // no parameter, and are read as the reset that no parameter
+                // means. Every extended colour came out white that way.
+                repeat_until escape_args.len() == 0 {
+                    handle_sgr();
+                }
+                return;
+            }
+            if p_code == 65 { cursor_y -= escape_amount(1); check_bounds(); return; }
+            if p_code == 66 { cursor_y += escape_amount(1); check_bounds(); return; }
+            if p_code == 67 { cursor_x += escape_amount(1); check_bounds(); return; }
+            if p_code == 68 { cursor_x -= escape_amount(1); check_bounds(); return; }
+            // `E` next line, `F` previous line: both go to column 0.
+            if p_code == 69 { cursor_x = 0; cursor_y += escape_amount(1); check_bounds(); return; }
+            if p_code == 70 { cursor_x = 0; cursor_y -= escape_amount(1); check_bounds(); return; }
+            // `G` absolute column, `H` and `f` absolute position. A parameter
+            // of 0 means 1, which is what ANSI says and what the kernel sends.
+            if p_code == 71 { cursor_x = escape_amount(1) - 1; check_bounds(); return; }
+            if p_code == 72 || p_code == 102 {
+                cursor_y = escape_amount(1) - 1;
+                cursor_x = escape_amount(2) - 1;
+                check_bounds();
+                return;
+            }
+            if p_code == 74 {
+                erase_display();
+                return;
+            }
+            if p_code == 75 {
+                erase_line();
+                return;
+            }
+            if p_code == 83 { scroll_up(escape_amount(1)); return; }
+            if p_code == 84 { scroll_down(escape_amount(1)); return; }
+        }
+        // The device status report: the cursor's position, as `ESC [ row ; col R`.
+        // The answer is the guest's *input*, because that is what an answer is:
+        // a program that asks the terminal where the cursor is reads the reply
+        // off the same stream its keys come from, and one left in the console's
+        // own output queue is one it never sees. A full-screen editor opens by
+        // asking this -- `ESC [ 999 ; 999 H` to put the cursor out of the way and
+        // then `ESC [ 6 n` -- because the answer is how it learns how big the
+        // screen is.
+        if escape_args[1] == "6" && p_code == 110 {
+            input_buffer.push(27);
+            input_buffer.push(91);
+            output_number(cursor_y + 1);
+            input_buffer.push(59);
+            output_number(cursor_x + 1);
+            input_buffer.push(82);
+        }
+    }
+
+    /// What a private sequence asks for. Only the two a full-screen program
+    /// cannot open without are here; nothing observed asks for the rest, and a
+    /// sequence that is ignored draws on the one screen there is.
+    proc private_escape(p_code: num) warp {
+        let param: num = 0;
+        if escape_args[1] != "" { param = num(escape_args[1]); }
+        if param == 1049 {
+            if p_code == 104 { enter_alt_screen(); }
+            else {
+                if p_code == 108 { leave_alt_screen(); }
+            }
+            return;
+        }
+        if param == 25 {
+            // The cursor is ink like everything else, so taking it away is the
+            // page's business: the next redraw is what stops drawing it.
+            if p_code == 108 { cursor_hidden = 1; needs_redraw = 1; }
+            else {
+                if p_code == 104 { cursor_hidden = 0; needs_redraw = 1; }
+            }
+        }
+    }
+
+    /// A parameter, with the empty one -- or an explicit 0 -- read as `p_fallback`.
+    proc escape_amount(p_fallback: num) -> num warp {
+        if escape_args.len() < p_fallback { return 0; }
+        if escape_args[p_fallback] == "" { return 1; }
+        if num(escape_args[p_fallback]) == 0 { return 1; }
+        return num(escape_args[p_fallback]);
+    }
+
+    proc erase_display() warp {
+        // The parameter is read the way `escape_amount` reads one, and for the
+        // reason it does: an absent parameter is the empty string, and Scratch
+        // is sure that is not the number zero, so `num(item 1) == 0` is false
+        // for the `ESC [ J` a shell sends and true for the `ESC [ 0 J` nobody
+        // writes. Reading the empty string as its own case is what makes the
+        // bare sequence erase to the end instead of clearing the screen.
+        let mode: num = 0;
+        if escape_args[1] != "" { mode = num(escape_args[1]); }
+        if mode == 0 {
+            // From here to the end.
+            let x: num = cursor_x;
+            let y: num = cursor_y;
+            repeat ROWS - cursor_y {
+                repeat COLS - cursor_x {
+                    clear_cell(x, y);
+                    x += 1;
+                }
+                x = 0;
+                y += 1;
+            }
+            return;
+        }
+        if mode == 1 {
+            // From the start to here.
+            let y: num = 0;
+            repeat cursor_y {
+                let x: num = 0;
+                repeat COLS {
+                    clear_cell(x, y);
+                    x += 1;
+                }
+                y += 1;
+            }
+            let x2: num = 0;
+            repeat cursor_x { clear_cell(x2, cursor_y); x2 += 1; }
+            return;
+        }
+        clear_all();
+    }
+
+    /// `ESC [ K`: erase in line. The same three modes as `ESC [ J`, along one
+    /// row instead of the whole page, and the one a line editor uses -- it
+    /// rewrites the row it is editing and erases what the shorter version of the
+    /// line does not cover. Without it that tail stays on the screen, which is
+    /// what the boot log's ragged line ends are.
+    proc erase_line() warp {
+        let mode: num = 0;
+        if escape_args[1] != "" { mode = num(escape_args[1]); }
+        let from: num = 0;
+        let to: num = COLS - 1;
+        if mode == 0 { from = cursor_x; }
+        if mode == 1 { to = cursor_x; }
+        let x: num = from;
+        repeat to - from + 1 {
+            clear_cell(x, cursor_y);
+            x += 1;
+        }
+    }
+
+    /// `ESC [ ? 1049 h`: the screen a full-screen program draws on.
+    ///
+    /// The program is about to cover the page with its own, and it expects the
+    /// page back when it exits, so the cells and the cursor are copied out
+    /// first and the screen is emptied for it. The copy is three lists of 1280
+    /// items, which is nothing next to what the program is about to draw.
+    proc enter_alt_screen() warp {
+        if in_alt_screen == 1 { return; }
+        alt_glyphs.clear();
+        alt_fg.clear();
+        alt_weight.clear();
+        let i: num = 1;
+        repeat cells() {
+            alt_glyphs.push(glyphs[i]);
+            alt_fg.push(fg[i]);
+            alt_weight.push(weight[i]);
+            i += 1;
+        }
+        alt_cursor_x = cursor_x;
+        alt_cursor_y = cursor_y;
+        in_alt_screen = 1;
+        clear_all();
+        cursor_x = 0;
+        cursor_y = 0;
+        last_cursor_x = 0;
+        last_cursor_y = 0;
+    }
+
+    /// `ESC [ ? 1049 l`: the page back, as it was, cursor and all. What the
+    /// program drew on its own screen goes with it, which is what the sequence
+    /// means: the alternate screen is not kept.
+    proc leave_alt_screen() warp {
+        if in_alt_screen == 0 { return; }
+        glyphs.clear();
+        fg.clear();
+        weight.clear();
+        let i: num = 1;
+        repeat cells() {
+            glyphs.push(alt_glyphs[i]);
+            fg.push(alt_fg[i]);
+            weight.push(alt_weight[i]);
+            i += 1;
+        }
+        cursor_x = alt_cursor_x;
+        cursor_y = alt_cursor_y;
+        in_alt_screen = 0;
+        needs_redraw = 1;
+    }
+
+    // ------------------------------------------------------------------
+    // One byte into the console
+    // ------------------------------------------------------------------
+
+    proc process_character(p_code: num) warp {
+        blink_offset = sensing::timer();
+        if is_escape > 0 { handle_escape(p_code); return; }
+        if p_code > 31 {
+            let i: num = cell_index(cursor_x, cursor_y);
+            // A cell that is already blank takes the glyph as it arrives. A cell
+            // that is not has to be drawn over and there is no drawing over: the
+            // page is asked for again and the whole of it comes back from the
+            // buffer. Only one of the two is a page's worth of pen, and it is
+            // the one the pen cannot do any other way.
+            if glyphs[i] != 0 { needs_redraw = 1; }
+            else {
+                pen::set_pen_color_to_color(num(current_fg));
+                ink_cell(p_code, cursor_x, cursor_y, current_weight);
+            }
+            glyphs[i] = p_code;
+            fg[i] = current_fg;
+            weight[i] = current_weight;
+            cursor_x += 1;
+            if cursor_x > COLS - 1 {
+                cursor_x = 0;
+                cursor_y += 1;
+                if cursor_y > ROWS - 1 {
+                    scroll_up(1);
+                    cursor_y = ROWS - 1;
+                }
+            }
+            return;
+        }
+        // Backspace, line feed, carriage return, escape and bell, which is
+        // every control character the kernel's console actually sends. The
+        // rest are ignored, as they are in the reference.
+        if p_code == 8 { cursor_x -= 1; check_bounds(); return; }
+        if p_code == 10 {
+            cursor_y += 1;
+            if cursor_y > ROWS - 1 {
+                scroll_up(1);
+                cursor_y = ROWS - 1;
+            }
+            return;
+        }
+        if p_code == 13 { cursor_x = 0; return; }
+        if p_code == 27 {
+            is_escape = 1;
+            escape_private = 0;
+            escape_args.clear();
+            return;
+        }
+        if p_code == 7 {
+            sound::play("beep");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // One frame of the console
+    // ------------------------------------------------------------------
+
+    proc refresh() warp {
+        // Everything the guest printed since the last frame, in order. The list
+        // is read for its length again on every turn. This is also what decides
+        // that the page has changed; nothing here draws a cell back off the
+        // paper, because there is no way to.
+        for code in output_buffer {
+            process_character(code);
+        }
+        // The cursor. It is ink like everything else, so it is the page's
+        // business: a cursor that has moved is a cell of ink in the wrong place,
+        // and one that has blinked off is a cell of ink that should not be
+        // there. Both are the redraw's problem and neither is patched here.
+        //
+        // The phase test is the reference's with one character changed. It wrote
+        // `mod(seconds, 2) > 1`, and `mod` by two is never more than one, so its
+        // cursor was steady and the blink was dead code; `>= 1` is the test a
+        // cursor wants. The other half is the reference's and is right: SGR 25
+        // turns blinking off, and a cursor that does not blink is a cursor that
+        // is always there.
+        let phase: num = sensing::timer() - blink_offset;
+        let showing: num = 1;
+        if current_blinking == 1 && phase > 0 && phase % 2 >= 1 { showing = 0; }
+        // A cursor a full-screen program has taken away is not drawn at all, and
+        // is a change of state like any other: the redraw below is what takes it
+        // off the paper.
+        if cursor_hidden == 1 { showing = 0; }
+        if last_cursor_state != showing { needs_redraw = 1; }
+        else {
+            if last_cursor_state == 1 {
+                if last_cursor_x != cursor_x || last_cursor_y != cursor_y { needs_redraw = 1; }
+            }
+        }
+        // The page, whole, once a frame, and only when something on it changed.
+        // A character written where one already was, a cell erased, a line
+        // scrolled, the cursor moved or blinked: each of them says the page is
+        // to be drawn again from the buffer, and the pen is cleared first, so
+        // what is on the paper is always exactly what the buffer says and never
+        // what a partial redraw left behind.
+        if needs_redraw == 1 {
+            redraw_buffer();
+            needs_redraw = 0;
+        }
+        if showing == 1 { ink_cursor(); }
+        last_cursor_state = showing;
+        last_cursor_x = cursor_x;
+        last_cursor_y = cursor_y;
+        output_buffer.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // Scripts
+    // ------------------------------------------------------------------
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("Terminal.reset") {
+        reset();
+    }
+
+    on broadcast_received("RISCV.powerOn") {
+        reset();
+    }
+
+    on broadcast_received("Terminal.run") {
+        looks::set_size_to(100);
+        reset();
+        forever {
+            refresh();
+            control::wait(0);
+        }
+    }
+}

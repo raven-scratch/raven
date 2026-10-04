@@ -1,0 +1,33 @@
+// The paper, and the order things happen in.
+//
+// The stage owns the black backdrop the terminal's white ink is on, and the
+// green flag that starts the project. The order is the reference's, and it
+// matters:
+//
+//   1. The terminal resets and clears its screen.
+//   2. The terminal starts its own loop, which draws whatever the guest prints.
+//      It is a broadcast and not a broadcast-and-wait because that loop never
+//      ends.
+//   3. The machine powers on -- which lays the kernel image into RAM and signs
+//      on -- and waits, so that the first thing drawn is the boot message.
+//   4. The machine starts running frames.
+//
+// The reference measures the stage with a 2 by 2 costume first. The terminal
+// here is 64 columns by 20 rows of a 480 by 360 stage, which is a size the
+// project fixes rather than one it asks for, so there is nothing to measure.
+
+stage {
+    costume "paper" = "assets/backdrop.svg";
+
+    broadcast "Terminal.reset";
+    broadcast "Terminal.run";
+    broadcast "RISCV.powerOn";
+    broadcast "RISCV.run";
+
+    on flag_clicked {
+        events::broadcast_and_wait("Terminal.reset");
+        events::broadcast("Terminal.run");
+        events::broadcast_and_wait("RISCV.powerOn");
+        events::broadcast("RISCV.run");
+    }
+}

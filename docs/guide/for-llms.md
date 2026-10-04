@@ -44,9 +44,11 @@ raven explain cli          # every command, and what it writes
 
 ## What a generated program must respect
 
-* **No Scratch variables.** Everything is a cell of `_vms`, `_gvm` or the
-  script's `_stackN`; `watch` is the one exception, and it exists to be looked
-  at. The five blocks that name a Scratch variable are refused.
+* **No Scratch variables**, unless the source asks for one. Everything is a cell
+  of `_vms`, `_gvm` or the script's `_stackN`; `watch` declares a visible mirror
+  to be looked at, and the `@scratch` decorator binds a declaration to a real
+  Scratch variable or list of its own name. The five blocks that name a Scratch
+  variable are still refused.
 * **`raven-asm` never rewrites.** One statement below raven is one block. If a
   feature seems to need several blocks, it is a raven macro with a printed
   lowering, not a new block.

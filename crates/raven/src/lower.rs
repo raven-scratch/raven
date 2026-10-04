@@ -133,11 +133,11 @@ pub struct Layout {
     pub target: String,
     /// The raven name.
     pub name: String,
-    /// The Scratch list its cells are in, or its own name when a `watch` asked
-    /// for a real list.
+    /// The Scratch list its cells are in, or its own name when it is a real
+    /// Scratch variable or list.
     pub list: String,
-    /// The 1-based cell of its handle, its own cell for a scalar, or `0` for a
-    /// watched list.
+    /// The 1-based cell of its handle, its own cell for a scalar, or `0` for
+    /// anything that is Scratch's own: a `watch`ed list or a `@scratch` name.
     pub handle: usize,
     /// Whether the run is the growable one.
     pub dynamic: bool,
@@ -259,9 +259,10 @@ fn scan_stmts(stmts: &[Stmt], names: &mut HashSet<String>) {
 /// A variable or list, and where it lives.
 ///
 /// A scalar is not a Scratch variable: it is a **cell** in the virtual memory
-/// system, addressed by the constant index in [`VarInfo::cell`]. A list is a
-/// Scratch list, because that is the only container Scratch gives the blocks a
-/// language can drive one item at a time.
+/// system, addressed by the constant index in [`VarInfo::cell`] — unless
+/// `@scratch` asked for a real Scratch variable, which [`VarInfo::addr`] gives
+/// back as [`Addr::Scratch`]. A list is a run of an arena or, when `@scratch`
+/// or a `watch` asked, a Scratch list of its own.
 #[derive(Clone, Debug)]
 struct VarInfo {
     name: String,
@@ -273,8 +274,9 @@ struct VarInfo {
     items: Vec<rasm::Literal>,
     /// A list, as opposed to a scalar variable.
     is_list: bool,
-    /// `true` when the list is a real Scratch list rather than a run of the
-    /// arena. That happens exactly when a `watch` asks to see it on the stage.
+    /// `true` when the storage is Scratch's own rather than the virtual memory
+    /// system's: a `@scratch` variable or list, or a list a `watch` asked for. A
+    /// Scratch scalar is reached as `data_variable`, a Scratch list by name.
     scratch: bool,
     /// `true` when the list's run may grow. A run that grows lives in the heap,
     /// which is a list of its own so a large fixed table cannot stop it.
@@ -290,11 +292,29 @@ struct VarInfo {
 }
 
 impl VarInfo {
-    /// The Scratch list a watched `list<T>` is backed by.
+    /// Where this declaration's storage is: a cell of the VMS, or the Scratch
+    /// variable a `@scratch` decorator asked for.
+    fn addr(&self) -> Addr {
+        if self.scratch {
+            return Addr::Scratch {
+                name: self.name.clone(),
+            };
+        }
+        Addr::cell(
+            self.cell,
+            if self.global {
+                Arena::Global
+            } else {
+                Arena::Local
+            },
+        )
+    }
+
+    /// The Scratch list a `list<T>` is backed by, when the storage is Scratch's.
     ///
-    /// A list no `watch` asked for is a run of the arena and has no Scratch
-    /// list at all, so this is `None` for it.
-    fn as_list_item(&self) -> Option<rasm::Item> {
+    /// A list no `@scratch` and no `watch` asked for is a run of the arena and
+    /// has no Scratch list at all, so this is `None` for it.
+    fn as_list_item(&self, visible: bool) -> Option<rasm::Item> {
         if !self.is_list || !self.scratch {
             return None;
         }
@@ -306,10 +326,28 @@ impl VarInfo {
         };
         Some(rasm::Item::List(rasm::ListDecl {
             global: self.global,
-            visible: true,
+            visible,
             monitor: rasm::MonitorSpec::default(),
             name: self.name.clone(),
             init,
+            pos: self.pos,
+        }))
+    }
+
+    /// The Scratch variable a `@scratch` scalar is.
+    ///
+    /// A scalar is not a Scratch variable unless `@scratch` asked for one, so
+    /// this is `None` for a cell of an arena.
+    fn as_var_item(&self, visible: bool) -> Option<rasm::Item> {
+        if self.is_list || !self.scratch {
+            return None;
+        }
+        Some(rasm::Item::Var(rasm::VarDecl {
+            global: self.global,
+            visible,
+            monitor: rasm::MonitorSpec::default(),
+            name: self.name.clone(),
+            init: self.init.clone(),
             pos: self.pos,
         }))
     }
@@ -393,6 +431,7 @@ impl Globals {
                         }
                         seen.insert(var.name.name.clone(), unit.path.clone());
                         let mut info = var_info(var, true)?;
+                        info.scratch = scratch_decorators(var, &unit.source)?;
                         if info.ty.is_place() {
                             return Err(Error::new(
                                 unit.source
@@ -413,6 +452,8 @@ impl Globals {
                                 // A watched list is a real Scratch list: it is
                                 // the one thing that can carry a monitor.
                                 info.scratch = true;
+                            } else if info.scratch {
+                                // `@scratch`: Scratch's own list, by name.
                             } else if mutates.contains(&var.name.name) {
                                 // A run that may grow lives in the heap.
                                 info.dynamic = true;
@@ -430,6 +471,9 @@ impl Globals {
                                 );
                                 globals.complex = true;
                             }
+                        } else if info.scratch {
+                            // `@scratch`: a real project-wide Scratch variable.
+                            // Nothing is allocated in `_gvm`.
                         } else {
                             // A project-wide scalar is a cell in the project's
                             // arena; the index is the same in every target.
@@ -507,12 +551,11 @@ impl Globals {
         self.vars.iter().find(|v| v.name == name)
     }
 
-    /// The project-wide cell a global scalar lives in, if there is one.
-    fn scalar_cell(&self, name: &str) -> Option<usize> {
-        self.vars
-            .iter()
-            .find(|v| v.name == name && !v.is_list)
-            .map(|v| v.cell)
+    /// Where a project-wide scalar lives: a cell of the project arena, or the
+    /// real Scratch variable a `@scratch` declaration asked for.
+    fn scalar_addr(&self, name: &str) -> Option<(Addr, Ty)> {
+        let var = self.vars.iter().find(|v| v.name == name && !v.is_list)?;
+        Some((var.addr(), var.ty))
     }
 }
 
@@ -719,6 +762,65 @@ fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
     }
 }
 
+/// Whether a declaration's decorators ask for a real Scratch variable or list.
+///
+/// `@scratch` is the one decorator. Everything it changes is *where the storage
+/// is*: the name, its type and every statement that reads or writes it are the
+/// same, so nothing else in the language needs to know. A decorator that is not
+/// `@scratch` is refused by name rather than ignored, and so is a second
+/// `@scratch` on the same declaration.
+fn scratch_decorators(var: &ast::VarDecl, source: &Source) -> Result<bool> {
+    let mut scratch = false;
+    for decorator in &var.decorators {
+        if decorator.name.name != "scratch" {
+            return Err(Error::new(
+                source
+                    .error(
+                        decorator.name.span.pos,
+                        format!("there is no decorator called `@{}`", decorator.name.name),
+                    )
+                    .span(decorator.name.span.len.max(1))
+                    .note("the one decorator is `@scratch`, which stores a `var` or a `list` as a real Scratch variable or list"),
+            ));
+        }
+        if !decorator.args.is_empty() {
+            return Err(Error::new(
+                source
+                    .error(decorator.span.pos, "`@scratch` takes no arguments")
+                    .span(decorator.span.len.max(1))
+                    .note("write it as `@scratch var name: type = value;`"),
+            ));
+        }
+        if scratch {
+            return Err(Error::new(
+                source
+                    .error(
+                        decorator.name.span.pos,
+                        format!("`{}` is decorated with `@scratch` twice", var.name.name),
+                    )
+                    .span(decorator.name.span.len.max(1)),
+            ));
+        }
+        if var.ty.is_place() {
+            return Err(Error::new(
+                source
+                    .error(
+                        decorator.name.span.pos,
+                        format!(
+                            "`{}` is a struct, so it cannot be a Scratch variable",
+                            var.name.name
+                        ),
+                    )
+                    .span(decorator.name.span.len.max(1))
+                    .note("a struct is a run of cells, laid out by the compiler")
+                    .note("a Scratch variable is one cell, reached by name"),
+            ));
+        }
+        scratch = true;
+    }
+    Ok(scratch)
+}
+
 fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
     let is_list = var.ty.is_list();
     // A struct is a place, not a value: it has no single starting value, so it
@@ -795,11 +897,6 @@ fn cell_read(cell: usize) -> rasm::Expr {
 /// `replace item (cell) of _vms with value`.
 fn cell_write(cell: usize, value: rasm::Expr) -> rasm::Stmt {
     arena_write(cell, VMS, value)
-}
-
-/// `item (cell) of _gvm` — the project arena on the stage.
-fn gcell_read(cell: usize) -> rasm::Expr {
-    arena_read(cell, GLOBAL_VM)
 }
 
 /// `item (cell) of <list>`.
@@ -1672,7 +1769,7 @@ struct ProcInfo {
 ///
 /// A struct-typed binding's cell is the **base** of its frame; the fields are
 /// the cells after it, at offsets the layout decided.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Local {
     addr: Addr,
     ty: Ty,
@@ -1706,7 +1803,8 @@ impl StructInfo {
 /// The split is by **lifetime**, and it is what makes the memory dynamic:
 ///
 /// * [`Arena::Local`] is the target's arena, `_vms`. It holds what has to
-///   outlive a script — a `var`, and a `proc`'s frame, which a re-entrant
+///   outlive a script — a `var` that is not `@scratch`, and a `proc`'s frame,
+///   which a re-entrant
 ///   (recursive) procedure shares with itself. It is grown on demand and never
 ///   shrinks, because its size is decided by the program, not by the data.
 /// * [`Arena::Global`] is the project arena, `_gvm`, on the stage.
@@ -1733,27 +1831,60 @@ impl Arena {
     }
 }
 
-/// Where a place lives: a constant cell, and which arena it is in.
-#[derive(Clone, Copy, Debug)]
-struct Addr {
-    cell: usize,
-    arena: Arena,
+/// Where a place lives: a constant cell of one of the arenas, or a real Scratch
+/// variable that `@scratch` asked for, reached by name.
+#[derive(Clone, Debug)]
+enum Addr {
+    /// A constant cell of an arena list.
+    Cell { cell: usize, arena: Arena },
+    /// A real Scratch variable, named by the declaration it came from.
+    Scratch { name: String },
 }
 
 impl Addr {
-    fn read(self) -> rasm::Expr {
-        arena_read(self.cell, &self.arena.list())
+    fn cell(cell: usize, arena: Arena) -> Self {
+        Addr::Cell { cell, arena }
     }
 
-    fn write(self, value: rasm::Expr) -> rasm::Stmt {
-        arena_write(self.cell, &self.arena.list(), value)
+    fn read(&self) -> rasm::Expr {
+        match self {
+            Addr::Cell { cell, arena } => arena_read(*cell, &arena.list()),
+            Addr::Scratch { name } => mk_call("data_variable", vec![mk_str(name.clone())]),
+        }
+    }
+
+    fn write(&self, value: rasm::Expr) -> rasm::Stmt {
+        match self {
+            Addr::Cell { cell, arena } => arena_write(*cell, &arena.list(), value),
+            Addr::Scratch { name } => {
+                mk_stmt("data_setvariableto", vec![mk_str(name.clone()), value])
+            }
+        }
+    }
+
+    /// The list this address is a stack in, when it is one.
+    ///
+    /// A stack cell is *pushed* rather than written, so the two callers that
+    /// allocate a body cell ask this first.
+    fn stack_list(&self) -> Option<String> {
+        match self {
+            Addr::Cell { arena, .. } if matches!(arena, Arena::Stack(_)) => Some(arena.list()),
+            _ => None,
+        }
     }
 
     /// The same arena, `offset` cells further on.
-    fn offset(self, offset: usize) -> Self {
-        Self {
-            cell: self.cell + offset,
-            arena: self.arena,
+    ///
+    /// `None` for a Scratch variable: a struct is a run of cells and a Scratch
+    /// variable is one cell, so `@scratch` cannot name a struct — [`Unit::place`]
+    /// turns a miss into a diagnostic rather than a wrong constant.
+    fn offset(&self, offset: usize) -> Option<Self> {
+        match self {
+            Addr::Cell { cell, arena } => Some(Addr::Cell {
+                cell: cell + offset,
+                arena: *arena,
+            }),
+            Addr::Scratch { .. } => None,
         }
     }
 }
@@ -1960,6 +2091,7 @@ impl<'a> Unit<'a> {
                     )));
                 }
                 let mut info = var_info(var, false)?;
+                info.scratch = scratch_decorators(var, source)?;
                 if let Ty::Struct(id) = info.ty {
                     // A struct is a frame: `size` cells, the first of which is
                     // the binding's own cell.
@@ -1970,26 +2102,37 @@ impl<'a> Unit<'a> {
                     self.base_scope.insert(
                         var.name.name.clone(),
                         Local {
-                            addr: Addr {
-                                cell: base,
-                                arena: Arena::Local,
-                            },
+                            addr: Addr::cell(base, Arena::Local),
                             ty: var.ty,
                         },
                     );
                 } else if info.is_list {
-                    // A list no `watch` asked for is a run of an arena: a
-                    // handle, then its starting items. A watched one stays a
-                    // real Scratch list, because a monitor is a Scratch list
-                    // and nothing else.
+                    // A list no `watch` and no `@scratch` asked for is a run of
+                    // an arena: a handle, then its starting items. Either one
+                    // makes it a real Scratch list, because a monitor is a
+                    // Scratch list and nothing else.
                     if self.watches.contains(&var.name.name) {
                         info.scratch = true;
+                    } else if info.scratch {
+                        // `@scratch`: the list is Scratch's own, by name.
                     } else if self.mutations.contains(&info.name) {
                         info.dynamic = true;
                         info.cell = self.alloc_heap_complex(&info.items);
                     } else {
                         info.cell = self.alloc_complex(&info.items);
                     }
+                } else if info.scratch {
+                    // `@scratch`: a real Scratch variable with the same name.
+                    // Nothing is allocated in the arena and no cell is written.
+                    self.base_scope.insert(
+                        var.name.name.clone(),
+                        Local {
+                            addr: Addr::Scratch {
+                                name: var.name.name.clone(),
+                            },
+                            ty: var.ty,
+                        },
+                    );
                 } else {
                     // A target-level scalar is a cell in the target's own
                     // arena. It is in scope for every script and every `proc`
@@ -2000,10 +2143,7 @@ impl<'a> Unit<'a> {
                     self.base_scope.insert(
                         var.name.name.clone(),
                         Local {
-                            addr: Addr {
-                                cell,
-                                arena: Arena::Local,
-                            },
+                            addr: Addr::cell(cell, Arena::Local),
                             ty: var.ty,
                         },
                     );
@@ -2280,22 +2420,31 @@ impl<'a> Unit<'a> {
                 }));
             }
         }
-        locals.extend(self.locals.iter().filter_map(VarInfo::as_list_item));
+        locals.extend(
+            self.locals
+                .iter()
+                .filter_map(|v| v.as_var_item(self.watches.contains(&v.name))),
+        );
+        locals.extend(
+            self.locals
+                .iter()
+                .filter_map(|v| v.as_list_item(self.watches.contains(&v.name))),
+        );
         locals.append(&mut out);
 
-        // A `watch`ed scalar is a real Scratch variable with a visible
-        // monitor, which the cell writes keep in step; a `watch`ed list is a
-        // real Scratch list, so its monitor is the list's own.
+        // A `watch`ed scalar that is *not* `@scratch` is a real Scratch variable
+        // with a visible monitor, which the cell writes keep in step; a `watch`ed
+        // list is a real Scratch list, so its monitor is the list's own.
         let mut mirrored: Vec<&VarInfo> = self
             .locals
             .iter()
-            .filter(|v| !v.is_list && self.watches.contains(&v.name))
+            .filter(|v| !v.is_list && !v.scratch && self.watches.contains(&v.name))
             .collect();
         let global_mirrors: Vec<&VarInfo> = self
             .globals
             .vars
             .iter()
-            .filter(|v| !v.is_list && self.watches.contains(&v.name))
+            .filter(|v| !v.is_list && !v.scratch && self.watches.contains(&v.name))
             .collect();
         mirrored.extend(global_mirrors);
         for var in mirrored {
@@ -2356,7 +2505,22 @@ impl<'a> Unit<'a> {
                     pos: Pos::default(),
                 }));
             }
-            globals.extend(self.globals.vars.iter().filter_map(VarInfo::as_list_item));
+            // A project-wide `var` is declared on the stage whatever file wrote
+            // it, so `@scratch` variables and lists land here, and a `watch`
+            // anywhere in the project is what makes one visible.
+            let watched = |name: &str| self.globals.watches.contains(name);
+            globals.extend(
+                self.globals
+                    .vars
+                    .iter()
+                    .filter_map(|v| v.as_var_item(watched(&v.name))),
+            );
+            globals.extend(
+                self.globals
+                    .vars
+                    .iter()
+                    .filter_map(|v| v.as_list_item(watched(&v.name))),
+            );
             globals.extend(self.globals.broadcasts.iter().map(|name| {
                 rasm::Item::Broadcast(rasm::BroadcastDecl {
                     name: name.clone(),
@@ -2380,8 +2544,21 @@ impl<'a> Unit<'a> {
                 out.push(Layout {
                     target: self.plan.name.clone(),
                     name: var.name.clone(),
-                    list: if var.global { GLOBAL_VM } else { VMS }.to_string(),
-                    handle: if var.ty.is_place() { 0 } else { var.cell },
+                    // A `@scratch` scalar is a nameless thing no longer: its own
+                    // name is the Scratch variable, and `handle` is 0 because it
+                    // is not a cell of any list.
+                    list: if var.scratch {
+                        var.name.clone()
+                    } else if var.global {
+                        GLOBAL_VM.to_string()
+                    } else {
+                        VMS.to_string()
+                    },
+                    handle: if var.scratch || var.ty.is_place() {
+                        0
+                    } else {
+                        var.cell
+                    },
                     dynamic: false,
                     scalar: true,
                 });
@@ -2678,23 +2855,19 @@ impl<'a> Unit<'a> {
     /// On a stack that is a push; in the arena it is a write. Either way it is
     /// one block, and the caller gets the address to read and rewrite.
     fn temp_cell(&mut self, value: rasm::Expr) -> (Addr, rasm::Stmt) {
-        let arena = self.body_arena();
-        let addr = Addr {
-            cell: self.alloc_body_cell(),
-            arena,
-        };
-        let init = match arena {
-            Arena::Stack(_) => arena_push(&arena.list(), value),
-            _ => addr.write(value),
+        let addr = Addr::cell(self.alloc_body_cell(), self.body_arena());
+        let init = match addr.stack_list() {
+            Some(list) => arena_push(&list, value),
+            None => addr.write(value),
         };
         (addr, init)
     }
 
     /// The statement that gives a freshly allocated body cell its value.
-    fn init_cell(&self, addr: Addr, value: rasm::Expr) -> rasm::Stmt {
-        match addr.arena {
-            Arena::Stack(_) => arena_push(&addr.arena.list(), value),
-            _ => addr.write(value),
+    fn init_cell(&self, addr: &Addr, value: rasm::Expr) -> rasm::Stmt {
+        match addr.stack_list() {
+            Some(list) => arena_push(&list, value),
+            None => addr.write(value),
         }
     }
 
@@ -2956,17 +3129,8 @@ impl<'a> Unit<'a> {
                 // Move the nested frame into this one, field by field.
                 for sub in &nested.fields {
                     out.push(
-                        Addr {
-                            cell: base + field.offset + sub.offset,
-                            arena,
-                        }
-                        .write(
-                            Addr {
-                                cell: nested_base + sub.offset,
-                                arena: nested_arena,
-                            }
-                            .read(),
-                        ),
+                        Addr::cell(base + field.offset + sub.offset, arena)
+                            .write(Addr::cell(nested_base + sub.offset, nested_arena).read()),
                     );
                 }
                 continue;
@@ -2978,13 +3142,7 @@ impl<'a> Unit<'a> {
                 &format!("the `{}` field", field.name),
                 source,
             )?;
-            out.push(
-                Addr {
-                    cell: base + field.offset,
-                    arena,
-                }
-                .write(value.expr),
-            );
+            out.push(Addr::cell(base + field.offset, arena).write(value.expr));
         }
         for (name, _) in fields {
             if layout.field(&name.name).is_none() {
@@ -3016,8 +3174,8 @@ impl<'a> Unit<'a> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).copied())
-            .or_else(|| self.base_scope.get(name).copied())
+            .find_map(|scope| scope.get(name).cloned())
+            .or_else(|| self.base_scope.get(name).cloned())
     }
 
     fn bind(&mut self, name: &str, addr: Addr, ty: Ty) {
@@ -3284,10 +3442,7 @@ impl<'a> Unit<'a> {
                         self.build_struct(&layout, fields, source, params, *span)?;
                     self.bind(
                         &decl.name.name,
-                        Addr {
-                            cell: base,
-                            arena: self.body_arena(),
-                        },
+                        Addr::cell(base, self.body_arena()),
                         Ty::Struct(id),
                     );
                     return Ok(writes);
@@ -3315,12 +3470,9 @@ impl<'a> Unit<'a> {
                             .note("a struct is a place; declare it with `var`, or build it here"),
                     ));
                 }
-                let addr = Addr {
-                    cell: self.alloc_body_cell(),
-                    arena: self.body_arena(),
-                };
-                self.bind(&decl.name.name, addr, ty);
-                Ok(vec![self.init_cell(addr, value.expr)])
+                let addr = Addr::cell(self.alloc_body_cell(), self.body_arena());
+                self.bind(&decl.name.name, addr.clone(), ty);
+                Ok(vec![self.init_cell(&addr, value.expr)])
             }
             Stmt::Assign(assign) => {
                 let value = self.expr(&assign.value, source, params)?;
@@ -3505,12 +3657,9 @@ impl<'a> Unit<'a> {
                             .span(decl.name.span.len),
                     ));
                 }
-                let addr = Addr {
-                    cell: self.alloc_body_cell(),
-                    arena: self.body_arena(),
-                };
-                self.bind(&decl.name.name, addr, decl.ty);
-                Ok(vec![self.init_cell(addr, literal_expr(literal))])
+                let addr = Addr::cell(self.alloc_body_cell(), self.body_arena());
+                self.bind(&decl.name.name, addr.clone(), decl.ty);
+                Ok(vec![self.init_cell(&addr, literal_expr(literal))])
             }
         }
     }
@@ -4020,16 +4169,25 @@ impl<'a> Unit<'a> {
                     .note("a list is not a value; read an item with `name[i]`, or use a method such as `name.len()`"),
             ));
         }
-        let expr = match self.globals.scalar_cell(&name) {
-            Some(cell) => read_bool(ty, gcell_read(cell)),
-            // A target-level `var` is in the base scope, so a scalar that is not
-            // project-wide is always found by `lookup_scope` above.
-            None => match self.locals.iter().find(|v| v.name == name) {
-                Some(var) => read_bool(ty, cell_read(var.cell)),
-                None => return Err(self.unknown_name(&name, span, source)),
-            },
-        };
-        Ok(Typed { expr, ty, span })
+        // A project-wide scalar: a cell of `_gvm`, or the Scratch variable a
+        // `@scratch` declaration asked for.
+        if let Some((addr, ty)) = self.globals.scalar_addr(&name) {
+            return Ok(Typed {
+                expr: read_bool(ty, addr.read()),
+                ty,
+                span,
+            });
+        }
+        // A target-level `var` is in the base scope, so a scalar that is not
+        // project-wide is always found by `lookup_scope` above.
+        match self.locals.iter().find(|v| v.name == name) {
+            Some(var) => Ok(Typed {
+                expr: read_bool(ty, var.addr().read()),
+                ty,
+                span,
+            }),
+            None => Err(self.unknown_name(&name, span, source)),
+        }
     }
 
     fn unknown_name(&self, name: &str, span: Span, source: &Source) -> Error {
@@ -5032,15 +5190,8 @@ impl<'a> Unit<'a> {
                 if let Some(binding) = self.lookup_scope(name) {
                     return Ok((binding.addr, binding.ty));
                 }
-                if let Some(cell) = self.globals.scalar_cell(name) {
-                    let ty = self.globals.var(name).map_or(Ty::Num, |v| v.ty);
-                    return Ok((
-                        Addr {
-                            cell,
-                            arena: Arena::Global,
-                        },
-                        ty,
-                    ));
+                if let Some((addr, ty)) = self.globals.scalar_addr(name) {
+                    return Ok((addr, ty));
                 }
                 Err(self.unknown_name(name, path.span, source))
             }
@@ -5076,7 +5227,18 @@ impl<'a> Unit<'a> {
                     }
                     return Err(error);
                 };
-                Ok((addr.offset(field.offset), field.ty))
+                let Some(field_addr) = addr.offset(field.offset) else {
+                    // A field offset is a cell of an arena, and a Scratch
+                    // variable is one cell with no fields, so this cannot be
+                    // reached: `struct_of` above already refused a scalar.
+                    return Err(Error::new(
+                        source
+                            .error(span.pos, "a struct field needs a cell of an arena")
+                            .span(span.len.max(1))
+                            .note("this is a bug in raven"),
+                    ));
+                };
+                Ok((field_addr, field.ty))
             }
             _ => Err(Error::new(
                 source
@@ -5114,14 +5276,25 @@ impl<'a> Unit<'a> {
         self.place(&expr, source)
     }
 
-    /// Write a value into the place an assignment target names.
-    /// Whether `name` has a `watch`, and therefore a visible mirror to keep in
-    /// step with every write to its cell.
+    /// Whether `name` has a `watch`, and therefore a visible monitor.
     fn watched(&self, name: &str) -> bool {
         self.watches.contains(name) || self.globals.watches.contains(name)
     }
 
+    /// Whether `name`'s storage is Scratch's own.
+    ///
+    /// A `@scratch` name is already the variable a `watch` would otherwise
+    /// mirror, so a write to it must not also set a mirror to itself.
+    fn is_scratch(&self, name: &str) -> bool {
+        self.locals.iter().any(|v| v.name == name && v.scratch)
+            || self.globals.var(name).is_some_and(|v| v.scratch)
+    }
+
+    /// The mirror a `watch` asked for, when the cell a write went to needs one.
     fn watch_write(&self, name: &str, value: &rasm::Expr) -> Option<rasm::Stmt> {
+        if self.is_scratch(name) {
+            return None;
+        }
         self.watched(name).then(|| {
             mk_stmt(
                 "data_setvariableto",
@@ -5353,27 +5526,18 @@ impl<'a> Unit<'a> {
                     out.extend(self.watch_write(&name, &binding.addr.read()));
                     return Ok(out);
                 }
-                if let Some(cell) = self.globals.scalar_cell(&name) {
-                    let ty = self.globals.var(&name).map_or(Ty::Num, |v| v.ty);
+                if let Some((addr, ty)) = self.globals.scalar_addr(&name) {
                     expect(&value, ty, &format!("`{name}`"), source)?;
-                    let mut out = vec![Addr {
-                        cell,
-                        arena: Arena::Global,
-                    }
-                    .write(value.expr.clone())];
-                    let mirror = Addr {
-                        cell,
-                        arena: Arena::Global,
-                    };
-                    out.extend(self.watch_write(&name, &mirror.read()));
+                    let mut out = vec![addr.write(value.expr.clone())];
+                    out.extend(self.watch_write(&name, &addr.read()));
                     return Ok(out);
                 }
                 let expected = self.variable_ty(&name, source, target.name.span)?;
                 expect(&value, expected, &format!("`{name}`"), source)?;
-                Ok(vec![Addr {
-                    cell: self.cell_of(&name, source, target.name.span)?,
-                    arena: Arena::Local,
-                }
+                Ok(vec![Addr::cell(
+                    self.cell_of(&name, source, target.name.span)?,
+                    Arena::Local,
+                )
                 .write(value.expr)])
             }
             [ast::Accessor::Index(index)] => {
@@ -5422,22 +5586,12 @@ impl<'a> Unit<'a> {
             [] => {
                 let (addr, ty) = if let Some(binding) = self.lookup_scope(&name) {
                     (binding.addr, binding.ty)
-                } else if let Some(cell) = self.globals.scalar_cell(&name) {
-                    let ty = self.globals.var(&name).map_or(Ty::Num, |v| v.ty);
-                    (
-                        Addr {
-                            cell,
-                            arena: Arena::Global,
-                        },
-                        ty,
-                    )
+                } else if let Some(pair) = self.globals.scalar_addr(&name) {
+                    pair
                 } else {
                     let ty = self.variable_ty(&name, source, target.name.span)?;
                     (
-                        Addr {
-                            cell: self.cell_of(&name, source, target.name.span)?,
-                            arena: Arena::Local,
-                        },
+                        Addr::cell(self.cell_of(&name, source, target.name.span)?, Arena::Local),
                         ty,
                     )
                 };
@@ -6207,6 +6361,9 @@ fn subst_stmt(
                 name: subst_ident(&decl.name, subs, renames),
                 ty: decl.ty,
                 init: decl.init.clone(),
+                // A statement `var` is a hygienic temporary, so it has no
+                // decorators to carry through an expansion.
+                decorators: Vec::new(),
                 span: decl.span,
             })]
         }

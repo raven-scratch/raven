@@ -243,6 +243,26 @@ cargo run -p raven -- build -m examples/raven/case/raven.toml --debug
 node tools/validate-sb3.js examples/raven/case/dist/case.sb3 --steps 300
 ```
 
+`examples/raven/rv32ima` is the fourth, and the one to read when a program has to
+be something outside it rather than something of its own: a port of the Scratch
+project that runs [mini-rv32ima](https://github.com/cnlohr/mini-rv32ima), the 32
+bit RISC-V hart with no MMU, with the terminal redrawn by `lib/penfont`. It runs
+three guests from two places — `baremetal.bin` and a Linux 6.1.14 image from
+[`bjoernQ/mini-rv32ima-rs`](https://github.com/bjoernQ/mini-rv32ima-rs), and the
+Linux image the Scratch project itself carries, cut out of its 162 MB
+`project.json` — one `.sb3` each, and `tools/check.mjs` boots all three in a real
+Scratch VM and reads the login prompt off the screen. [Read its
+README](examples/raven/rv32ima/README.md)
+for the four places it follows the Rust rather than the Scratch project, and for
+the two it does not.
+
+```sh
+git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
+node examples/raven/rv32ima/tools/build.mjs
+SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
+  node examples/raven/rv32ima/tools/check.mjs
+```
+
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
 vanilla Scratch 3 project, a 40,000-glyph pen-drawn Chinese engine. It is
 raven-asm, not raven, and it is the example to read when a reversal has to encode

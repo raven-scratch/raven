@@ -67,7 +67,8 @@ an existing name are both errors.
 ## Declarations
 
 ```text
-var_decl    = [ "pub" ] "var" ( IDENT | "$" IDENT ) ":" type "=" initializer ";"
+decorator   = "@" IDENT [ "(" [ expr { "," expr } ] ")" ]
+var_decl    = { decorator } [ "pub" ] "var" ( IDENT | "$" IDENT ) ":" type "=" initializer ";"
 initializer = literal | "[" [ literal { "," literal } ] "]" | struct_initializer
 struct_decl = [ "pub" ] "struct" IDENT "{" { IDENT ":" type [ "," ] } "}"
 const_decl  = [ "pub" ] "const" IDENT ":" type "=" literal ";"
@@ -147,6 +148,52 @@ sprite "Player" {
 A watched **list** needs no mirror: it already has a monitor, so `watch` only
 shows it. Anything watched has to be declared in the target that watches it (or
 be a `pub var`), which the checker enforces.
+
+### `@scratch`
+
+```text
+decorator = "@" IDENT [ "(" [ expr { "," expr } ] ")" ]
+```
+
+A decorator is written on the line above a declaration, one per line, and
+`@scratch` is the one raven has. It changes where the storage is: instead of a
+cell of `_vms` (or a run of one), the name is a **real Scratch variable or
+list**, reached by its own name.
+
+```rav
+sprite "Player" {
+    @scratch
+    var score: num = 0;                 // data_variable("score") / setvariableto
+
+    @scratch
+    var trail: list<num> = [1, 2];      // the Scratch list "trail" itself
+
+    on flag_clicked {
+        score += 1;                     // the same statement a cell would take
+        trail.push(score);
+    }
+}
+```
+
+Nothing else about the name changes. It has the same type, the same scope rules
+and the same statements; `raven expand` simply prints `data_variable` and
+`data_setvariableto` where a cell would print `data_itemoflist`. A `@scratch`
+`list<T>` — or `map<K, V>`, which is a container too — is a Scratch list, so
+`data_addtolist`, `data_deleteoflist` and the rest are what its methods lower to.
+
+That is what it is for: a value another Scratch program, an extension or the
+editor's own variable pane has to see, and a value that should keep Scratch's
+own length and item rules. It is the only way raven declares a Scratch variable
+a program can name, and it costs that declaration the memory system's
+guarantees — the value is no longer part of the finite, compiled-in arena.
+
+`@scratch` takes no arguments, may be written only on a `var`, and cannot be
+repeated. A `struct` cannot take it: a struct is a run of cells and a Scratch
+variable is one cell.
+
+`watch` and `@scratch` are independent and compose: `watch` decides whether the
+monitor starts visible, `@scratch` where the value is stored. Watching a
+`@scratch` name only shows its monitor; it does not add a mirror.
 
 ## Definitions
 
@@ -408,6 +455,6 @@ if c { 1 } else { 2 }      // no conditional expression: use an if statement
 break;                     // Scratch cannot leave a loop without ending the script
 var y: num = 0;            // inside a proc: use `let`, or declare it on the target
 a as num                   // no as: write num(a)
-#[warp]                    // no attributes: write proc … warp
+#[warp]                    // no general attributes: a decorator goes on a `var`, and only `@scratch` exists
 "score: " + score          // no string +: write f"score: {score}"
 ```

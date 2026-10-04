@@ -24,9 +24,9 @@ idea. It is worth reading its report card, because raven is defined by the answe
 | Hard panics instead of diagnostics | `panic!` on an unknown block | Diagnostics only; a panic is a bug report |
 | Every script laid out at `(0, 0)` | `// TODO: layout` | Deterministic grid layout, inherited from raven-asm |
 | List literals silently became `[10, ""]` | an unsupported construct was approximated | Unsupported constructs are errors |
-| No macros | none, only a fixed `#[…]` attribute set | The macro system is the language's centre |
-| No monitors | `monitors: Vec::new()` | A monitor for every declared list, emitted by raven-asm; a scalar has no monitor unless it is `watch`ed, which declares the one Scratch variable raven ever writes |
-| Every variable was a Scratch variable | variables came and went with the project's data model | No nameable Scratch variable exists: the name-at-run-time blocks are refused, and every value is a cell |
+| No macros | none, only a fixed `#[…]` attribute set | The macro system is the language's centre, with `@scratch` as the one decorator |
+| No monitors | `monitors: Vec::new()` | A monitor for every declared list, emitted by raven-asm; a scalar has no monitor unless it is `watch`ed, which declares a mirror, or `@scratch`ed, which makes it a real Scratch variable |
+| Every variable was a Scratch variable | variables came and went with the project's data model | No nameable Scratch variable exists unless the source wrote `@scratch`: the name-at-run-time blocks are refused, and every other value is a cell |
 
 ## Translation
 
