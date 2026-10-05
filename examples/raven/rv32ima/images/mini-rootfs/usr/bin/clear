@@ -1,0 +1,11 @@
+#!/bin/sh
+# `clear`, which this guest has no applet for.
+#
+# busybox 1.35 is built without one -- `clear`, `reset` and `tput` are all absent
+# from its applet table -- and there is no terminfo database to look a sequence
+# up in anyway. What the console does understand is ANSI, and this terminal
+# implements erase in display and cursor addressing, so the whole program is
+# those two sequences: `ESC [ 2 J` clears the page and `ESC [ H` puts the cursor
+# back in the top left corner. It is a script and not a binary because the
+# image's `/usr/bin/printf` is already there.
+printf '\033[2J\033[H'

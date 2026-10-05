@@ -8,7 +8,7 @@
 #
 # ## What the image is
 #
-# It is the reference image and four programs, and it boots to a root shell the
+# It is the reference image and five programs, and it boots to a root shell the
 # way an embedded Linux does: no login, no banner of ours, nothing running that
 # the rootfs did not come with. You get a prompt, and then you type.
 #
@@ -148,7 +148,7 @@ PYTHON
 fi
 
 # ---------------------------------------------------------------------------
-# 2. screenfetch and ed, which are files here and not downloads.
+# 2. screenfetch, clear and ed, which are files here and not downloads.
 # ---------------------------------------------------------------------------
 #
 # Upstream screenfetch is bash and uses `awk`; this guest has busybox's ash and
@@ -157,10 +157,15 @@ fi
 cp "$MINISRC/screenfetch" "$ROOTFS/usr/bin/screenfetch"
 chmod +x "$ROOTFS/usr/bin/screenfetch"
 
+# `clear` is two escape sequences, because the applet is not in this busybox and
+# there is no terminfo to ask: `mini-src/clear` is the whole program.
+cp "$MINISRC/clear" "$ROOTFS/usr/bin/clear"
+chmod +x "$ROOTFS/usr/bin/clear"
+
 # `ed` is a flat riscv binary and not a script: it is `usr/bin/ed` in the
 # Scratch project's own rootfs, and being flat it needs no library, no
 # interpreter and no emulation, which is what this kernel can load. It goes
-# where the rootfs' PATH already looks, next to the other three.
+# where the rootfs' PATH already looks, next to the other four.
 cp "$MINISRC/ed" "$ROOTFS/usr/bin/ed"
 chmod +x "$ROOTFS/usr/bin/ed"
 

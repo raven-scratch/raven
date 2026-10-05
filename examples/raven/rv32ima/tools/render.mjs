@@ -92,23 +92,32 @@ vm.greenFlag();
 
 const terminal = () => vm.runtime.targets.find((t) => t.getName() === 'Terminal');
 const cells = () => Object.values(terminal().variables).find((v) => v.name === 'glyphs').value;
+const cellVar = (n) => Object.values(terminal().variables).find((v) => v.name === n).value;
 const inkOf = (code) => (code > 31 && code < 127 ? String.fromCharCode(code) : code === 0 ? ' ' : '?');
 
 let frame = 0;
 const write = (tag) => {
-    const image = rasterise(renderer.lines);
+    // The stage the project was built for, which is the size its page is laid
+    // out for and therefore the size a picture of it has to be.
+    const image = rasterise(renderer.lines, [0, 0, 0], cellVar('stage_w'), cellVar('stage_h'));
     const file = path.join(root, 'dist', `${name}${tag}.png`);
     writePng(file, image);
     let inked = 0;
     for (let i = 0; i < image.pixels.length; i += 3) if (image.pixels[i] > 8) inked++;
+    // The page is the terminal's own grid, which is measured from the stage: a
+    // reader that assumes 64 by 20 is reading a different project's screen.
     const rows = [];
-    for (let r = 0; r < 20; r++) {
+    const cols = cellVar('cols');
+    const lines = cellVar('rows');
+    for (let r = 0; r < lines; r++) {
         let line = '';
-        for (let c = 0; c < 64; c++) line += inkOf(cells()[c * 20 + r]);
+        for (let c = 0; c < cols; c++) line += inkOf(cells()[c * lines + r]);
         rows.push(line.replace(/\s+$/, ''));
     }
     console.log(`${path.relative(process.cwd(), file)}  frame ${frame}  ` +
-        `${renderer.lines.length} pen lines, ${inked} lit pixels`);
+        `${renderer.lines.length} pen lines, ${inked} lit pixels; ` +
+        `stage ${cellVar('stage_w')}x${cellVar('stage_h')}, grid ${cols}x${lines}, ` +
+        `left ${cellVar('left')}, top ${cellVar('top')}`);
     console.log('--- the console, as the terminal means it');
     rows.forEach((row, i) => { if (row) console.log(String(i).padStart(2) + ' |' + row + '|'); });
 };

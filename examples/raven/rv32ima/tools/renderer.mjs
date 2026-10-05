@@ -45,8 +45,10 @@ export function recordingRenderer() {
         updateDrawableEffect() {},
         setDrawableOrder() {},
         getDrawableOrder() { return 0; },
+        // The stage is a build argument, not something the project measures, so
+        // nothing here has to know where the fence is.
         getFencedPositionOfDrawable(_id, position) { return [position[0], position[1]]; },
-        getBounds() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
+        getBounds() { return { left: -STAGE_W / 2, right: STAGE_W / 2, top: STAGE_H / 2, bottom: -STAGE_H / 2 }; },
         getBoundsForBubble() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
         pick() { return -1; },
         drawableTouching() { return false; },
@@ -74,9 +76,12 @@ export function recordingRenderer() {
 /// The stage, drawn from what the pen did: one buffer, `p_background` to start
 /// with, and every line a run of round discs the width of the pen.
 ///
-/// Stage coordinates are 480 by 360 with (0, 0) in the middle and y up.
-export function rasterise(lines, p_background = [0, 0, 0]) {
-    const W = 480, H = 360;
+/// Stage coordinates are `STAGE_W` by `STAGE_H` with (0, 0) in the middle and y
+/// up. The size is the one the project is *run* in and not always Scratch's: the
+/// terminal measures its stage and lays its page out from the answer, so a
+/// picture of a project that was resized -- TurboWarp's stage size -- has to be
+/// taken at that size too, or it is a picture of a different project.
+export function rasterise(lines, p_background = [0, 0, 0], W = 480, H = 360) {
     const pixels = new Uint8Array(W * H * 3);
     for (let i = 0; i < W * H; i++) {
         pixels[i * 3] = p_background[0];

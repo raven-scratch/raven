@@ -71,6 +71,8 @@ function recordingRenderer() {
         updateDrawableEffect() {},
         setDrawableOrder() {},
         getDrawableOrder() { return 0; },
+        // The stage is a build argument, not something the project measures, so
+        // nothing here has to know where the fence is.
         getFencedPositionOfDrawable(_id, position) { return [position[0], position[1]]; },
         getBounds() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
         getBoundsForBubble() { return { left: 0, right: 0, top: 0, bottom: 0 }; },

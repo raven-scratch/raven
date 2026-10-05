@@ -46,7 +46,7 @@ const IMAGES = [
     // borrows: the reference's kernel with a second initramfs on the end of it,
     // which the tree points the kernel at. `tools/mini-image.sh` builds both.
     { name: 'mini', file: 'images/mini_image', dtb: 'images/mini.dtb', manifest: 'raven-mini.toml',
-        description: 'a small Linux: coremark, duktape, screenfetch and ed on the reference kernel' }
+        description: 'a small Linux: coremark, duktape, screenfetch, ed and clear on the reference kernel' }
 ];
 
 // ---------------------------------------------------------------------------
@@ -206,15 +206,66 @@ function scratchImage() {
 }
 
 // ---------------------------------------------------------------------------
+// The stage
+// ---------------------------------------------------------------------------
+
+/// The stage the project is built for, and the grid that fits it.
+///
+/// Not measured at run time: a stage is what the project is *put* in, so it is a
+/// build argument. Scratch's own is 480 by 360; TurboWarp's can be anything, and
+/// the project built for one has to be run in a stage of that size, which is why
+/// the size is written into the project rather than looked for by it.
+///
+/// The grid is whole 7 by 16 cells inside the box the pen may be moved in, which
+/// is the stage less `PEN_MARGIN` at every edge -- the box `lib/penfont` clips
+/// at, so a cell laid out past it would be drawn and its ink would not.
+function stage(width, height) {
+    const PEN_MARGIN = 15;
+    const CELL_W = 7, CELL_H = 16;
+    const cols = Math.floor((width - PEN_MARGIN * 2) / CELL_W);
+    const rows = Math.floor((height - PEN_MARGIN * 2) / CELL_H);
+    const source = `// The stage this project was built for, written by tools/build.mjs. Do not
+// edit: \`--stage WxH\` decides it, and without one it is the 480 by 360 that
+// Scratch itself has. A TurboWarp stage is resized by hand to this size.
+//
+// The grid is whole 7 by 16 cells inside the box the pen may be moved in, which
+// is the stage less ${PEN_MARGIN} units at every edge: that is where \`lib/penfont\`
+// clips, so a cell past it is drawn and its ink is not.
+
+pub const SCREEN_W: num = ${width};
+pub const SCREEN_H: num = ${height};
+pub const SCREEN_COLS: num = ${cols};
+pub const SCREEN_ROWS: num = ${rows};
+pub const SCREEN_LEFT: num = ${-cols * CELL_W / 2};
+pub const SCREEN_TOP: num = ${rows * CELL_H / 2};
+`;
+    return { source, cols, rows };
+}
+
+// ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
 
-const wanted = process.argv.slice(2);
-const chosen = wanted.length > 0 ? IMAGES.filter((i) => wanted.includes(i.name)) : IMAGES;
-if (chosen.length === 0) {
-    console.error(`usage: node tools/build.mjs [${IMAGES.map((i) => i.name).join('|')}]`);
+const argv = process.argv.slice(2);
+const stageArg = argv.indexOf('--stage');
+if (stageArg >= 0 && !/^\d+x\d+$/i.test(argv[stageArg + 1] ?? '')) {
+    console.error('usage: --stage WxH, the stage this project is built for -- e.g. --stage 1280x900');
     process.exit(2);
 }
+const [stageW, stageH] = stageArg >= 0
+    ? argv[stageArg + 1].toLowerCase().split('x').map(Number)
+    : [480, 360];
+const wanted = argv.filter((a) => !a.startsWith('--') && !/^\d+x\d+$/i.test(a));
+const chosen = wanted.length > 0 ? IMAGES.filter((i) => wanted.includes(i.name)) : IMAGES;
+if (chosen.length === 0) {
+    console.error(`usage: node tools/build.mjs [${IMAGES.map((i) => i.name).join('|')}] [--stage WxH]`);
+    process.exit(2);
+}
+
+const screen = stage(stageW, stageH);
+write('src/screen.rav', screen.source);
+console.log(`examples/raven/rv32ima/src/screen.rav  ${stageW}x${stageH} stage, ` +
+    `${screen.cols}x${screen.rows} cells`);
 
 const dtb = deviceTree();
 const generated = write('src/rv32/tables.rav', tables());

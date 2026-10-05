@@ -61,8 +61,6 @@ const budgetMs = (budgetArg >= 0 ? Number(args[budgetArg + 1]) : 240) * 1000;
 const showScreen = args.includes('--screen');
 const wanted = args.filter((a) => !a.startsWith('--') && !/^\d+$/.test(a));
 
-const COLS = 64;
-const ROWS = 20;
 
 /// A renderer that records what the pen did instead of drawing it.
 ///
@@ -101,6 +99,8 @@ function recordingRenderer() {
         updateDrawableEffect() {},
         setDrawableOrder() {},
         getDrawableOrder() { return 0; },
+        // The stage is a build argument, not something the project measures, so
+        // nothing here has to know where the fence is.
         getFencedPositionOfDrawable(_id, position) { return [position[0], position[1]]; },
         getBounds() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
         getBoundsForBubble() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
@@ -240,18 +240,24 @@ for (const image of chosen) {
         const v = bind(t, name);
         return v ? v.value : undefined;
     };
+    // The page is the terminal's own grid, which it measures from the stage it
+    // is run in -- 68 by 22 on Scratch's 480 by 360 -- and not the number this
+    // check used to assume. Its cell list is `col * rows + row`, so both have to
+    // come from the terminal or every cell is read from the wrong place.
+    const grid = () => [value(target('Terminal'), 'cols'), value(target('Terminal'), 'rows')];
     const screen = () => {
         const cells = value(target('Terminal'), 'glyphs');
-        const rows = [];
-        for (let r = 0; r < ROWS; r++) {
+        const [cols, rows] = grid();
+        const out = [];
+        for (let r = 0; r < rows; r++) {
             let line = '';
-            for (let c = 0; c < COLS; c++) {
-                const code = cells[c * ROWS + r];
+            for (let c = 0; c < cols; c++) {
+                const code = cells[c * rows + r];
                 line += code > 31 && code < 127 ? String.fromCharCode(code) : ' ';
             }
-            rows.push(line.replace(/\s+$/, ''));
+            out.push(line.replace(/\s+$/, ''));
         }
-        return rows;
+        return out;
     };
     const text = () => screen().join('\n');
 
@@ -289,6 +295,17 @@ for (const image of chosen) {
         const hatFrom = consoleInput().length;
         send('a');
         const fromHat = consoleInput().slice(hatFrom).filter((v) => v === 97);
+        // Shift and a letter, which is the half of the keyboard a key hat cannot
+        // see on its own: the VM lowercases what a key event reports, so the hat
+        // fires for `a` either way, and the machine has to be handed 65 because
+        // the shift key was down when it did.
+        const shiftFrom = consoleInput().length;
+        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: true });
+        for (let i = 0; i < 3; i++) runtime._step();
+        send('a');
+        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: false });
+        for (let i = 0; i < 3; i++) runtime._step();
+        const fromShift = consoleInput().slice(shiftFrom).filter((v) => v === 65);
         const pollFrom = consoleInput().length;
         send('Backspace');
         const fromPoll = consoleInput().slice(pollFrom).filter((v) => v === 127);
@@ -297,8 +314,10 @@ for (const image of chosen) {
         const polling = value(target('Input'), 'held')[0] === 1;
         runtime.ioDevices.keyboard.postData({ key: 'Backspace', isDown: false });
         for (let i = 0; i < 3; i++) runtime._step();
-        sent = `hat sent ${JSON.stringify(fromHat)}, poll sent ${JSON.stringify(fromPoll)}`;
+        sent = `hat sent ${JSON.stringify(fromHat)}, shift sent ${JSON.stringify(fromShift)}, ` +
+            `poll sent ${JSON.stringify(fromPoll)}`;
         checks.push(['a key hat reached the machine', fromHat.length === 1]);
+        checks.push(['shift and a key hat reached the machine as a capital', fromShift.length === 1]);
         checks.push(['the polled key reached the machine', fromPoll.length === 1]);
         checks.push(['the poll asked for the key', polling]);
     }
@@ -359,6 +378,14 @@ for (const image of chosen) {
     }
 
     const riscv = target('RISCV');
+    // The pen's *width* is invisible to everything that reads the cell buffer: a
+    // glyph drawn with the paper's stroke is a page of blobs and every text check
+    // still passes, which is exactly what happened when the paper was added. The
+    // page's strokes are 16 and a character's are 1 or 2, so anything in between
+    // is a glyph holding a pen it was never given.
+    const widths = [...new Set(renderer.lines.map((l) => l.pen))].sort((a, b) => a - b);
+    const mangled = widths.filter((w) => w > 2 && w < 16);
+    checks.push(['no glyph was drawn with the paper\'s pen', mangled.length === 0]);
     checks.push(['the machine executed', value(riscv, 'instruction_n') > 1000]);
     checks.push(['RAM reaches the device tree', value(riscv, 'ram').length >= 67107136 + 1536]);
     checks.push(['nothing threw', errors.length === 0]);
@@ -383,6 +410,14 @@ for (const image of chosen) {
         const xs = renderer.lines.flatMap((l) => [l.x0, l.x1]);
         const ys = renderer.lines.flatMap((l) => [l.y0, l.y1]);
         cursorBox = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+        // What the page was when the cursor was the only thing on it: a count of
+        // zero has several very different causes and none of them is visible in
+        // the number alone.
+        const [, rows] = grid();
+        console.log(`cursor    ${cursorLines} lines; blinking ${value(target('Terminal'), 'current_blinking')}, ` +
+            `hidden ${value(target('Terminal'), 'cursor_hidden')}, showing ${value(target('Terminal'), 'last_cursor_state')}, ` +
+            `at ${value(target('Terminal'), 'cursor_x')},${value(target('Terminal'), 'cursor_y')}, ` +
+            `rows ${rows}, pen lines before ${renderer.lines.length}, clears ${renderer.clears}`);
         checks.push(['the cursor is drawn as a glyph', cursorLines > 20]);
         checks.push(['the cursor covers a cell',
             cursorBox[1] - cursorBox[0] >= 6 && cursorBox[1] - cursorBox[0] <= 8 &&
@@ -420,7 +455,15 @@ for (const image of chosen) {
         // the screen rather than the terminal's variable.
         const cellInk = (col, row) => {
             const inks = value(terminal, 'fg');
-            return inks[col * ROWS + row];
+            const [, rows] = grid();
+            return inks[col * rows + row];
+        };
+        // What paper the cell was drawn on, which is the half of a cell that a
+        // picture is made of.
+        const cellPaper = (col, row) => {
+            const papers = value(terminal, 'bg');
+            const [, rows] = grid();
+            return papers[col * rows + row];
         };
         const A = (text) => [...text].map((c) => c.charCodeAt(0));
         if (image.colours) {
@@ -511,20 +554,23 @@ for (const image of chosen) {
                 return `${want}:${seen.ink}/${seen.cell}` +
                     `${seen.ok ? '' : ` FAILED (args "${seen.args}", is_escape ${seen.escapeState})`}`;
             });
-            // `48 ; ...` is the background and this terminal has none -- the page
-            // *is* the backdrop -- so its parameters are consumed and dropped.
-            // The check is that dropping them really does leave the ink alone.
+            // `48 ; ...` is the background: the same palette on the other side of
+            // the cell, and this terminal draws it -- a run of cells that share a
+            // paper colour is one stroke a row, under the characters. What it
+            // still must not do is move the *ink*, which is the half of this that
+            // used to be the whole of it.
             feed(escape(51, 50));               // green ink first
             const beforeBare48 = fg();
             const background = inCell(escape(...SGR_48_5, ...codes(196)), 10, '#00AA00');
-            const bgIgnored = background.ok && fg() === beforeBare48;
-            checks.push(['48;5;n is consumed and leaves the ink alone', bgIgnored]);
+            const paper = cellPaper(10, 0);
+            const bgOk = background.ok && fg() === beforeBare48 && paper === '#FF0000';
+            checks.push(['48;5;n colours the cell\'s paper and leaves the ink alone', bgOk]);
             console.log(`colours   green ${green}, after 0 ${afterZero}, ` +
                 `after bare m ${afterBare}, after 39 ${afterDefault}, ` +
                 `cell inks ${cell} then ${cellInk(1, 0)}`);
             console.log(`colours   38;5;n and 38;2;r;g;b wanted/current_fg/cell: ` +
                 `${extendedOk.join(', ')}; run holds ${runBytes} bytes`);
-            console.log(`colours   48;5;n ${bgIgnored ? 'ignored' : 'NOT ignored'} ` +
+            console.log(`colours   48;5;n ${bgOk ? `paper ${paper}` : 'NOT taken'} ` +
                 `(${background.ink} as ink, then fg ${fg()})`);
         }
         // Erasing. The parameterless `ESC [ J` is what a shell's line editor
@@ -546,8 +592,9 @@ for (const image of chosen) {
             const rowOf = (r) => {
                 const glyphs = value(terminal, 'glyphs');
                 let line = '';
-                for (let c = 0; c < COLS; c++) {
-                    const code = glyphs[c * ROWS + r];
+                const [cols, rows] = grid();
+                    for (let c = 0; c < cols; c++) {
+                        const code = glyphs[c * rows + r];
                     line += code > 31 && code < 127 ? String.fromCharCode(code) : ' ';
                 }
                 return line.replace(/\s+$/, '');
@@ -598,8 +645,9 @@ for (const image of chosen) {
             const atRow = (r) => {
                 const glyphs = value(terminal, 'glyphs');
                 let line = '';
-                for (let c = 0; c < COLS; c++) {
-                    const code = glyphs[c * ROWS + r];
+                const [cols, rows] = grid();
+                    for (let c = 0; c < cols; c++) {
+                        const code = glyphs[c * rows + r];
                     line += code > 31 && code < 127 ? String.fromCharCode(code) : ' ';
                 }
                 return line.replace(/\s+$/, '');
@@ -639,12 +687,20 @@ for (const image of chosen) {
             bind(terminal, 'cursor_y').value = 0;
             feed([27, 91, 74]);
             const left = renderer.lines.length;
+            // Two kinds of ink are on the paper: the page's own, a stroke a row at
+            // a cell's height, and the thin kind a character or the cursor is
+            // drawn with. The page was just erased, so every *thin* stroke left is
+            // the cursor and there must be no more of them than there were when
+            // the cursor was alone -- which is what says the page was drawn again
+            // rather than patched cell by cell.
+            const thinLeft = renderer.lines.filter((l) => l.pen <= 2).length;
+            const wideLeft = left - thinLeft;
             checks.push(['erasing the page clears the pen and draws it again',
-                renderer.clears === clears + 1 && left === cursorLines]);
+                renderer.clears === clears + 1 && thinLeft === cursorLines]);
             console.log(`erase     ESC[J then D -> ${JSON.stringify(toEnd)}, ` +
                 `ESC[2J then D -> ${JSON.stringify(whole)}, ` +
                 `${renderer.clears - clears} clear, ${left} strokes left on the paper ` +
-                `(the cursor is ${cursorLines})`);
+                `(${wideLeft} of them the paper, ${thinLeft} thin, the cursor is ${cursorLines})`);
 
             // `ESC [ K`, erase in line, which is what a line editor uses when it
             // rewrites a row: the row keeps whatever the new line covers and

@@ -21,6 +21,14 @@
 //
 // The poll is edge-triggered against `held`, so a key that is down for several
 // frames makes one byte, which is what a key hat does too.
+//
+// A letter's *case* is the third thing and is in neither list. Scratch lowercases
+// the key an event reports, so `A` and `a` are the same event by the time a hat
+// runs and `Key::A` cannot tell them apart; what is still down is the shift key,
+// which `key pressed?` answers for, so `key_event` reads it and sends 65 where it
+// would send 97. Nothing else needs the same treatment: every digit and symbol
+// has a key of its own above, and `!` is its own entry rather than shift and `1`.
+// Caps Lock is invisible to Scratch, and is the one thing this keyboard cannot do.
 
 use rv32::io;
 
@@ -45,6 +53,14 @@ sprite "Input" {
     ];
 
     proc key_event(p_code: num) warp {
+        // Shift and a letter, once, where every letter passes and nothing else
+        // does. `shift` is built rather than written for the reason `backspace`
+        // is below: `key pressed?`'s menu carries no modifiers, so the name has
+        // to reach the block as a value.
+        if p_code > 96 && p_code < 123 && sensing::key_pressed(operators::join("shift", "")) {
+            input_buffer.push(p_code - 32);
+            return;
+        }
         input_buffer.push(p_code);
     }
 

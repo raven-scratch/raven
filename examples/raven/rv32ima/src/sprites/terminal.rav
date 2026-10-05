@@ -57,6 +57,7 @@
 //     can make without taking something off the paper first.
 
 use penfont::engine;
+use screen;
 use rv32::io;
 use rv32::tables;
 
@@ -68,28 +69,48 @@ sprite "Terminal" {
     // The page
     // ------------------------------------------------------------------
     //
-    // 64 columns at 7 units and 20 rows at 16 is 448 by 320 of a stage the pen
-    // may only be moved inside 450 by 330 of, so the whole grid clears the
-    // fence with room at every edge. The em is 14: two columns to the em, so
-    // the 7 unit advance is what a monospace glyph asks for, and the baseline
-    // sits `BASE_DROP` under a cell's top -- enough for the font's descender
-    // and little enough that a capital is not clipped.
+    // The grid is a *build* decision and not a runtime one: `tools/build.mjs
+    // --stage WxH` writes `src/screen.rav` with the stage and the grid that fits
+    // it, and `lay_out` copies it in. Without the flag the stage is Scratch's own
+    // 480 by 360, which is 64 by 20 cells; a bigger stage is built for with the
+    // flag and then set by hand where the project is run, so that the two agree.
+    // A bigger stage means *more* cells rather than bigger ones, which is what a
+    // terminal does.
+    //
+    // The cell is fixed at 7 by 16 units: the em is 14, so two columns to the em
+    // is what a monospace glyph asks for, and the baseline sits `BASE_DROP` under
+    // a cell's top -- enough for the font's descender and little enough that a
+    // capital is not clipped. The font itself is scratched for one stage, though:
+    // `lib/penfont` clips every run at its own `PF_EDGE_X` and `PF_EDGE_Y`, which
+    // are the pen box of the 480 by 360 stage it was generated for, so a page
+    // built for a larger one draws its paper and its cells across the whole stage
+    // and its characters only inside that box.
 
-    const COLS: num = 64;
-    const ROWS: num = 20;
     const CELL_W: num = 7;
     const CELL_H: num = 16;
     const EM: num = 14;
-    const LEFT: num = -224;
-    const TOP: num = 160;
     const BASE_DROP: num = 12;
-    const CELLS: num = 1280;
+
+    /// How big the stage is, and the grid that fits in it. The declared values are
+    /// Scratch's own stage, so the page has a shape before `lay_out` runs and a
+    /// project whose `screen.rav` is missing is still a 64 by 20 terminal.
+    @scratch var stage_w: num = 480;
+    @scratch var stage_h: num = 360;
+    @scratch var cols: num = 64;
+    @scratch var rows: num = 20;
+    /// The top left cell's own corner, so the grid is centred on the stage.
+    @scratch var left: num = -224;
+    @scratch var top: num = 160;
 
     /// U+2588 FULL BLOCK, drawn as the cursor. It is a character like any
     /// other and goes through the same table, so the table has to carry it:
     /// the `latin` set is what `font2vm.py` is given and it includes the block
     /// elements.
     const BLOCK: str = "\u{2588}";
+
+    /// The paper a cell starts as: black, which is what the stage is, so a cell
+    /// that carries no colour of its own costs the page nothing.
+    const PAPER: str = "#000000";
 
     /// How many scan rows U+2588's ink covers -- the em's 48 and the leading's
     /// 15 under the baseline -- which is what the cursor is scaled by to become
@@ -113,6 +134,12 @@ sprite "Terminal" {
     @scratch var last_cursor_y: num = 0;
     @scratch var last_cursor_state: num = 0;
     @scratch var current_fg: str = "#FFFFFF";
+    /// The colour of the cell *behind* the character, which a full-screen program
+    /// uses as its picture: a block of the screen is a run of cells whose paper
+    /// is one colour, and the shade character on top of it is only texture. The
+    /// paper the page starts as is black -- `PAPER`, which a declaration may not
+    /// name because an initializer is a literal -- and that is the stage too.
+    @scratch var current_bg: str = "#000000";
     @scratch var current_weight: num = 1;
     @scratch var current_blinking: num = 1;
     @scratch var blink_offset: num = 0;
@@ -132,6 +159,7 @@ sprite "Terminal" {
     /// `ESC [ ? 1049 l` is the swap back.
     @scratch var alt_glyphs: list<num> = [];
     @scratch var alt_fg: list<str> = [];
+    @scratch var alt_bg: list<str> = [];
     @scratch var alt_weight: list<num> = [];
     @scratch var alt_cursor_x: num = 0;
     @scratch var alt_cursor_y: num = 0;
@@ -143,11 +171,12 @@ sprite "Terminal" {
     /// the pen draws over and there is no such thing as a partial redraw.
     @scratch var needs_redraw: num = 0;
 
-    /// The cells, one item to a byte of the screen: what character it is,
-    /// what colour it is drawn in, and whether it is bold. A blank cell is
-    /// code 0, which is under every printable character.
+    /// The cells, one item to a byte of the screen: what character it is, what
+    /// colour it is drawn in, what colour it is drawn *on*, and whether it is
+    /// bold. A blank cell is code 0, which is under every printable character.
     @scratch var glyphs: list<num> = [];
     @scratch var fg: list<str> = [];
+    @scratch var bg: list<str> = [];
     @scratch var weight: list<num> = [];
 
     /// The parameters of the escape sequence being read, one string each. Item
@@ -160,7 +189,93 @@ sprite "Terminal" {
     // ------------------------------------------------------------------
 
     proc cells() -> num warp {
-        return COLS * ROWS;
+        return cols * rows;
+    }
+
+    /// The page laid out for the stage this project was *built* for.
+    ///
+    /// The stage is not something a Scratch project can measure without a fence
+    /// trick, and it does not have to be: it is fixed when the project is built.
+    /// `tools/build.mjs --stage WxH` writes `src/screen.rav` with the grid that
+    /// fits that stage -- 480 by 360, the one Scratch has, unless it is told
+    /// otherwise -- and this copies it into the page. A TurboWarp stage is then
+    /// resized by hand to the size the project was built for, and the two agree
+    /// without either of them looking.
+    ///
+    /// The grid is the whole cells that fit inside the box the pen may be moved
+    /// in, which is the stage less `PEN_MARGIN` at every edge: the font clips at
+    /// that box, so cells laid out past it are drawn and their ink is not. On
+    /// Scratch's own 480 by 360 that box is 450 by 330, which is 64 by 20 cells.
+    proc lay_out() warp {
+        stage_w = SCREEN_W;
+        stage_h = SCREEN_H;
+        cols = SCREEN_COLS;
+        rows = SCREEN_ROWS;
+        left = SCREEN_LEFT;
+        top = SCREEN_TOP;
+    }
+
+    /// The paper the page is drawn on: the whole stage, black.
+    ///
+    /// It is drawn rather than worn as a costume because a costume has the size
+    /// it was uploaded with and the stage may be any size at all, and it is
+    /// drawn rather than left to the backdrop for the same reason -- the pen
+    /// layer is the one thing that is always the size of the stage. One stroke a
+    /// row is what it costs, which is nothing next to the page's glyphs.
+    proc paint_paper() warp {
+        pen::set_pen_color_to_color(num(PAPER));
+        pen::set_pen_size_to(CELL_H);
+        let y: num = top + CELL_H * 1.5;
+        repeat rows + 1 {
+            motion::set_x(-stage_w / 2);
+            motion::set_y(y);
+            pen::pen_down();
+            motion::set_x(stage_w / 2);
+            pen::pen_up();
+            y -= CELL_H;
+        }
+    }
+
+    /// The middle of a row's band, which is where one stroke of `CELL_H` covers
+    /// that row exactly. `cell_y` is a *baseline* and not a centre.
+    proc row_y(p_row: num) -> num warp {
+        return top - p_row * CELL_H - CELL_H / 2;
+    }
+
+    /// The cells that are not the paper: one stroke per run of one colour in a
+    /// row, over the paper and under the characters.
+    ///
+    /// This is what a full-screen program draws with. It is a run per row and not
+    /// a block per cell because a block is the font's own FULL BLOCK, 63 runs of
+    /// it, and a screen of 8000 cells would be half a million strokes a frame --
+    /// where the runs a picture of that size actually has are a couple of
+    /// thousand. A run of the paper colour is skipped, so a page of text with no
+    /// colour on it costs nothing at all.
+    proc paint_cells() warp {
+        pen::set_pen_size_to(CELL_H);
+        let r: num = 0;
+        repeat rows {
+            let c: num = 0;
+            repeat_until c >= cols {
+                let i: num = cell_index(c, r);
+                let ink: str = bg[i];
+                if ink == PAPER { c += 1; }
+                else {
+                    let last: num = c;
+                    repeat_until last + 1 >= cols || bg[cell_index(last + 1, r)] != ink {
+                        last += 1;
+                    }
+                    pen::set_pen_color_to_color(num(ink));
+                    motion::set_x(left + c * CELL_W);
+                    motion::set_y(row_y(r));
+                    pen::pen_down();
+                    motion::set_x(left + (last + 1) * CELL_W);
+                    pen::pen_up();
+                    c = last + 1;
+                }
+            }
+            r += 1;
+        }
     }
 
     /// What a cell's code looks like on screen. The guest hands the console a
@@ -175,24 +290,32 @@ sprite "Terminal" {
     }
 
     proc cell_index(p_col: num, p_row: num) -> num warp {
-        return p_col * ROWS + p_row + 1;
+        return p_col * rows + p_row + 1;
     }
 
     proc cell_x(p_col: num) -> num warp {
-        return LEFT + p_col * CELL_W;
+        return left + p_col * CELL_W;
     }
 
     /// The baseline of a cell, which is what `ink_glyph` wants and not the top
     /// of the box.
     proc cell_y(p_row: num) -> num warp {
-        return TOP - p_row * CELL_H - BASE_DROP;
+        return top - p_row * CELL_H - BASE_DROP;
     }
 
     /// One cell's glyph, if the font has it.
     proc ink_cell(p_code: num, p_col: num, p_row: num, p_pen: num) warp {
         if p_code > 31 {
             let g: num = find_glyph(key_of(p_code));
-            if g > 0 { ink_glyph(g, cell_x(p_col), cell_y(p_row), EM / FONT_ROWS, p_pen); }
+            if g > 0 {
+                // `ink_glyph` is given the width, it does not set it: the pen is
+                // wherever the last thing to draw left it, and this page's paper
+                // is stroked at a whole cell's height. Without this line a glyph
+                // is drawn sixteen wide, which is a page of blobs -- and nothing
+                // that reads the cell buffer can see that. Only the picture can.
+                pen::set_pen_size_to(p_pen);
+                ink_glyph(g, cell_x(p_col), cell_y(p_row), EM / FONT_ROWS, p_pen);
+            }
         }
     }
 
@@ -240,22 +363,24 @@ sprite "Terminal" {
     /// each of them used to clear the pen and draw all 1280 cells again.
     proc scroll_up(p_n: num) warp {
         let r: num = 1;
-        repeat ROWS - p_n {
+        repeat rows - p_n {
             let c: num = 0;
-            repeat COLS {
+            repeat cols {
                 glyphs[cell_index(c, r - 1)] = glyphs[cell_index(c, r)];
                 fg[cell_index(c, r - 1)] = fg[cell_index(c, r)];
+                bg[cell_index(c, r - 1)] = bg[cell_index(c, r)];
                 weight[cell_index(c, r - 1)] = weight[cell_index(c, r)];
                 c += 1;
             }
             r += 1;
         }
-        r = ROWS - p_n;
+        r = rows - p_n;
         repeat p_n {
             let c: num = 0;
-            repeat COLS {
+            repeat cols {
                 glyphs[cell_index(c, r)] = 0;
                 fg[cell_index(c, r)] = current_fg;
+                bg[cell_index(c, r)] = current_bg;
                 weight[cell_index(c, r)] = 1;
                 c += 1;
             }
@@ -266,12 +391,13 @@ sprite "Terminal" {
     }
 
     proc scroll_down(p_n: num) warp {
-        let r: num = ROWS;
-        repeat ROWS - p_n {
+        let r: num = rows;
+        repeat rows - p_n {
             let c: num = 0;
-            repeat COLS {
+            repeat cols {
                 glyphs[cell_index(c, r - 1)] = glyphs[cell_index(c, r - 2)];
                 fg[cell_index(c, r - 1)] = fg[cell_index(c, r - 2)];
+                bg[cell_index(c, r - 1)] = bg[cell_index(c, r - 2)];
                 weight[cell_index(c, r - 1)] = weight[cell_index(c, r - 2)];
                 c += 1;
             }
@@ -280,9 +406,10 @@ sprite "Terminal" {
         r = 0;
         repeat p_n {
             let c: num = 0;
-            repeat COLS {
+            repeat cols {
                 glyphs[cell_index(c, r)] = 0;
                 fg[cell_index(c, r)] = current_fg;
+                bg[cell_index(c, r)] = current_bg;
                 weight[cell_index(c, r)] = 1;
                 c += 1;
             }
@@ -301,23 +428,29 @@ sprite "Terminal" {
     /// the console's output dropped the rest of whatever write it arrived in.
     proc clear_all() warp {
         pen::clear();
-        needs_redraw = 0;
+        // The paper is the pen's, so a cleared pen has no paper either: the next
+        // frame draws both again, which is why this is a redraw and not a no-op.
+        needs_redraw = 1;
         glyphs.clear();
         fg.clear();
+        bg.clear();
         weight.clear();
         repeat cells() {
             glyphs.push(0);
             fg.push("#FFFFFF");
+            bg.push(PAPER);
             weight.push(1);
         }
     }
 
     proc redraw_buffer() warp {
         pen::clear();
+        paint_paper();
+        paint_cells();
         let r: num = 0;
-        repeat ROWS {
+        repeat rows {
             let c: num = 0;
-            repeat COLS {
+            repeat cols {
                 let i: num = cell_index(c, r);
                 if glyphs[i] != 0 {
                     pen::set_pen_color_to_color(num(fg[i]));
@@ -337,17 +470,20 @@ sprite "Terminal" {
         if glyphs[i] == 0 { return; }
         glyphs[i] = 0;
         fg[i] = "#FFFFFF";
+        bg[i] = PAPER;
         weight[i] = 1;
         needs_redraw = 1;
     }
 
     proc reset_attributes() warp {
         current_fg = colors[8];
+        current_bg = PAPER;
         current_weight = 1;
         current_blinking = 1;
     }
 
     proc reset() warp {
+        lay_out();
         reset_attributes();
         cursor_x = 0;
         cursor_y = 0;
@@ -362,11 +498,11 @@ sprite "Terminal" {
     }
 
     proc check_bounds() warp {
-        if cursor_x > COLS - 1 { cursor_x = COLS - 1; }
+        if cursor_x > cols - 1 { cursor_x = cols - 1; }
         else {
             if cursor_x < 0 { cursor_x = 0; }
         }
-        if cursor_y > ROWS - 1 { cursor_y = ROWS - 1; }
+        if cursor_y > rows - 1 { cursor_y = rows - 1; }
         else {
             if cursor_y < 0 { cursor_y = 0; }
         }
@@ -446,12 +582,13 @@ sprite "Terminal" {
                         } else { ink = rgb(8 + (n - 232) * 10, 8 + (n - 232) * 10, 8 + (n - 232) * 10); }
                     }
                 }
-                if param == 38 { current_fg = ink; }
+                if param == 38 { current_fg = ink; } else { current_bg = ink; }
                 repeat 3 { escape_args.remove(1); }
                 return;
             }
             if num(escape_args[2]) == 2 {
                 if param == 38 { current_fg = rgb(num(escape_args[3]), num(escape_args[4]), num(escape_args[5])); }
+                else { current_bg = rgb(num(escape_args[3]), num(escape_args[4]), num(escape_args[5])); }
                 repeat 5 { escape_args.remove(1); }
                 return;
             }
@@ -471,6 +608,16 @@ sprite "Terminal" {
                             if param == 39 { current_fg = colors[8]; }
                             else {
                                 if param > 89 && param < 98 { current_fg = colors_bright[param - 89]; }
+                                else {
+                                    // 40 to 47 are the background and 49 is the
+                                    // paper: the same palette, the other side of
+                                    // the cell, and what a program that draws a
+                                    // picture uses as its picture.
+                                    if param > 39 && param < 48 { current_bg = colors[param - 39]; }
+                                    else {
+                                        if param == 49 { current_bg = PAPER; }
+                                    }
+                                }
                             }
                         }
                     }
@@ -617,8 +764,8 @@ sprite "Terminal" {
             // From here to the end.
             let x: num = cursor_x;
             let y: num = cursor_y;
-            repeat ROWS - cursor_y {
-                repeat COLS - cursor_x {
+            repeat rows - cursor_y {
+                repeat cols - cursor_x {
                     clear_cell(x, y);
                     x += 1;
                 }
@@ -632,7 +779,7 @@ sprite "Terminal" {
             let y: num = 0;
             repeat cursor_y {
                 let x: num = 0;
-                repeat COLS {
+                repeat cols {
                     clear_cell(x, y);
                     x += 1;
                 }
@@ -654,7 +801,7 @@ sprite "Terminal" {
         let mode: num = 0;
         if escape_args[1] != "" { mode = num(escape_args[1]); }
         let from: num = 0;
-        let to: num = COLS - 1;
+        let to: num = cols - 1;
         if mode == 0 { from = cursor_x; }
         if mode == 1 { to = cursor_x; }
         let x: num = from;
@@ -674,11 +821,13 @@ sprite "Terminal" {
         if in_alt_screen == 1 { return; }
         alt_glyphs.clear();
         alt_fg.clear();
+        alt_bg.clear();
         alt_weight.clear();
         let i: num = 1;
         repeat cells() {
             alt_glyphs.push(glyphs[i]);
             alt_fg.push(fg[i]);
+            alt_bg.push(bg[i]);
             alt_weight.push(weight[i]);
             i += 1;
         }
@@ -699,11 +848,13 @@ sprite "Terminal" {
         if in_alt_screen == 0 { return; }
         glyphs.clear();
         fg.clear();
+        bg.clear();
         weight.clear();
         let i: num = 1;
         repeat cells() {
             glyphs.push(alt_glyphs[i]);
             fg.push(alt_fg[i]);
+            bg.push(alt_bg[i]);
             weight.push(alt_weight[i]);
             i += 1;
         }
@@ -734,14 +885,15 @@ sprite "Terminal" {
             }
             glyphs[i] = p_code;
             fg[i] = current_fg;
+            bg[i] = current_bg;
             weight[i] = current_weight;
             cursor_x += 1;
-            if cursor_x > COLS - 1 {
+            if cursor_x > cols - 1 {
                 cursor_x = 0;
                 cursor_y += 1;
-                if cursor_y > ROWS - 1 {
+                if cursor_y > rows - 1 {
                     scroll_up(1);
-                    cursor_y = ROWS - 1;
+                    cursor_y = rows - 1;
                 }
             }
             return;
@@ -752,9 +904,9 @@ sprite "Terminal" {
         if p_code == 8 { cursor_x -= 1; check_bounds(); return; }
         if p_code == 10 {
             cursor_y += 1;
-            if cursor_y > ROWS - 1 {
+            if cursor_y > rows - 1 {
                 scroll_up(1);
-                cursor_y = ROWS - 1;
+                cursor_y = rows - 1;
             }
             return;
         }
