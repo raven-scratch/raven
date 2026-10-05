@@ -64,6 +64,7 @@ costume is all it needs to wear.
 | `glyph_page(g)` / `sheet_pages()` | which page a glyph is on, and how many there are |
 | `PF_EDGE_X`, `PF_EDGE_Y` | the box the pen may be moved inside |
 | `PF_LEAD` | baseline to baseline, in ems |
+| `PF_LIG_MAX` | how long a key `draw_text` looks for, which is the longest ligature the table carries |
 | `PF_COLS`, `PF_ROWS`, `PF_CELL`, `PF_STEP`, `PF_SHEET_LEFT`, `PF_SHEET_TOP`, `PF_SHEET_EM` | the sheet's geometry |
 | `FONT_ROWS`, `FONT_CAP` | the table's: scan rows to the em, and the capital's ink height in the same units |
 
@@ -98,6 +99,78 @@ missing glyph leaves a gap rather than a hole in the line.
 The text language stops there: `draw_text` draws the first face and nothing else.
 A second face or a different typography is a `find_glyph` and an `ink_glyph` of
 your own, which is what chess does — see **A second face** below.
+
+## Ligatures, which the font brings and the table carries
+
+A programming font draws `->`, `==` and `<=>` as one glyph each, which is what
+its `calt` feature is for, and a text font draws `fi` and `fl` the same way. It
+also draws things that are not arithmetic at all: Maple Mono turns `[ERROR]`,
+`[WARN]` and `[TODO]` into coloured labels, and `todo))` into one. A table built
+with `--ligatures` carries all of it: the key is the whole sequence, and what the
+font draws for that sequence — one glyph or several; Cascadia Code's `->` is a
+hyphen half and a greater half, and neither means anything alone — is composed
+into one run of ink at the pen positions the font gives each part. The advance is
+the width of the sequence rather than of any one glyph. `draw_text` then takes
+the longest key that begins where it is — `===` is its own key rather than `==`
+and then `=`, and `[ERROR]` beats `[` — and a table built without the flag simply
+has none of those keys and draws every character on its own.
+
+Nothing is written down in `font2vm.py` for this. The sequences are read out of
+the font's GSUB table: each rule names the glyphs it matches, that is a
+candidate, and the candidates are shaped and the ones that come back as a single
+inked glyph are the ligatures. A font that draws `-------` does it by extending
+the run it has already drawn, so the rules are read again with every ligature
+found so far standing for the characters it replaced, until a pass learns
+nothing. That is what makes a chain of rules come out as one key, and it is why
+the table carries what the font actually does, down to the oddities — Maple
+Mono's `>>` only ligates when something follows it, because that is what its own
+rules say.
+
+Which features carry ligatures is `--features`, and the default is the four a
+reader expects: `rlig`, `clig`, `liga`, `calt`. A font's stylistic sets and
+character variants are the same mechanism, so `--features calt,ss01,cv63` is how
+a project asks for that font's own alternatives in its text; the order is the
+order they are applied, and the last one to draw a sequence wins.
+
+`PF_LIG_MAX` in `engine.rav` is how long that search is allowed to be, and the
+generator reads the number out of the engine rather than keeping one of its own,
+so the longest key it writes is the longest key the reader looks for. The default
+16 covers a label like `[CRITICAL]`; a ligature longer than that is not carried,
+because a key nobody looks for would be a lie.
+
+The search is free on a table that has no ligatures at all, and cheap on one that
+has a few. The keys are sorted, so the key after a character is that character
+again exactly when some longer key begins with it; one comparison against the
+next key decides whether to look at all. A table with no ligatures never passes
+it, and neither does an ideograph or a space in a table that has them, so the
+lookahead runs only where a ligature could start. A project that wants the
+search gone entirely sets `PF_LIG_MAX` to 1.
+
+Ligatures are also the one thing `font2vm.py --stage` cannot hold against
+FreeType, because the PIL here has no shaper: it draws the characters a ligature
+stands for apart. That check excludes the ligature ink and says how much it
+excluded; `examples/raven/penfont/tools/check.mjs` is what drives the built
+project through a real Scratch VM and checks the ligatures there.
+
+## A variable font, and pinning it
+
+A variable font is one file with a weight, a width or a slant as an *axis*
+rather than as a family of files. `--instance wght=700` pins it: the tool asks
+`fontTools` for that instance and builds the table from the outlines it draws,
+so the project carries one weight and not the axis. `--axes` prints what the
+fonts have and gives up, named instances included, which is how to find out what
+to ask for:
+
+```sh
+python lib/penfont/font2vm.py --set maple --font MapleMono[wght].ttf --axes
+python lib/penfont/font2vm.py --project myproj --font MapleMono[wght].ttf \
+  --instance wght=700 --ligatures
+```
+
+An axis the font does not have is left alone, so a chain of a variable font and
+the static font behind it can take the same `--instance` and only the one it is
+meant for moves. `--stats` and `--stage` pin the file the same way in PIL, so
+the FreeType side of those checks draws the instance the tables were built from.
 
 ## The box, which is the part that bites
 
@@ -158,7 +231,11 @@ python lib/penfont/font2vm.py --preview OUT.png  just draw the page
 | `--font PATH`, `--face N` | a first font in place of the set's own |
 | `--fonts A.ttf,B.ttc:2` | the whole chain, which is also how to have exactly one font |
 | `--bold PATH[:FACE]` | a second face, keyed under `\b` |
+| `--instance TAG=VAL,…` | pin a variable font to a point on its axes |
+| `--axes` | print the fonts' axes and named instances, and write nothing |
 | `--charset a,b,c` | which glyph sets to take (default `all`) |
+| `--ligatures` | add the font's own ligatures, keyed by the sequence |
+| `--features TAG,…` | which OpenType features carry ligatures (default `rlig,clig,liga,calt`) |
 | `--list-charsets` | print them all, with the size this font gives each |
 | `--text "…"`, `--chars-file FILE` | characters of your own to add |
 | `--lay FILE` | the raven file holding your page's layout, for the three checks |
@@ -219,8 +296,8 @@ Bundles name several at once, which is what a project usually wants:
 Sizes are the *union*, not the sum: every CJK set carries the same punctuation,
 and what a reader wants to know is how big the table will be. The table is
 roughly 1.3 KB a glyph, so `basic` is about 400 KB and the whole Chinese
-inventory about 20 MB; the demo takes `chinese,japanese,korean,nf-dev`, which is
-11,587 glyphs and 15 MB.
+inventory about 20 MB; the demo takes `chinese,japanese,korean,nf-dev` and its
+own icons, which is 12,373 glyphs and 16 MB.
 
 Every icon family but one lives in the basic plane. `nf-md` is the one that does
 not, and that is where Scratch stops being free. A Scratch string is a sequence
@@ -269,6 +346,10 @@ into your project too.
   correction.
 * **One weight and one slope.** A bold or italic face is a second `--set`.
 * **No hinting.** The raster is what the outlines say at 48 rows to the em.
+* **No alternates and no contextual styling.** A font's stylistic sets (`ss01`,
+  `cv01`) and its localized forms are off unless `--features` asks for them, and
+  only the ligature features are read at all: `--ligatures` without a
+  `--features` carries `rlig`, `clig`, `liga` and `calt` and nothing else.
 
 ## Where the numbers are
 

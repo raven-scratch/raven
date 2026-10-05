@@ -24,7 +24,10 @@ sprite "Text" {
 
     /// The line being drawn, in the escape language the engine reads — `\c` for
     /// a capital, `\\` for a backslash, `\n` or a real newline for a break.
-    var text: str = "\\cThe quick brown fox\n简体中文：规范汉字\n繁體中文：常用國字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ① 󰒓 󰉋 󰈙 󰊤  ";
+    /// The last line is ligatures the font draws as one glyph each: `->`, `==>`,
+    /// `<=>`, `...` and the status label `[TODO]`. The engine draws the longest
+    /// key that starts where it is.
+    var text: str = "\\cThe quick brown fox\n简体中文：规范汉字\n繁體中文：常用國字\n한국어: 가나다라마바사\n記号: ←↑→↓ ∞ ★ ☆ ① 󰒓 󰉋 󰈙 󰊤  \n-> ==> <=> ... [TODO]";
 
     /// The em size in stage units, the ink, and how wide a line may get before
     /// it wraps. The wrap counts a glyph's whole advance, so no character is put
@@ -45,6 +48,8 @@ sprite "Text" {
         "한국어: 가나다라마바사 아자차카타파하 서울 부산 제주",
         "記号: ← ↑ → ↓ ⇒ ∞ ≠ ≤ ≥ ∑ ∏ √ ∫ ≈ ° ※ ★ ☆ ♠ ♥ ♦ ♣ ① ② ③ ⓐ ⓑ ㈠ ㈡",
         "󰒓 󰉋 󰈙 󰊤 󰌠 󰓎 󰄬 󰑣    ",
+        "\\cLigatures: -> <- --> <-- ==> <=> <==> != === !== => <= >= <> && || :: ... ??? /* */ <!--",
+        "\\cLabels: [TRACE] [DEBUG] [INFO] [WARN] [ERROR] [FATAL] [TODO] [FIXME] [NOTE] [HACK] [MARK]",
         "\\cA capital starts with \\c\\c, a backslash is \\\\, and \\n breaks the line."
     ];
 

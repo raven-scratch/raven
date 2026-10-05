@@ -5,13 +5,16 @@ the library itself: [read its README](../../../lib/penfont/README.md) to use it
 in a project of your own. What is here is the page around it — a stage, a mode
 switch and some keys — over the same engine every consumer gets.
 
-11,587 glyphs of English, digits, punctuation, symbols, simplified and
+12,373 glyphs of English, digits, punctuation, symbols, simplified and
 traditional Chinese, Japanese, Korean and the Nerd Font icons, each filled in
 with pen lines from tables the project carries in its own arena. No costumes, no
-stamps, and the project never sees a font file, an outline or a curve.
+stamps, and the project never sees a font file, an outline or a curve. 786 of
+them are ligatures the font draws as one run, so `->`, `==>` and `<!--` are one
+glyph each and `[ERROR]`, `[WARN]` and `[TODO]` are the coloured labels Maple
+Mono draws them with.
 
 ```
-src/penfont/font.rav      generated: 11,587 glyphs as 1,215,772 pen runs (15.0 MB)
+src/penfont/font.rav      generated: 12,373 glyphs as 1,302,988 pen runs (16.1 MB)
 src/penfont/engine.rav    the library, copied in — do not edit it here
 src/sprites/text.rav      the demo: the page layout, the two modes, the keys
 src/stage.rav             the paper
@@ -23,13 +26,13 @@ tools/check.mjs           runs the built project in a real Scratch VM and render
 # install the library, taking the glyph sets this page actually sets
 python lib/penfont/font2vm.py --project examples/raven/penfont \
   --charset chinese,japanese,korean,nf-dev \
-  --chars-file examples/raven/penfont/icons.txt
+  --chars-file examples/raven/penfont/icons.txt --ligatures
 python lib/penfont/font2vm.py --project examples/raven/penfont --list-charsets
 python lib/penfont/font2vm.py --project examples/raven/penfont --stats
 cargo run -p raven -- check -m examples/raven/penfont/raven.toml
 cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
 python lib/penfont/font2vm.py --project examples/raven/penfont \
-  --stage examples/raven/penfont/dist/page
+  --ligatures --stage examples/raven/penfont/dist/page
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
   node examples/raven/penfont/tools/check.mjs
 ```
@@ -42,9 +45,18 @@ checked against FreeType, so they are not the install.
 
 `--charset chinese,japanese,korean,nf-dev` is the point of the sets: the demo
 writes those three scripts, the symbols that go with them, and one icon family,
-and nothing else. The whole inventory is 35,592 glyphs and 41 MB; this is 11,587
-and 15. `--list-charsets` prints every set and bundle with the size this font
-gives it.
+and nothing else. The whole inventory is 35,592 glyphs and 41 MB; this is 12,373
+and 16, and 786 of those are the ligatures `--ligatures` adds.
+`--list-charsets` prints every set and bundle with the size this font gives it.
+
+`--ligatures` is the third thing the demo asks for: everything the font's
+ligature features do to a run, read out of its GSUB table and keyed by the whole
+sequence. That is the arrows and operators, the status labels, and the runs a
+font extends — not only the ones it draws with a single glyph, since Cascadia
+Code's `->` is two halves and Maple Mono's `[ERROR]` is one glyph with six
+characters blanked out. The page's last line is them, and `check.mjs` drives that
+line as it drives the rest — see the library's README for what a ligature key is
+and what `--features` can add.
 
 `icons.txt` is the other half of that: the demo draws eight Material Design
 Icons, which are outside the basic plane, and four Devicons, and those twelve
@@ -62,7 +74,7 @@ that the VM produced.
 | --- | --- | --- |
 | B | | turn between the two |
 | click the stage, or Space | type a line; it is drawn as you enter it | **find**: type a character and it turns to its page and rings it |
-| Enter | cycle the stock lines, one per script, and one of icons | back to the first page |
+| Enter | cycle the stock lines: one per script, one of icons, one of ligatures | back to the first page |
 | Up / Down | larger, smaller | ten pages at a time |
 | Left / Right | wrap earlier, wrap later | the next, the previous page |
 | 1 – 6 | the ink | the ink |
@@ -77,10 +89,10 @@ the block is pinned to the top-left of the stage and the first baseline sits 0.9
 ems under it. The library is given the baseline and does not care where it is.
 The stage is 480 by 360 and the pen may only be moved inside the library's
 `PF_EDGE_X` by `PF_EDGE_Y`, which is 225 by 165 either side of the middle, so the
-default page is five lines that draw as six rows: 330 units of box, 45 units of
-leading at the default size, and seven rows is the most that can ever fit. The
-icons row is the sixth and the last one that does — an eleventh glyph on either
-Chinese line is 448 units, the measure exactly, and that one wrapped.
+default page is six lines, and seven rows is the most that can ever fit: 330
+units of box and 45 units of leading at the default size. The ligature row is the
+sixth and the last one that does — an eleventh glyph on either Chinese line is
+448 units, the measure exactly, and that one wrapped.
 
 **The mode.** `mode` is 0 for the page of text and 1 for the sheet, and B turns
 between them. The library draws whichever it is asked for and keeps no state of
@@ -104,8 +116,9 @@ FreeType, and asks the question that has to be asked first — does the ink stay
 inside the box — and then whether the two pictures are the same:
 
 ```
-page: 77 glyphs, 14902 inked pixels at size 34
-page: ink x -223.5..181.4, y -104.8..146.5 in a box of +/-225 by +/-165
+page: 86 glyphs, 20239 inked pixels at size 34
+page: 5 of them ligatures, which the FreeType side below does not draw
+page: ink x -223.5..204.0, y -157.4..146.5 in a box of +/-225 by +/-165
 page: tables against FreeType, 1.000 of the pen's ink on the font's,
       1.000 of the font's on the pen's, within a pixel
 ```
@@ -127,11 +140,11 @@ it finds a character — the ring has to be round the cell that character is in,
 the page it is on, which is a page the sheet had to turn to get to.
 
 ```
-drawn       4172 lines at pen size 1, 0 stamps
-expected    4172 lines, scale 0.708
-stage       x -224..181, y -104..147, page overlap 1.000
-sheet       96 cells, 12866 strokes, x -217..195, y -139..149
-find        "中" at 1444, page 16
+drawn       4594 lines at pen size 1, 0 stamps
+expected    4594 lines, scale 0.708
+stage       x -224..204, y -157..147, page overlap 1.000
+sheet       96 cells, 17542 strokes, x -217..224, y -139..147
+find        "中" at 2230, page 24
 ```
 
 A page overlap of 1.000 is the whole chain agreeing: fontTools, the scanline

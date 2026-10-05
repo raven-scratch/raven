@@ -9,6 +9,10 @@ which is the raven module that reads what this writes.
     python lib/penfont/font2vm.py --project myproject --charset basic,icons
     python lib/penfont/font2vm.py --project myproject --font myfont.ttf --bold mybold.ttf
     python lib/penfont/font2vm.py --project myproject --text "Hello 世界"
+    python lib/penfont/font2vm.py --project myproject --ligatures
+    python lib/penfont/font2vm.py --project myproject --ligatures --features calt,ss01
+    python lib/penfont/font2vm.py --project myproject --font 'MapleMono[wght].ttf' --axes
+    python lib/penfont/font2vm.py --project myproject --font 'MapleMono[wght].ttf' --instance wght=700
 
 `--project` is the project to install into: `src/penfont` under it, and one run
 writes `font.rav` there and copies `engine.rav` beside it, so installing the
@@ -56,6 +60,21 @@ because that is what a project usually asks for. `--text` or `--chars-file` adds
 characters of your own. ASCII is always in, so a table always has a space, a
 digit and a full stop however narrow it is.
 
+Ligatures: `--ligatures` adds the font's own, read out of its GSUB table rather
+than from a list of sequences written here. A programming font draws `->`, `==`
+and `<=>` as one glyph each, and this puts what it draws in the table under the
+sequence as the key -- one glyph or several composed into one run, since
+Cascadia Code's `->` is two halves -- with the advance made the width of the
+whole sequence, so the reader only has to look for the longest key that starts
+where it is. `--features` chooses which features are read (the default is
+`rlig,clig,liga,calt`, and a font's `ss`/`cv` sets can be asked for), and
+`PF_LIG_MAX` in `engine.rav` is how long the search is allowed to be, which this
+tool reads from there so the two cannot disagree.
+
+Variable fonts: `--axes` prints what a font has, and `--instance wght=700` pins
+one to a point on its axes and builds from the static font that draws. An axis
+the font does not have is left alone, so a chain can take one specification.
+
 Case: Scratch compares two strings case-insensitively, so `A` and `a` are one
 string to the only lookup there is and a table cannot be keyed on the character.
 A capital is keyed as the two characters `\\c` and the lowercase letter, and the
@@ -93,6 +112,7 @@ import argparse
 import math
 import re
 import sys
+from itertools import product
 from pathlib import Path
 
 from fontTools.pens.basePen import BasePen
@@ -129,6 +149,17 @@ SETS = {
 REF_ROWS = 48  # scan rows to the em, and the units one row is
 TOL = 0.2  # how far a curve may leave its chord before it is split, in rows
 CAP = "\\c"
+# The features a ligature comes from, in the order they are applied: the ones a
+# script cannot do without, then the common and contextual ones. `calt` is where
+# a programming font keeps its arrows and operators, and `liga`/`clig` where a
+# text font keeps `fi` and `fl`. Discretionary ligatures (`dlig`) are off, which
+# is what a reader expects unless they ask.
+LIG_FEATURES = ("rlig", "clig", "liga", "calt")
+# The longest key the engine will look for, used when `engine.rav` cannot be
+# read for its own `PF_LIG_MAX`. A ligature longer than this is not carried: the
+# key would never be found, and a table that carries it would be lying about
+# what the reader draws.
+DEFAULT_LIG_MAX = 4
 # The stem a second face is keyed under. `\b` is the character the text language
 # would read as an escape, so a table with a bold face in it is a table whose
 # keys a caller can build without a convention of its own: the bold glyph for
@@ -402,6 +433,53 @@ def load_font(path: str, face: int):
         return TTFont(path, fontNumber=face, lazy=True)
 
 
+def instantiate(font, location: dict):
+    """A variable font pinned to a point on its axes, as the static font it draws.
+
+    A variable font is one file with a weight, a width and so on as axes rather
+    than as separate files, and `location` is what to set them to. An axis the
+    font does not have is left alone, and a font with no axes at all is handed
+    back unchanged, so a chain of a variable font and its fell-back companion
+    can take the same specification.
+    """
+    if not location or font.get("fvar") is None:
+        return font
+    from fontTools.varLib import instancer
+
+    tags = {a.axisTag for a in font["fvar"].axes}
+    here = {tag: value for tag, value in location.items() if tag in tags}
+    if not here:
+        return font
+    return instancer.instantiateVariableFont(font, here, inplace=False, updateFontNames=False)
+
+
+def variation_axes(font, location: dict):
+    """The axis values a source is pinned to, in `fvar` order, for PIL.
+
+    PIL opens the original file and pins it the same way, so the FreeType side
+    of `--stats` and `--stage` draws the instance the tables were built from.
+    """
+    if not location or font.get("fvar") is None:
+        return None
+    return [location.get(a.axisTag, a.defaultValue) for a in font["fvar"].axes]
+
+
+def describe_axes(font) -> None:
+    """An axis a line, and a named instance a line, of one variable font."""
+    name = font["name"].getDebugName(4) or font["name"].getDebugName(1) or "font"
+    fvar = font.get("fvar")
+    if fvar is None:
+        print(f"{name}: no axes")
+        return
+    print(f"{name}: " + ", ".join(
+        f"{a.axisTag} {a.minValue:g}..{a.maxValue:g} (default {a.defaultValue:g})"
+        for a in fvar.axes))
+    for inst in fvar.instances:
+        label = font["name"].getDebugName(inst.subfamilyNameID) or "?"
+        coords = ", ".join(f"{a.axisTag}={inst.coordinates[a.axisTag]:g}" for a in fvar.axes)
+        print(f"  {label}: {coords}")
+
+
 def inventory(cmaps, sources, only=None):
     """The characters to draw, keyed and sorted, and the census that found them."""
     def have(cp: int) -> bool:
@@ -533,11 +611,343 @@ def spans(contours, upem: int) -> list[tuple[int, int, int]]:
     return out
 
 
-class Glyph:
-    __slots__ = ("key", "char", "runs", "adv", "src")
+# --------------------------------------------------------------- ligatures --
+#
+# A ligature is a run of characters the font draws as one glyph: `->` in a
+# programming font, `fi` in a text one. It has no code point, so it is not in
+# the cmap and the only place it exists is the GSUB table, which is a small
+# substitution engine of its own. What is here is the part of that engine a
+# ligature needs -- single, ligature and chaining-context substitutions,
+# applied in the order the features list them.
+#
+# The sequences are not written down in this file. A contextual rule names the
+# glyphs it matches, so its coverage is a candidate sequence; the candidates are
+# shaped, and one that comes back as a single inked glyph with blanks around it
+# is a ligature. That is the font's own answer, rather than a list here that a
+# font could disagree with.
 
-    def __init__(self, key: str, char: str, runs, adv: int, src: int):
-        self.key, self.char, self.runs, self.adv, self.src = key, char, runs, adv, src
+
+def ligature_lookups(font, features=LIG_FEATURES):
+    """The GSUB lookups the given features are made of, in application order."""
+    gsub = font.get("GSUB")
+    if gsub is None:
+        return []
+    by_tag: dict[str, list[int]] = {}
+    for rec in gsub.table.FeatureList.FeatureRecord:
+        by_tag.setdefault(rec.FeatureTag, []).extend(rec.Feature.LookupListIndex)
+    out, seen = [], set()
+    for tag in features:
+        for li in by_tag.get(tag, []):
+            if li not in seen:
+                seen.add(li)
+                out.append(li)
+    return out
+
+
+def context_match(s, glyphs, pos):
+    """A chaining-context subtable's first matching rule, or None.
+
+    The answer is what the record list needs: which rules to apply, how many
+    glyphs of the input they consumed, and the buffer they apply to.
+    """
+    fmt = getattr(s, "Format", None)
+    if fmt == 3:
+        inp = [set(c.glyphs) for c in s.InputCoverage]
+        back = [set(c.glyphs) for c in (s.BacktrackCoverage or [])]
+        ahead = [set(c.glyphs) for c in (s.LookAheadCoverage or [])]
+        if any(not c for c in inp + back + ahead):
+            return None
+        if pos + len(inp) > len(glyphs) or pos < len(back):
+            return None
+        if not all(glyphs[pos + i] in inp[i] for i in range(len(inp))):
+            return None
+        if not all(glyphs[pos - 1 - i] in back[i] for i in range(len(back))):
+            return None
+        if pos + len(inp) + len(ahead) > len(glyphs):
+            return None
+        if not all(glyphs[pos + len(inp) + i] in ahead[i] for i in range(len(ahead))):
+            return None
+        return glyphs, len(inp), s.SubstLookupRecord
+    if fmt == 1 and hasattr(s, "ChainSubRuleSet"):
+        cov = s.Coverage.glyphs
+        if glyphs[pos] not in cov:
+            return None
+        idx = cov.index(glyphs[pos])
+        if idx >= len(s.ChainSubRuleSet) or not s.ChainSubRuleSet[idx]:
+            return None
+        for r in s.ChainSubRuleSet[idx].ChainSubRule:
+            back = list(r.Backtrack or [])
+            more = list(r.Input or [])
+            ahead = list(r.LookAhead or [])
+            if pos < len(back):
+                continue
+            if any(glyphs[pos - 1 - i] != back[i] for i in range(len(back))):
+                continue
+            if glyphs[pos + 1:pos + 1 + len(more)] != more:
+                continue
+            if glyphs[pos + 1 + len(more):pos + 1 + len(more) + len(ahead)] != ahead:
+                continue
+            return glyphs, 1 + len(more), r.SubstLookupRecord
+    return None
+
+
+def apply_lookup(font, li, glyphs, pos):
+    """Apply GSUB lookup `li` anchored at `pos` -> (glyphs, advance, matched).
+
+    A rule that matched but records nothing still answers `True`: in the real
+    engine the first matching rule at a position wins, and a guard rule is how a
+    font stops a shorter ligature from forming inside a longer one.
+    """
+    lookup = font["GSUB"].table.LookupList.Lookup[li]
+    typ = lookup.LookupType
+    if typ == 1:
+        for s in lookup.SubTable:
+            if glyphs[pos] in s.mapping:
+                return glyphs[:pos] + [s.mapping[glyphs[pos]]] + glyphs[pos + 1:], 1, True
+        return glyphs, 1, False
+    if typ == 4:
+        best = None
+        for s in lookup.SubTable:
+            for lig in s.ligatures.get(glyphs[pos], []):
+                comp = list(lig.Component)
+                if glyphs[pos + 1:pos + 1 + len(comp)] == comp:
+                    if best is None or len(comp) > len(best[1]):
+                        best = (lig.LigGlyph, comp)
+        if best:
+            return glyphs[:pos] + [best[0]] + glyphs[pos + 1 + len(best[1]):], 1 + len(best[1]), True
+        return glyphs, 1, False
+    if typ == 6:
+        for s in lookup.SubTable:
+            got = context_match(s, glyphs, pos)
+            if got is None:
+                continue
+            out, consumed, records = got
+            for rec in records:
+                out, _, _ = apply_lookup(font, rec.LookupListIndex, out, pos + rec.SequenceIndex)
+            return out, consumed, True
+    return glyphs, 1, False
+
+
+def shape(font, glyphs, lookups):
+    """Run the lookups, in order, over a glyph buffer and hand back what is left."""
+    for li in lookups:
+        if font["GSUB"].table.LookupList.Lookup[li].LookupType not in (1, 4, 6):
+            continue
+        pos = 0
+        while pos < len(glyphs):
+            glyphs, advance, _ = apply_lookup(font, li, glyphs, pos)
+            pos += max(1, advance)
+    return glyphs
+
+
+def combine(choices, cap):
+    """Every sequence a rule's positions can stand for, or nothing.
+
+    A position is a list of the strings its glyph can stand for -- one character
+    for a glyph with a code point, a whole sequence for a ligature already
+    found -- and a rule is a sequence of those, so the answer is their product.
+    A rule with no answer at some position is dropped: `SPC`, the blank a font
+    leaves where a ligature swallowed a character, is the usual one. A rule
+    whose product is enormous is dropped too, rather than explored.
+    """
+    if not choices or len(choices) > cap or any(not c for c in choices):
+        return set()
+    total = 1
+    for c in choices:
+        total *= len(c)
+    if total > 4096:
+        return set()
+    return {"".join(combo) for combo in product(*choices)}
+
+
+def glyph_choices(name, resolve):
+    """What one glyph stands for, or None for a blank or a component."""
+    got = resolve(name)
+    return sorted(got) if got else None
+
+
+def coverage_choices(coverage, resolve):
+    """What a coverage class stands for, or None if nothing in it does."""
+    out = set()
+    for g in coverage.glyphs:
+        got = resolve(g)
+        if got:
+            out.update(got)
+    return sorted(out) if out else None
+
+
+def ligature_candidates(font, lookups, resolve, cap, backtrack=False):
+    """The sequences the font's own rules could draw as one glyph.
+
+    Only a rule that substitutes something is a candidate. Its input is the
+    characters it matches and its lookahead the ones after, and its backtrack
+    the ones before, so the three together are the sequence it acts on and the
+    substitution lands on the last character of it. This over-generates on
+    purpose -- a candidate that does not shape to a ligature is dropped a moment
+    later -- because a font's rules overlap and the shaping is the only thing
+    that decides.
+
+    The backtrack is only read once the input alone has been tried, because the
+    characters it names have usually been substituted already by a shorter
+    ligature, which is what the round of `font_ligatures` that asks for it is
+    for; taking it in the first pass multiplies the candidates for nothing.
+    """
+    out = set()
+    table = font["GSUB"].table
+    for li in lookups:
+        lookup = table.LookupList.Lookup[li]
+        for s in lookup.SubTable:
+            if lookup.LookupType == 4:
+                for first, ligs in s.ligatures.items():
+                    for lig in ligs:
+                        names = [first] + list(lig.Component)
+                        choices = [glyph_choices(n, resolve) for n in names]
+                        if all(c is not None for c in choices):
+                            out |= combine(choices, cap)
+            elif lookup.LookupType == 6:
+                fmt = getattr(s, "Format", None)
+                if fmt == 3:
+                    if not s.SubstLookupRecord:
+                        continue
+                    coverages = (list(reversed(s.BacktrackCoverage or [])) if backtrack else []) \
+                        + list(s.InputCoverage) + list(s.LookAheadCoverage or [])
+                    choices = [coverage_choices(c, resolve) for c in coverages]
+                    if all(c is not None for c in choices):
+                        out |= combine(choices, cap)
+                elif fmt == 1 and hasattr(s, "ChainSubRuleSet"):
+                    cov = s.Coverage.glyphs
+                    for i, rules in enumerate(s.ChainSubRuleSet):
+                        if not rules or i >= len(cov):
+                            continue
+                        for r in rules.ChainSubRule:
+                            if not r.SubstLookupRecord:
+                                continue
+                            names = (list(reversed(r.Backtrack or [])) if backtrack else []) + [cov[i]] \
+                                + list(r.Input or []) + list(r.LookAhead or [])
+                            choices = [glyph_choices(n, resolve) for n in names]
+                            if all(c is not None for c in choices):
+                                out |= combine(choices, cap)
+    return out
+
+
+def detect_ligature(font, seq, cmap, no_ink, hmtx, lookups):
+    """What a sequence shapes to, or None: (glyphs, advance, inked).
+
+    A sequence is a ligature when shaping it changes it and something draws ink.
+    The font may do that as one glyph -- Maple Mono's `==` is one glyph with the
+    first character blanked -- or as several: Cascadia Code's `->` is a hyphen
+    half and a greater half, and neither stands for the whole run on its own.
+    `inked` is how many of the result carry ink, which is what says whether one
+    of them can be read back as the whole sequence.
+    """
+    base = [cmap.get(ord(ch)) for ch in seq]
+    if not all(base):
+        return None
+    out = shape(font, base, lookups)
+    if out == base:
+        return None
+    inked = [g for g in out if not no_ink(g)]
+    if not inked:
+        return None
+    return tuple(out), sum(hmtx[g][0] for g in out), inked
+
+
+def font_ligatures(font, cap, features=LIG_FEATURES):
+    """The font's ligatures: (key, glyph names, advance) each.
+
+    `key` is the lowercased sequence and `glyph names` the glyphs the font draws
+    it with, in order and each at the pen position the one before it leaves; the
+    caller composes them into the runs the pen draws. The advance is the width
+    of the whole sequence, in font units.
+
+    A ligature can be made of other ligatures -- a font that draws `-------`
+    extends the run it has already drawn -- so the rules are read again with
+    every ligature found so far standing for the characters it replaced, until a
+    pass learns nothing it did not know. That is what makes a chain of rules
+    come out as one sequence.
+    """
+    if font.get("GSUB") is None:
+        return []
+    cmap = font.getBestCmap()
+    rev: dict[str, str] = {}
+    for cp, name in cmap.items():
+        rev.setdefault(name, chr(cp))
+    gs = font.getGlyphSet()
+    hmtx = font["hmtx"]
+    inkless: dict[str, bool] = {}
+
+    def no_ink(name: str) -> bool:
+        if name not in inkless:
+            from fontTools.pens.boundsPen import BoundsPen
+
+            pen = BoundsPen(gs)
+            gs[name].draw(pen)
+            inkless[name] = not pen.bounds
+        return inkless[name]
+
+    lookups = ligature_lookups(font, features)
+    found: dict[str, tuple] = {}
+    known: dict[str, str] = {}
+
+    def resolve(name):
+        if name in rev:
+            return [rev[name]]
+        seq = known.get(name)
+        return [seq] if seq else None
+
+    for round_ in range(6):
+        learned = False
+        for seq in sorted(ligature_candidates(font, lookups, resolve, cap, backtrack=round_ > 0)):
+            # A backslash or a break cannot stand in the text language's key, so
+            # a ligature that needs one is not a key a reader could ever build.
+            if not 2 <= len(seq) <= cap or any(ch in "\\\n\r" for ch in seq):
+                continue
+            got = detect_ligature(font, seq, cmap, no_ink, hmtx, lookups)
+            if got is None:
+                continue
+            out, advance, inked = got
+            found.setdefault(seq.lower(), (out, advance))
+            # Only a glyph that draws the whole run on its own can stand for the
+            # characters of the sequence in a longer rule; a half of an arrow
+            # stands for half of it and is no use to the next round.
+            if len(inked) == 1 and inked[0] not in known:
+                known[inked[0]] = seq
+                learned = True
+        if not learned:
+            break
+    return [(key,) + found[key] for key in sorted(found)]
+
+
+def build_ligatures(font, cap, stem: str = "", src: int = 0,
+                    features=LIG_FEATURES) -> list["Glyph"]:
+    """The font's ligatures as table rows, keyed by the whole sequence.
+
+    The glyphs the font draws the sequence with are composed into one run of ink,
+    each at the pen position the one before it leaves, and the advance is the
+    width of the whole sequence rather than of any one glyph, so the reader
+    consumes every character the ligature stands for and moves the pen past all
+    of it.
+    """
+    upem = font["head"].unitsPerEm
+    hmtx = font["hmtx"]
+    tol = TOL * upem / REF_ROWS
+    glyphs = []
+    for key, names, advance in font_ligatures(font, cap, features):
+        contours, offset = [], 0
+        for name in names:
+            for c in decompose(font, name, tol):
+                contours.append([(x + offset, y) for x, y in c])
+            offset += hmtx[name][0]
+        glyphs.append(Glyph(stem + key, key, spans(contours, upem),
+                            round(advance * REF_ROWS / upem, 4), src, True))
+    return glyphs
+
+
+class Glyph:
+    __slots__ = ("key", "char", "runs", "adv", "src", "lig")
+
+    def __init__(self, key: str, char: str, runs, adv: int, src: int, lig: bool = False):
+        self.key, self.char, self.runs, self.adv, self.src, self.lig = key, char, runs, adv, src, lig
 
 
 def build(fonts, keys: list[str], stem: str = "", src_offset: int = 0) -> list[Glyph]:
@@ -638,6 +1048,12 @@ def emit(glyphs: list[Glyph], path: Path, name: str, cap: float) -> None:
         assert got == g.runs, f"{g.char!r} does not come back out of font_run"
 
     total = sum(counts)
+    ligs = sum(1 for g in glyphs if g.lig)
+    lig_note = ("//\n"
+                "// The ligatures are keyed by the whole sequence they stand for -- `->`,\n"
+                "// `==` -- and their runs are moved to where that sequence starts, so the\n"
+                "// reader finds one with the same search and draws it at the same origin.\n"
+                ) if ligs else ""
     body = f"""// {name}'s outlines, as the pen spans the engine draws them.
 // Generated by font2vm.py -- do not edit it by hand.
 //
@@ -650,7 +1066,7 @@ def emit(glyphs: list[Glyph], path: Path, name: str, cap: float) -> None:
 //
 // A capital's key is two characters, so the backslash that starts it is the
 // character the text reader treats as an escape; a literal backslash is `\\\\`.
-
+{lig_note}
 /// Scan rows to the em: what a text size is divided by to get the scale.
 pub const FONT_ROWS: num = {REF_ROWS};
 
@@ -730,9 +1146,9 @@ def shape_check(glyphs, sources, sample: str) -> int:
     as the pen would fill them, and once by FreeType through PIL, which knows
     nothing about this file. The overlap says whether they are the same shape.
     """
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
-    pil = [ImageFont.truetype(path, REF_ROWS, index=face) for path, face in sources]
+    pil = [pil_font(sources, i, REF_ROWS) for i in range(len(sources))]
     by_key = {g.char: g for g in glyphs}
     worst, total, scored = (1.0, ""), 0.0, 0
 
@@ -792,6 +1208,20 @@ def rav_decode(literal: str) -> str:
     return out
 
 
+def engine_lig_max(engine_path: Path) -> int:
+    """How far the engine looks for a ligature, read from the engine itself.
+
+    The generator reads this rather than holding a number of its own, so the
+    longest key it writes is the longest key the reader will look for.
+    """
+    try:
+        text = engine_path.read_text(encoding="utf-8")
+    except OSError:
+        return DEFAULT_LIG_MAX
+    m = re.search(r"pub const PF_LIG_MAX: num = (\d+);", text)
+    return int(m.group(1)) if m else DEFAULT_LIG_MAX
+
+
 def read_layout(engine_path: Path, lay_path: Path) -> dict:
     """What the project says the page is, read from the project.
 
@@ -819,6 +1249,7 @@ def read_layout(engine_path: Path, lay_path: Path) -> dict:
         "lead": num(engine, r"const PF_LEAD: num = ([\d.eE+-]+);", "PF_LEAD", engine_path.name),
         "edge_x": num(engine, r"const PF_EDGE_X: num = ([\d.eE+-]+);", "PF_EDGE_X", engine_path.name),
         "edge_y": num(engine, r"const PF_EDGE_Y: num = ([\d.eE+-]+);", "PF_EDGE_Y", engine_path.name),
+        "lig_max": engine_lig_max(engine_path),
     }
 
 
@@ -852,8 +1283,26 @@ def layout_page(glyphs, text: str, lay: dict):
             px, py = left, py - lead
         elif show:
             key = ("\\c" + c) if cap else c
+            g = None
+            # The longest ligature that starts here wins, which is why the
+            # candidates grow a character at a time and the last hit is kept:
+            # `===` is the three-character key, not `==` and then `=`.
+            if not cap and c != "\\" and lay.get("lig_max", 1) > 1:
+                run = ""
+                k = 0
+                while k < lay["lig_max"] and i + k < len(text):
+                    d = text[i + k]
+                    if d in "\\\n\r":
+                        break
+                    run += d
+                    k += 1
+                    if k > 1:
+                        hit = by_key.get(run.lower())
+                        if hit is not None and hit.lig:
+                            g, step = hit, k
             cap = False
-            g = by_key.get(key.lower())
+            if g is None:
+                g = by_key.get(key.lower())
             adv = g.adv * scale if g is not None else lay["size"] / 2
             if limit > 0 and px > left and px + adv > left + limit:
                 px, py = left, py - lead
@@ -905,17 +1354,27 @@ def render_tables(page, scale: float, pen: float) -> bytearray:
     return mask
 
 
+def pil_font(sources, src: int, size: float):
+    """A source as a PIL font at a size, on the axes the tables were built from."""
+    from PIL import ImageFont
+
+    path, index, axes = sources[src]
+    font = ImageFont.truetype(path, int(round(size)), index=index)
+    if axes:
+        font.set_variation_by_axes(axes)
+    return font
+
+
 def render_freetype(page, sources, size: float) -> bytearray:
     """The page as the font itself draws it, which shares no code with above."""
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
     cache: dict[tuple[int, int], object] = {}
 
     def face(src: int):
         key = (src, int(round(size)))
         if key not in cache:
-            path, index = sources[src]
-            cache[key] = ImageFont.truetype(path, int(round(size)), index=index)
+            cache[key] = pil_font(sources, src, size)
         return cache[key]
 
     img = Image.new("L", (STAGE_W, STAGE_H), 0)
@@ -974,10 +1433,16 @@ def stage_check(glyphs, sources, text: str, lay: dict, prefix: Path) -> int:
     nothing downstream can be right.
     """
     page, scale, pen = layout_page(glyphs, text, lay)
+    # A ligature cannot go through FreeType: PIL has no shaper here, so drawing
+    # the characters it stands for would draw them apart. The page's other ink
+    # is the comparison and the ligatures are reported instead, which is honest
+    # about what this check does and does not see.
+    plain = [e for e in page if not e[0].lig]
     ours = render_tables(page, scale, pen)
-    theirs = render_freetype(page, sources, lay["size"])
-    mine = covered(ours, theirs)
-    font_side = covered(theirs, ours)
+    theirs = render_freetype(plain, sources, lay["size"])
+    ours_plain = render_tables(plain, scale, pen)
+    mine = covered(ours_plain, theirs)
+    font_side = covered(theirs, ours_plain)
 
     # What the page asks of the pen, against the box Scratch will let it move
     # inside. This is the measurement that has to come first: a run past the edge
@@ -1000,6 +1465,9 @@ def stage_check(glyphs, sources, text: str, lay: dict, prefix: Path) -> int:
 
     ink = sum(1 for v in ours if v)
     print(f"  page: {len(page)} glyphs, {ink} inked pixels at size {lay['size']:g}")
+    if len(plain) != len(page):
+        print(f"  page: {len(page) - len(plain)} of them ligatures, which the "
+              f"FreeType side below does not draw")
     print(f"  page: ink x {min(xs):.1f}..{max(xs):.1f}, y {min(ys):.1f}..{max(ys):.1f} "
           f"in a box of +/-{lay['edge_x']:g} by +/-{lay['edge_y']:g}")
     print(f"  page: tables against FreeType, {mine:.3f} of the pen's ink on the "
@@ -1037,6 +1505,13 @@ def main() -> int:
                     help="the whole font chain, in place of the set's own")
     ap.add_argument("--font", help="a first font, in place of the set's own")
     ap.add_argument("--face", type=int, default=0)
+    ap.add_argument("--instance", metavar="TAG=VAL,...",
+                    help="a variable font pinned to a point on its axes, e.g. "
+                         "`wght=700`; an axis the font does not have is left "
+                         "alone, so a chain can take one specification")
+    ap.add_argument("--axes", action="store_true",
+                    help="print the axes and the named instances of the fonts, "
+                         "and write nothing")
     ap.add_argument("--bold", metavar="PATH[:FACE]",
                     help="a second face, keyed `\\b` and the ordinary key, so a "
                          "caller builds the key and the engine needs no change")
@@ -1049,6 +1524,15 @@ def main() -> int:
                     help="add these characters to the inventory")
     ap.add_argument("--chars-file", metavar="FILE",
                     help="add every character in this file to the inventory")
+    ap.add_argument("--ligatures", action="store_true",
+                    help="add the font's own ligatures: a key of several "
+                         "characters that one glyph draws, for `draw_text` to "
+                         "find the longest of")
+    ap.add_argument("--features", metavar="TAG,...", default=",".join(LIG_FEATURES),
+                    help="which OpenType features carry ligatures (default "
+                         "%(default)s); a project can ask for a font's own "
+                         "stylistic sets and character variants here too, and "
+                         "the order is the order they are applied in")
     ap.add_argument("--name", help="what to call the font in the generated header")
     ap.add_argument("--stats", action="store_true",
                     help="check a sample of glyphs against FreeType, and write nothing")
@@ -1061,6 +1545,15 @@ def main() -> int:
     args = ap.parse_args()
 
     charset = [c.strip() for c in args.charset.split(",") if c.strip()]
+    features = tuple(f.strip() for f in args.features.split(",") if f.strip())
+
+    location: dict[str, float] = {}
+    if args.instance:
+        for part in args.instance.split(","):
+            if "=" not in part:
+                raise SystemExit(f"--instance wants TAG=VALUE, not {part!r}")
+            tag, value = part.split("=", 1)
+            location[tag.strip()] = float(value)
 
     project = Path(args.project) if args.project else None
     out = Path(args.out) if args.out else (project / DEFAULT_OUT if project else DEFAULT_OUT)
@@ -1087,8 +1580,18 @@ def main() -> int:
 
     fonts, sources = [], []
     for path, face in chain:
-        sources.append((path, face))
-        fonts.append(load_font(path, face))
+        font = load_font(path, face)
+        # The axes are read before the instance is taken: an instanced font is
+        # a static one and no longer says what it was pinned to, and the PIL
+        # side of the checks needs to pin the file the same way.
+        sources.append((path, face, variation_axes(font, location)))
+        fonts.append(font)
+    if args.axes:
+        for font in fonts:
+            describe_axes(font)
+        return 0
+    if location:
+        fonts = [instantiate(font, location) for font in fonts]
     cmaps = [f.getBestCmap() for f in fonts]
     registry = GLYPH_SETS
     if args.list_charsets:
@@ -1112,9 +1615,23 @@ def main() -> int:
         m = re.fullmatch(r"(.*):(\d+)", args.bold.strip())
         bold_path, bold_face = (m.group(1), int(m.group(2))) if m else (args.bold.strip(), 0)
         bold = load_font(bold_path, bold_face)
-        sources += [(bold_path, bold_face)]
+        sources += [(bold_path, bold_face, variation_axes(bold, location))]
+        if location:
+            bold = instantiate(bold, location)
         glyphs += build([bold], keys, BOLD, len(sources) - 1)
         glyphs.sort(key=lambda g: sort_key(g.key))
+
+    # The font's own ligatures, keyed by the sequence, sorted in with the rest so
+    # one search finds a character, a capital and a run of them the same way.
+    lig_count = 0
+    if args.ligatures:
+        lig_max = engine_lig_max(Path(args.engine))
+        ligs = build_ligatures(fonts[0], lig_max, "", 0, features)
+        if args.bold:
+            ligs += build_ligatures(bold, lig_max, BOLD, len(sources) - 1, features)
+        glyphs += ligs
+        glyphs.sort(key=lambda g: sort_key(g.key))
+        lig_count = len(ligs)
 
     runs = sum(len(g.runs) for g in glyphs)
     blank = sum(1 for g in glyphs if not g.runs)
@@ -1123,6 +1640,9 @@ def main() -> int:
     print("  " + ", ".join(f"{n} {c}" for n, c in census if c))
     if args.bold:
         print(f"  {len(keys)} of them again under {BOLD!r} for the bold face")
+    if lig_count:
+        longest = max(len(g.key) for g in glyphs if g.lig)
+        print(f"  {lig_count} ligatures, the longest {longest} characters")
     print(f"  {blank} glyphs draw nothing (spaces and the like)")
 
     self_check(glyphs)

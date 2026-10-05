@@ -145,6 +145,9 @@ const layout = {
   limit: Number(fromText(/var limit: num = ([\d.eE+-]+);/, "limit")),
   edgeX: Number(fromEngine(/const PF_EDGE_X: num = ([\d.eE+-]+);/, "PF_EDGE_X")),
   edgeY: Number(fromEngine(/const PF_EDGE_Y: num = ([\d.eE+-]+);/, "PF_EDGE_Y")),
+  // How far the engine looks for a ligature, so the walk below takes the same
+  // longest key it does.
+  ligMax: Number(fromEngine(/const PF_LIG_MAX: num = ([\d.eE+-]+);/, "PF_LIG_MAX")),
   // The sheet's geometry, so the grid this checks is the grid the project draws.
   cols: Number(fromEngine(/const PF_COLS: num = ([\d.eE+-]+);/, "PF_COLS")),
   rows: Number(fromEngine(/const PF_ROWS: num = ([\d.eE+-]+);/, "PF_ROWS")),
@@ -199,8 +202,24 @@ function walk(text) {
       }
     }
     if (show) {
-      const key = cap ? "\\c" + c : c;
+      const wasCap = cap;
       cap = false;
+      let key = wasCap ? "\\c" + c : c;
+      // The engine takes the longest ligature key that starts here, so this
+      // does too: the candidates grow a character at a time and the last hit
+      // is the one kept, which is how `===` beats `==` and then `=`.
+      if (!wasCap && step === 1 && c !== "\\" && layout.ligMax > 1) {
+        let run = "";
+        for (let k = 0; k < layout.ligMax && i + k < text.length; k += 1) {
+          const d = text[i + k];
+          if (d === "\\" || d === "\n" || d === "\r") break;
+          run += d;
+          if (k > 0 && indexOfKey(run) > 0) {
+            key = run;
+            step = k + 1;
+          }
+        }
+      }
       out.push({ key });
     }
     i += step;

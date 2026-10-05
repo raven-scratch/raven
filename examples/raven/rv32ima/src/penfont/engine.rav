@@ -44,6 +44,12 @@
 // `font_chars` is sorted by the lowercased key, which is the order Scratch's `<`
 // compares in, so `find_glyph` can binary-search it. It cannot use `index_of`:
 // that is a generated procedure that walks the list one item at a time.
+//
+// A table built with `font2vm.py --ligatures` also carries the font's own
+// ligatures, keyed by the whole sequence -- `->`, `==`, `<=>` -- and `draw_text`
+// takes the longest key that starts where it is, up to `PF_LIG_MAX` characters.
+// Nothing else in here has to know they exist: a ligature is a key like any
+// other, one that happens to be several characters long.
 
 use penfont::font;
 
@@ -69,6 +75,14 @@ pub const ASTRAL_HI: str = "\u{E000}";
 /// the tables carry reaches about 1.06 em above the baseline and 0.3 below, so a
 /// line that would be comfortable for Latin alone collides with a CJK one.
 pub const PF_LEAD: num = 1.32;
+
+/// The longest key `draw_text` looks for, which is the longest ligature the
+/// table may carry. A ligature is a key of several characters that one glyph
+/// draws: `->` and `==`, the status labels a programming font draws for
+/// `[ERROR]` and `[TODO]`, and the runs it extends, `---`. The generator reads
+/// this number out of this file and writes no key longer than it, so the two
+/// agree by construction; 1 is a table with no ligatures and searches for none.
+pub const PF_LIG_MAX: num = 16;
 
 /// What a sheet page holds, and where. Twelve across and eight down at these
 /// pitches is 432 by 238 inside a box 450 wide, which leaves the top and the
@@ -270,12 +284,47 @@ pub proc draw_text(pf_content: str, pf_x: num, pf_y: num, pf_em: num, pf_colour:
             }
         }
         if show == 1 {
+            // A ligature is a key of several characters that one glyph draws,
+            // and the longest key that starts here wins: `===` is its own key
+            // rather than `==` and then `=`. The search stops at an escape or a
+            // break, because neither can stand in a key, and at the end of the
+            // text.
+            //
+            // It also costs nothing for a character no key begins with, and a
+            // table with no ligatures has none: the keys are sorted, so the one
+            // after a character is that character again exactly when some
+            // longer key starts with it. A right single character is the whole
+            // test, and nothing is searched when it fails.
             let key: str = c;
+            let held: num = cap;
             if cap == 1 {
                 key = operators::join("\\c", c);
-                cap = 0;
             }
             let g: num = find_glyph(key);
+            if held == 0 && step == 1 && c != "\\" && g > 0 && g < font_chars.len() && PF_LIG_MAX > 1 {
+                if operators::letter_of(1, font_chars[g + 1]) == c {
+                    let run: str = "";
+                    let k: num = 0;
+                    let stop: num = 0;
+                    repeat_until k >= PF_LIG_MAX || stop == 1 {
+                        let d: str = operators::letter_of(i + k, pf_content);
+                        if d == "" || d == "\\" || d == "\n" || d == "\r" {
+                            stop = 1;
+                        } else {
+                            run = operators::join(run, d);
+                            k = k + 1;
+                            if k > 1 {
+                                let hit: num = find_glyph(run);
+                                if hit > 0 {
+                                    g = hit;
+                                    step = k;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cap = 0;
             let adv: num = pf_em / 2;
             if g > 0 {
                 adv = font_adv[g] * scale;
