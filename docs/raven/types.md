@@ -26,7 +26,7 @@ fits, how much storage it takes, and where it may be used at all.
 Where a cell lives depends on how long it has to live. A `let` in a script is on
 that script's **stack**, pushed when its declaration runs and popped when its
 block ends. A `var` — and a `proc`'s frame, which recursion shares — lives in the
-target's arena, which is declared with one item per cell. See
+project's one arena, which is declared with one item per cell. See
 [the memory system](/raven/design#the-stack-grows-and-shrinks).
 
 ## Booleans: stored as a value, converted on the way out
@@ -199,24 +199,30 @@ raven inherits Scratch's comparison semantics, and does not hide them:
 A variable is declared once, at target scope, with a type and an initial value:
 
 ```rav
-var score: num = 0;              // one cell of the target's `_vms`
+var score: num = 0;              // one cell of `_vms`, the project's one arena
 var trail: list<num> = [];       // a run of `_vms`, or of `_heap` if it grows
 var totals: map<str, num> = [];  // a run of alternating keys and values
-pub var best: num = 0;           // one cell of the project's `_gvm`
+pub var best: num = 0;           // the same arena, and importable by other files
+@scratch_sprite var slots: num = 0;   // one of this sprite's own Scratch variables
+@scratch_global pub var seen: num = 0; // one Scratch variable on the stage
 ```
 
-* Without `pub`, the variable belongs to the file's target. In a stage file that
-  makes it project-wide, because the stage's variables always are.
-* With `pub`, a **scalar** goes into `_gvm`, the arena the stage declares, so it
-  has exactly one cell for the whole project. A `pub` list or map is a run of
-  `_gvm`, or of `_gheap` when it grows.
-* There is **no shadowing between `var`s**: a sprite-local variable may not share
-  a name with a project-wide one. raven rejects it rather than quietly choosing.
+* Every `var` and `var list` is a cell or run of the project's one arena, declared
+  on the stage and shared by every target. There is no per-sprite arena: `item 7
+  of _vms` means the same thing in every target.
+* `pub` decides who may **name** the declaration — every file that imports it —
+  and never where the value lives. Without `pub`, a declaration is visible only in
+  the file that declares it, but it still has exactly one instance for the whole
+  project.
+* A module has no target, so it may only declare a `pub` `var`: a non-`pub`
+  declaration in a module could not belong to anyone.
+* There is **no shadowing between `var`s**: a file's own declaration may not share
+  a name with an imported one. raven rejects it rather than quietly choosing.
 * A `var` is never block-local. It is visible to every script in its target,
   exactly as in Scratch. For a value that belongs to one block, use `let`.
 * A `struct` belongs to the target that declares it. `pub struct` parses, but it
-  buys nothing: a struct is a frame in one target's arena and cannot be imported,
-  so it is only usable where it is declared.
+  buys nothing: a struct is a frame of cells and cannot be imported, so it is only
+  usable where it is declared.
 * A struct occupies at most **64 cells**, fields and nested fields together. The
   bound is what keeps a typo from declaring a frame that makes `project.json`
   enormous.
@@ -227,11 +233,15 @@ built-in monitor. The one Scratch variable a project can have is the mirror
 `watch` declares, which exists so a cell can be read on the stage — see
 [the design laws](/raven/design#_7-there-is-no-raw-variable-access-only-the-virtual-memory-system).
 
-The one way to put a `var` or a `list` in Scratch's own storage is the
-[`@scratch`](/raven/syntax#scratch) decorator. It changes where the value lives
-and nothing else: the name, its type and every statement that uses it are the
-same, and a `@scratch` list is a real Scratch list, so its methods lower to the
-list blocks. It is the escape hatch from law 7, for a value another Scratch
+The one way to put a `var` or a `list` in Scratch's own storage is a decorator,
+[`@scratch_global` or `@scratch_sprite`](/raven/syntax). Each names
+its scope rather than leaving it to be guessed: `@scratch_global` declares a real
+Scratch variable or list on the stage, and `@scratch_sprite` one of the declaring
+sprite's own — which a module cannot have, and which the stage cannot have either,
+because a stage's variables are project-wide. A decorator changes where the value
+lives and nothing else: the name, its type and every statement that uses it are the
+same, and a Scratch-storage list is a real Scratch list, so its methods lower to
+the list blocks. It is the escape hatch from law 7, for a value another Scratch
 program or the editor has to see, and it gives up the compiled-in arena for that
 declaration.
 

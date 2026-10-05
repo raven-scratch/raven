@@ -63,7 +63,7 @@ stage you cannot look at.
 And what it deliberately does **not** add is the more important list — no Scratch
 variables at all, no hidden state, no dynamic allocation, no short-circuit
 operators, no compile-time evaluation. Every `var`, `let`, `for` counter and
-return value is a cell of [`_vms` or `_gvm`](/raven/design#_7-there-is-no-raw-variable-access-only-the-virtual-memory-system),
+return value is a cell of [`_vms`](/raven/design#_7-there-is-no-raw-variable-access-only-the-virtual-memory-system),
 and every access to one is a block `raven expand` prints. Each refusal is argued
 in the [design laws](/raven/design).
 
@@ -119,8 +119,8 @@ it to disk as a `.rasm` tree you can feed straight back to `raven-asm`.
 | Custom blocks | `proc` with `str`, `num` and `bool` parameters, an optional result type, and `warp` |
 | Compile-time functions | `fn`, inlined at every call site, with declared parameter and return types |
 | Macros | Typed, hygienic, acyclic, and printable |
-| Variables | `var` is sprite-local or project-wide, declared once, never shadowed |
-| Locals | `let`, `var`, a `for` counter and a `struct` field are all cells — on the script's `_stackN` outside a `proc`, in `_vms` inside one, or `_gvm` for a `pub var` — with lexical shadowing and no nameable Scratch variable anywhere |
+| Variables | `var` is one cell of the project's arena, `pub` or not, declared once, never shadowed; a decorator can move it into Scratch instead |
+| Locals | `let`, `var`, a `for` counter and a `struct` field are all cells — on the script's `_stackN` outside a `proc`, in `_vms` inside one — with lexical shadowing and no nameable Scratch variable anywhere |
 | Structs | `struct Point { x: num, y: num }` — a fixed frame of cells, a *place* rather than a value, so a field is one block at a constant offset |
 | Maps | `map<K, V>` — a run of alternating keys and values, with `get`, `set`, `has`, `remove`, `len` and `clear` |
 | Lists | `list<T>` — an owned run of cells, indexed with `l[i]`, with `push`, `pop`, `insert`, `remove`, `len`, `at`, `first`, `last`, `text`, `contains`, `index_of`, `is_empty` and `clear` |

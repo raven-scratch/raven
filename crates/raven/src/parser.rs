@@ -339,7 +339,8 @@ impl Parser<'_> {
         Ok(item)
     }
 
-    /// `@scratch`, `@name(a, b)`: decorators on the line above a declaration.
+    /// `@scratch_global`, `@name(a, b)`: decorators on the line above a
+    /// declaration.
     ///
     /// One decorator per line, each an `@`, a name, and optional arguments. They
     /// are parsed here, where every item passes, so a decorator on something that
@@ -387,7 +388,7 @@ impl Parser<'_> {
                 format!("`@{}` is a decorator, and {what} cannot take one", first.name.name),
             )
             .note("a decorator goes on the line above a `var` declaration")
-            .note("the one decorator is `@scratch`, which stores a `var` or a `list` as a real Scratch variable or list"))
+            .note("the decorators are `@scratch_global` and `@scratch_sprite`, which store a `var` or a `list` as a real Scratch variable or list"))
     }
 
     fn target(&mut self) -> Result<TargetDecl> {

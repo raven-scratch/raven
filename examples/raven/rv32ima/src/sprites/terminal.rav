@@ -94,13 +94,13 @@ sprite "Terminal" {
     /// How big the stage is, and the grid that fits in it. The declared values are
     /// Scratch's own stage, so the page has a shape before `lay_out` runs and a
     /// project whose `screen.rav` is missing is still a 64 by 20 terminal.
-    @scratch var stage_w: num = 480;
-    @scratch var stage_h: num = 360;
-    @scratch var cols: num = 64;
-    @scratch var rows: num = 20;
+    @scratch_sprite var stage_w: num = 480;
+    @scratch_sprite var stage_h: num = 360;
+    @scratch_sprite var cols: num = 64;
+    @scratch_sprite var rows: num = 20;
     /// The top left cell's own corner, so the grid is centred on the stage.
-    @scratch var left: num = -224;
-    @scratch var top: num = 160;
+    @scratch_sprite var left: num = -224;
+    @scratch_sprite var top: num = 160;
 
     /// U+2588 FULL BLOCK, drawn as the cursor. It is a character like any
     /// other and goes through the same table, so the table has to carry it:
@@ -128,61 +128,61 @@ sprite "Terminal" {
     var colors: list<str> = ["#000000", "#AA0000", "#00AA00", "#AA5500", "#0000AA", "#AA00AA", "#00AAAA", "#FFFFFF"];
     var colors_bright: list<str> = ["#555555", "#FF5555", "#55FF55", "#FFFF55", "#5555FF", "#FF55FF", "#55FFFF", "#FFFFFF"];
 
-    @scratch var cursor_x: num = 0;
-    @scratch var cursor_y: num = 0;
-    @scratch var last_cursor_x: num = 0;
-    @scratch var last_cursor_y: num = 0;
-    @scratch var last_cursor_state: num = 0;
-    @scratch var current_fg: str = "#FFFFFF";
+    @scratch_sprite var cursor_x: num = 0;
+    @scratch_sprite var cursor_y: num = 0;
+    @scratch_sprite var last_cursor_x: num = 0;
+    @scratch_sprite var last_cursor_y: num = 0;
+    @scratch_sprite var last_cursor_state: num = 0;
+    @scratch_sprite var current_fg: str = "#FFFFFF";
     /// The colour of the cell *behind* the character, which a full-screen program
     /// uses as its picture: a block of the screen is a run of cells whose paper
     /// is one colour, and the shade character on top of it is only texture. The
     /// paper the page starts as is black -- `PAPER`, which a declaration may not
     /// name because an initializer is a literal -- and that is the stage too.
-    @scratch var current_bg: str = "#000000";
-    @scratch var current_weight: num = 1;
-    @scratch var current_blinking: num = 1;
-    @scratch var blink_offset: num = 0;
-    @scratch var is_escape: num = 0;
+    @scratch_sprite var current_bg: str = "#000000";
+    @scratch_sprite var current_weight: num = 1;
+    @scratch_sprite var current_blinking: num = 1;
+    @scratch_sprite var blink_offset: num = 0;
+    @scratch_sprite var is_escape: num = 0;
 
     /// Set by `ESC [ ?` and read once, at the sequence's last byte: the private
     /// form of a sequence is a different sequence, not a public one with an odd
     /// parameter.
-    @scratch var escape_private: num = 0;
+    @scratch_sprite var escape_private: num = 0;
 
     /// Whether `ESC [ ? 25 l` has taken the cursor away. A full-screen program
     /// draws its own cursor and does not want ours on top of it.
-    @scratch var cursor_hidden: num = 0;
+    @scratch_sprite var cursor_hidden: num = 0;
 
     /// The page the screen had before a program asked for one of its own, and
     /// where the cursor was when it asked. `ESC [ ? 1049 h` is the swap and
     /// `ESC [ ? 1049 l` is the swap back.
-    @scratch var alt_glyphs: list<num> = [];
-    @scratch var alt_fg: list<str> = [];
-    @scratch var alt_bg: list<str> = [];
-    @scratch var alt_weight: list<num> = [];
-    @scratch var alt_cursor_x: num = 0;
-    @scratch var alt_cursor_y: num = 0;
-    @scratch var in_alt_screen: num = 0;
+    @scratch_sprite var alt_glyphs: list<num> = [];
+    @scratch_sprite var alt_fg: list<str> = [];
+    @scratch_sprite var alt_bg: list<str> = [];
+    @scratch_sprite var alt_weight: list<num> = [];
+    @scratch_sprite var alt_cursor_x: num = 0;
+    @scratch_sprite var alt_cursor_y: num = 0;
+    @scratch_sprite var in_alt_screen: num = 0;
 
     /// Set by anything that changes the page and read once a frame: a character
     /// written over one already there, a cell erased, a scroll, the cursor
     /// moving or blinking off. The page is drawn whole when it is set, because
     /// the pen draws over and there is no such thing as a partial redraw.
-    @scratch var needs_redraw: num = 0;
+    @scratch_sprite var needs_redraw: num = 0;
 
     /// The cells, one item to a byte of the screen: what character it is, what
     /// colour it is drawn in, what colour it is drawn *on*, and whether it is
     /// bold. A blank cell is code 0, which is under every printable character.
-    @scratch var glyphs: list<num> = [];
-    @scratch var fg: list<str> = [];
-    @scratch var bg: list<str> = [];
-    @scratch var weight: list<num> = [];
+    @scratch_sprite var glyphs: list<num> = [];
+    @scratch_sprite var fg: list<str> = [];
+    @scratch_sprite var bg: list<str> = [];
+    @scratch_sprite var weight: list<num> = [];
 
     /// The parameters of the escape sequence being read, one string each. Item
     /// 1 is the numeric parameter the sequence opened with and the rest are
     /// what `;` separated.
-    @scratch var escape_args: list<str> = [];
+    @scratch_sprite var escape_args: list<str> = [];
 
     // ------------------------------------------------------------------
     // The cell grid

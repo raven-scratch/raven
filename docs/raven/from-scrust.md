@@ -19,14 +19,14 @@ idea. It is worth reading its report card, because raven is defined by the answe
 | --- | --- | --- |
 | Sugar lived in the compiler, in four separate passes | `match`, `join`, imports and `let` each rewrote the AST differently | One mechanism: [macros](/raven/macros), all of them printable |
 | `return` did not stop execution | the lowering set a return variable and fell through | `return` is `control_stop` on the custom block: it stops |
-| Every `let`, `return` and value-returning call silently became a list allocator and a script split | generated projects had `_RAM`, `_FREE_PAGES`, `_HIGH_WATER` in them, and nothing in the source said so | Two published arenas, `_vms` and `_gvm`, indexed by constants; every access is in `raven expand` |
+| Every `let`, `return` and value-returning call silently became a list allocator and a script split | generated projects had `_RAM`, `_FREE_PAGES`, `_HIGH_WATER` in them, and nothing in the source said so | One published arena, `_vms`, and its heap `_heap`, indexed by constants; every access is in `raven expand` |
 | No type checking | `var` was `Type::Unknown`; a string in a numeric slot was found at run time | [Declared types](/raven/types), checked across the program |
 | Hard panics instead of diagnostics | `panic!` on an unknown block | Diagnostics only; a panic is a bug report |
 | Every script laid out at `(0, 0)` | `// TODO: layout` | Deterministic grid layout, inherited from raven-asm |
 | List literals silently became `[10, ""]` | an unsupported construct was approximated | Unsupported constructs are errors |
-| No macros | none, only a fixed `#[…]` attribute set | The macro system is the language's centre, with `@scratch` as the one decorator |
-| No monitors | `monitors: Vec::new()` | A monitor for every declared list, emitted by raven-asm; a scalar has no monitor unless it is `watch`ed, which declares a mirror, or `@scratch`ed, which makes it a real Scratch variable |
-| Every variable was a Scratch variable | variables came and went with the project's data model | No nameable Scratch variable exists unless the source wrote `@scratch`: the name-at-run-time blocks are refused, and every other value is a cell |
+| No macros | none, only a fixed `#[…]` attribute set | The macro system is the language's centre, with `@scratch_global`/`@scratch_sprite` as the only decorators |
+| No monitors | `monitors: Vec::new()` | A monitor for every declared list, emitted by raven-asm; a scalar has no monitor unless it is `watch`ed, which declares a mirror, or decorated, which makes it a real Scratch variable |
+| Every variable was a Scratch variable | variables came and went with the project's data model | No nameable Scratch variable exists unless the source wrote a decorator: the name-at-run-time blocks are refused, and every other value is a cell |
 
 ## Translation
 
@@ -36,7 +36,7 @@ idea. It is worth reading its report card, because raven is defined by the answe
 | `use pkg::thing;` | `use lib::thing;` — see [modules](/raven/modules) |
 | `#[on_flag_clicked] fn main() { }` | `on flag_clicked { }` |
 | `#[warp] proc p() { }` | `proc p() warp { }` |
-| `public var SCORE = 0;` / `private var HP = 100;` | `pub var SCORE: num = 0;` (a cell of `_gvm`) / `var HP: num = 100;` (a cell of the target's `_vms`) |
+| `public var SCORE = 0;` / `private var HP = 100;` | `pub var SCORE: num = 0;` (one cell, importable) / `var HP: num = 100;` (one cell, visible in its own file) |
 | `x = 1` | `x = 1;` — a `var` is declared first; a `let` is not |
 | `let y = 10;` | `let y = 10;` — a mutable cell, scoped to its block |
 | `x += 1` | `x += 1;` |

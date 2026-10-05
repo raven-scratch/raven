@@ -50,11 +50,11 @@ pub proc square(size: num) warp {
 }
 ```
 
-A module has no target, so it cannot give one a sprite-local variable. A `pub var`
-is the state it *can* declare, because project-wide state belongs to the stage and
-there is only one stage. A sound or a non-`pub` `var` written in a module file is
-accepted and then ignored — nothing in the project changes — so those belong in
-the target file.
+A module has no target, so it cannot give one a sprite-local Scratch variable. A
+`pub var` is the state it *can* declare, and the declaration is a cell of the
+project's one arena. A sound, a non-`pub` `var`, or a `@scratch_sprite` `var`
+written in a module file is an error rather than a declaration nothing can name or
+nothing can store, so those belong in the target file.
 
 A **costume** is the one thing a module declares that a target really wears: every
 target that `use`s the module gets its costumes, after the target's own, which is
@@ -100,7 +100,7 @@ about Scratch rather than convenient.
 | `fn` | the definition, inlined at each call site | nothing, ever |
 | `const` | the literal | nothing, ever |
 | `proc` | **a copy of the custom block, in that target** | one custom block per importing target |
-| `pub var` / `pub var list` | the shared stage variable | one variable, once, for the project |
+| `pub var` / `pub var list` | the shared cell or run of the one project arena | one cell or run, once, for the project |
 
 A Scratch custom block belongs to exactly one target. There is no way to share one
 between a stage and two sprites, so raven copies it — as raven-asm's `use` does,
@@ -115,8 +115,10 @@ rule of thumb:
 
 ## Visibility
 
-* `pub` — importable by other modules, and for a `var`, placed on the stage.
-* no `pub` — visible only inside the declaring file.
+* `pub` — importable by other files. It never changes where a value lives: every
+  `var` is a cell or run of the one project arena whether or not it is `pub`.
+* no `pub` — visible only inside the declaring file. A module has no target, so a
+  non-`pub` `var` there is an error rather than a declaration nothing can name.
 * Importing a non-`pub` item is an error that names the module and the missing
   `pub`.
 * `pub` is only meaningful on `var`, `list`, `const`, `fn`, `macro`, `proc` and
@@ -141,8 +143,10 @@ name what recurs.
 
 ## Project-wide state
 
-A `pub var` declared anywhere is placed on the stage, so it has exactly one
-instance, and every sprite reads and writes that one variable.
+A `pub var` declared anywhere is one cell of the project's single arena, so it has
+exactly one instance, and every file that imports it reads and writes that one
+cell. A `var` that is *not* `pub` has one instance too — it is a cell of the same
+arena — but only its own file can name it.
 
 ```rav
 // src/lib/scoring.rav
@@ -158,7 +162,7 @@ sprite "Player" {
 }
 ```
 
-Because the variable lives on the stage, there is no ambiguity about whose copy
-you are reading — which is exactly raven-asm's rule, and the reason raven's
+Because the variable is one shared cell, there is no ambiguity about whose copy
+you are reading — which is exactly raven's rule, and the reason
 [law 8](/raven/design#_8-ownership-is-declared-never-inferred) insists that
-ownership be written down rather than inferred from use.
+visibility and storage both be written down rather than inferred from use.

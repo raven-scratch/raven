@@ -22,8 +22,10 @@
 //! # The virtual memory system
 //!
 //! Every raven local — a `let`, a `for` counter, a procedure's return value —
-//! lives in one per-target list, `_vms`, addressed by a compile-time constant
-//! 1-based cell index. A cell belongs to its **declaration site**, not to a
+//! lives in one list for the whole project, `_vms`, addressed by a compile-time
+//! constant 1-based cell index. There is **one** arena: the stage declares it,
+//! every target reads the same cells, and no sprite owns a private arena. A cell
+//! belongs to its **declaration site**, not to a
 //! call: it is allocated once, the same way for every run, and every execution
 //! of the code that reads it sees the same cell. That is what makes the emitted
 //! project a fixed tree of blocks, and it is why a recursive `proc` may not
@@ -57,22 +59,21 @@ use crate::ty::{self, Scalar, Ty};
 /// ordinary macro that a program may read, and shadow.
 const PRELUDE: &str = include_str!("prelude.rav");
 
-/// The name of the per-target list every raven local lives in.
+/// The name of the one list the whole project's fixed cells live in.
+///
+/// There is exactly one VMS, and the stage declares it: every target's `var`s
+/// that are not Scratch's own, every `proc`'s frame, and every list or map that
+/// is only ever read or written in place are cells of this one list, so a cell
+/// index means the same thing in every target.
 const VMS: &str = "_vms";
 
-/// The name of the project-wide list the stage declares for global state.
-const GLOBAL_VM: &str = "_gvm";
-
-/// The per-target list a *growing* run lives in.
+/// The one list the whole project's *growing* runs live in.
 ///
 /// Scratch refuses to add to a list that already holds 200,000 items, so the
 /// fixed arena may not also be the heap: a program with a large table declared
 /// in `_vms` could never grow a list again. The heap therefore holds only the
 /// runs that grow, and stays small.
 const HEAP: &str = "_heap";
-
-/// The project-wide heap, declared on the stage beside `_gvm`.
-const GLOBAL_HEAP: &str = "_gheap";
 
 /// Cells one `list` or `map` handle occupies, in order: the 1-based cell the
 /// items start at, how many items there are, and how many cells are allocated.
@@ -88,11 +89,6 @@ const H_BASE: usize = 0;
 const H_LEN: usize = 1;
 /// How many cells the run has. Growing doubles it.
 const H_CAP: usize = 2;
-
-/// How many cells the project arena keeps for the global helpers' own
-/// temporaries. Every target that touches `_gvm` uses the same pool because
-/// `_gvm` is one list shared by the whole project.
-const GLOBAL_HELPER_CELLS: usize = 24;
 
 /// The name of the console list: every log line is one item of it.
 const CONSOLE: &str = "_console";
@@ -137,7 +133,8 @@ pub struct Layout {
     /// Scratch variable or list.
     pub list: String,
     /// The 1-based cell of its handle, its own cell for a scalar, or `0` for
-    /// anything that is Scratch's own: a `watch`ed list or a `@scratch` name.
+    /// anything that is Scratch's own: a `watch`ed list or a Scratch-storage
+    /// declaration.
     pub handle: usize,
     /// Whether the run is the growable one.
     pub dynamic: bool,
@@ -145,23 +142,120 @@ pub struct Layout {
     pub scalar: bool,
 }
 
+/// The project's one virtual memory system, shared by every target.
+///
+/// Cell indices are handed out once for the whole project, so the same index
+/// means the same cell in every target's emitted blocks. [`compile`] finishes
+/// every target before the stage declares the arena, because only then is the
+/// size of `_vms` known. The script stacks are numbered here too: a stack is
+/// per-script, so two scripts never share one, but the names are project-wide
+/// so a stage script and a sprite script cannot collide on `_stack1`.
+#[derive(Debug, Default)]
+struct Memory {
+    /// How many cells the fixed arena, [`VMS`], holds.
+    fixed: usize,
+    /// The starting value of each fixed cell, by cell index - 1.
+    fixed_init: Vec<Option<rasm::Literal>>,
+    /// How many cells the heap, [`HEAP`], holds.
+    heap: usize,
+    /// The starting value of each heap cell, by cell index - 1.
+    heap_init: Vec<Option<rasm::Literal>>,
+    /// The deepest cell each script reaches, by project-wide script index. A
+    /// script that never allocates a cell gets no stack list at all.
+    stacks: Vec<usize>,
+}
+
+impl Memory {
+    /// Hand out the next fixed cell. Cells are 1-based, as Scratch lists are.
+    fn alloc_fixed(&mut self) -> usize {
+        self.fixed += 1;
+        self.fixed
+    }
+
+    /// Hand out `n` fixed cells and return the first one, 1-based.
+    fn alloc_fixed_cells(&mut self, n: usize) -> usize {
+        let base = self.fixed + 1;
+        self.fixed += n;
+        base
+    }
+
+    /// Lay a run out in the fixed arena and return its handle.
+    fn alloc_complex(&mut self, items: &[rasm::Literal]) -> usize {
+        lay_out_complex(&mut self.fixed, &mut self.fixed_init, items)
+    }
+
+    /// Lay a run out in the heap and return its handle.
+    fn alloc_heap_complex(&mut self, items: &[rasm::Literal]) -> usize {
+        lay_out_complex(&mut self.heap, &mut self.heap_init, items)
+    }
+
+    /// Hand out `n` cells of the heap.
+    fn alloc_heap(&mut self, n: usize) -> usize {
+        let base = self.heap + 1;
+        self.heap += n;
+        base
+    }
+
+    /// Record the value a fixed cell starts with.
+    fn set_fixed_init(&mut self, cell: usize, value: rasm::Literal) {
+        while self.fixed_init.len() < cell {
+            self.fixed_init.push(None);
+        }
+        self.fixed_init[cell - 1] = Some(value);
+    }
+
+    /// The next project-wide script index, which is also the stack it uses.
+    /// Scripts start at 1, so `_stack1` is the first.
+    fn alloc_script(&mut self) -> usize {
+        if self.stacks.is_empty() {
+            // Index 0 is never a script, so a stack list is never `_stack0`.
+            self.stacks.push(0);
+        }
+        let index = self.stacks.len();
+        self.stacks.push(0);
+        index
+    }
+
+    /// Record how deep a script's stack reaches.
+    fn note_stack(&mut self, index: usize, depth: usize) {
+        while self.stacks.len() <= index {
+            self.stacks.push(0);
+        }
+        self.stacks[index] = self.stacks[index].max(depth);
+    }
+}
+
 /// Compile every target.
 pub fn compile(program: &Program) -> Result<Output> {
     let prelude = Prelude::load()?;
     let mutations = mutated_lists(program);
-    let globals = Globals::collect(program, &mutations)?;
+    let mut memory = Memory::default();
+    let globals = Globals::collect(program, &mutations, &mut memory)?;
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     let mut layouts = Vec::new();
-    for plan in &program.targets {
-        let mut unit = Unit::new(program, plan, &globals, &prelude, mutations.clone())?;
-        let mut file = unit.run()?;
+    let mut stage_file = None;
+    for (index, plan) in program.targets.iter().enumerate() {
+        let mut unit = Unit::new(
+            program,
+            plan,
+            &globals,
+            &mut memory,
+            &prelude,
+            mutations.clone(),
+        )?;
+        let file = unit.run()?;
         if plan.kind == ast::TargetKind::Stage {
-            unit.emit_globals(&mut file);
+            stage_file = Some(index);
         }
         warnings.extend(unit.warnings.iter().cloned());
         layouts.extend(unit.layouts());
         files.push(file);
+    }
+    // Every target allocates from the one arena, so the arena is declared once
+    // the last of them has been compiled, on the stage that owns project state.
+    if let Some(index) = stage_file {
+        emit_globals(&globals, &memory, &mut files[index]);
     }
     Ok(Output {
         files,
@@ -258,10 +352,38 @@ fn scan_stmts(stmts: &[Stmt], names: &mut HashSet<String>) {
 
 /// A variable or list, and where it lives.
 ///
+/// Where a declaration's storage is.
+///
+/// This is the axis a decorator picks, and it is separate from whether the name
+/// is `pub`: `pub` decides who may *name* the declaration, never where its value
+/// lives. A VMS declaration is always a cell of the project's one arena, whoever
+/// can see the name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Storage {
+    /// A cell or run of the project's one virtual memory system.
+    Vms,
+    /// A real Scratch variable or list on the stage, reached by name.
+    ScratchGlobal,
+    /// A real Scratch variable or list of the declaring sprite, reached by name.
+    ScratchSprite,
+}
+
+impl Storage {
+    /// Whether the storage is Scratch's own rather than a VMS cell.
+    fn is_scratch(self) -> bool {
+        !matches!(self, Storage::Vms)
+    }
+
+    /// Whether a Scratch declaration belongs on the stage.
+    fn is_global(self) -> bool {
+        matches!(self, Storage::ScratchGlobal)
+    }
+}
+
 /// A scalar is not a Scratch variable: it is a **cell** in the virtual memory
-/// system, addressed by the constant index in [`VarInfo::cell`] — unless
-/// `@scratch` asked for a real Scratch variable, which [`VarInfo::addr`] gives
-/// back as [`Addr::Scratch`]. A list is a run of an arena or, when `@scratch`
+/// system, addressed by the constant index in [`VarInfo::cell`] — unless a
+/// decorator asked for a real Scratch variable, which [`VarInfo::addr`] gives
+/// back as [`Addr::Scratch`]. A list is a run of an arena or, when a decorator
 /// or a `watch` asked, a Scratch list of its own.
 #[derive(Clone, Debug)]
 struct VarInfo {
@@ -274,17 +396,14 @@ struct VarInfo {
     items: Vec<rasm::Literal>,
     /// A list, as opposed to a scalar variable.
     is_list: bool,
-    /// `true` when the storage is Scratch's own rather than the virtual memory
-    /// system's: a `@scratch` variable or list, or a list a `watch` asked for. A
-    /// Scratch scalar is reached as `data_variable`, a Scratch list by name.
-    scratch: bool,
+    /// Where the declaration lives. A Scratch scalar is reached as
+    /// `data_variable`, a Scratch list by name.
+    storage: Storage,
     /// `true` when the list's run may grow. A run that grows lives in the heap,
     /// which is a list of its own so a large fixed table cannot stop it.
     dynamic: bool,
     /// `true` when a list was declared `[]` rather than with items.
     declared_empty: bool,
-    /// `true` when the variable belongs to the stage.
-    global: bool,
     /// The cell a scalar lives in, or the first cell of a list's handle, 1-based.
     cell: usize,
     /// Where the declaration is, so generated raven-asm can point back at it.
@@ -292,30 +411,23 @@ struct VarInfo {
 }
 
 impl VarInfo {
-    /// Where this declaration's storage is: a cell of the VMS, or the Scratch
-    /// variable a `@scratch` decorator asked for.
+    /// Where this declaration's storage is: a cell of the one VMS arena, or the
+    /// Scratch variable a decorator asked for.
     fn addr(&self) -> Addr {
-        if self.scratch {
-            return Addr::Scratch {
+        match self.storage {
+            Storage::Vms => Addr::cell(self.cell, Arena::Vms),
+            Storage::ScratchGlobal | Storage::ScratchSprite => Addr::Scratch {
                 name: self.name.clone(),
-            };
-        }
-        Addr::cell(
-            self.cell,
-            if self.global {
-                Arena::Global
-            } else {
-                Arena::Local
             },
-        )
+        }
     }
 
     /// The Scratch list a `list<T>` is backed by, when the storage is Scratch's.
     ///
-    /// A list no `@scratch` and no `watch` asked for is a run of the arena and
+    /// A list no decorator and no `watch` asked for is a run of the arena and
     /// has no Scratch list at all, so this is `None` for it.
     fn as_list_item(&self, visible: bool) -> Option<rasm::Item> {
-        if !self.is_list || !self.scratch {
+        if !self.is_list || !self.storage.is_scratch() {
             return None;
         }
         // A list declared `[]` starts empty; one with items starts with them.
@@ -325,7 +437,7 @@ impl VarInfo {
             self.items.clone()
         };
         Some(rasm::Item::List(rasm::ListDecl {
-            global: self.global,
+            global: self.storage.is_global(),
             visible,
             monitor: rasm::MonitorSpec::default(),
             name: self.name.clone(),
@@ -334,16 +446,16 @@ impl VarInfo {
         }))
     }
 
-    /// The Scratch variable a `@scratch` scalar is.
+    /// The Scratch variable a Scratch-storage scalar is.
     ///
-    /// A scalar is not a Scratch variable unless `@scratch` asked for one, so
+    /// A scalar is not a Scratch variable unless a decorator asked for one, so
     /// this is `None` for a cell of an arena.
     fn as_var_item(&self, visible: bool) -> Option<rasm::Item> {
-        if self.is_list || !self.scratch {
+        if self.is_list || !self.storage.is_scratch() {
             return None;
         }
         Some(rasm::Item::Var(rasm::VarDecl {
-            global: self.global,
+            global: self.storage.is_global(),
             visible,
             monitor: rasm::MonitorSpec::default(),
             name: self.name.clone(),
@@ -363,26 +475,6 @@ pub struct Globals {
     /// Whether anything anywhere logs to the console. Nothing that is not used
     /// is emitted, and that includes the console itself.
     console: bool,
-    /// How many cells the project-wide arena, [`GLOBAL_VM`], holds.
-    arena: usize,
-    /// The value each project-wide cell starts with, by cell index - 1.
-    cell_init: Vec<Option<rasm::Literal>>,
-    /// How many cells the project-wide heap, [`GLOBAL_HEAP`], holds.
-    heap: usize,
-    /// The starting value of each cell of the heap.
-    heap_init: Vec<Option<rasm::Literal>>,
-    /// Whether any project-wide list needs the fixed-arena helpers.
-    complex: bool,
-    /// Whether any project-wide list needs the heap helpers.
-    grows: bool,
-    /// The first cell of the fixed arena's helper pool, or `0`.
-    temps_fixed: usize,
-    /// The first cell of the heap's helper pool, or `0`.
-    temps_heap: usize,
-    /// The cell a `_gvm` helper writes its answer into.
-    out_fixed: usize,
-    /// The cell a `_gheap` helper writes its answer into.
-    out_heap: usize,
     broadcasts: Vec<String>,
     stage_costumes: Vec<String>,
     stage_sounds: Vec<String>,
@@ -390,8 +482,12 @@ pub struct Globals {
 }
 
 impl Globals {
-    fn collect(program: &Program, mutates: &HashSet<String>) -> Result<Self> {
+    fn collect(program: &Program, mutates: &HashSet<String>, memory: &mut Memory) -> Result<Self> {
         let mut globals = Globals::default();
+        // The names that belong to the whole project: every `pub` declaration,
+        // and every Scratch-global declaration whether or not it is `pub`,
+        // because a real Scratch variable is one variable however few files can
+        // name it. Two of them may not share a name.
         let mut seen: HashMap<String, PathBuf> = HashMap::new();
 
         // Every `watch` first: a `var` declared above its `watch` is still a
@@ -412,26 +508,53 @@ impl Globals {
                 .file
                 .target()
                 .is_some_and(|t| t.kind == ast::TargetKind::Stage);
+            let is_module = unit.file.target().is_none();
             for item in items_of(unit) {
                 match &item {
-                    Item::Var(var) if var.public || is_stage => {
+                    Item::Var(var) => {
+                        if is_module && !var.public {
+                            return Err(Error::new(
+                                unit.source
+                                    .error(
+                                        var.name.span.pos,
+                                        format!(
+                                            "`{}` is declared in a module without `pub`",
+                                            var.name.name
+                                        ),
+                                    )
+                                    .span(var.name.span.len.max(1))
+                                    .note("a module has no target, so a name it declares is either `pub` — visible to every file that `use`s it — or nowhere")
+                                    .note("write `pub var` for shared state, or move the declaration into the target that needs it"),
+                            ));
+                        }
                         if let Some(error) = reserved(&var.name.name, var.name.span, &unit.source) {
                             return Err(error);
+                        }
+                        let storage = storage_of(var, &unit.source, is_stage, is_module)?;
+                        // A file-private VMS declaration belongs to its target:
+                        // `Unit` registers it and allocates its cell, while the
+                        // name stays out of the project-wide table. A Scratch
+                        // global is project-wide storage even when its name is
+                        // not importable, so its name has to be unique.
+                        if !var.public && storage != Storage::ScratchGlobal {
+                            continue;
                         }
                         if let Some(first) = seen.get(&var.name.name) {
                             return Err(Error::new(unit.source.error(
                                 var.name.span.pos,
-                                format!("`{}` is declared project-wide more than once", var.name.name),
+                                format!(
+                                    "`{}` is declared project-wide more than once",
+                                    var.name.name
+                                ),
                             ))
-                            .note(format!(
-                                "the first declaration is in {}",
-                                short(first)
-                            ))
+                            .note(format!("the first declaration is in {}", short(first)))
                             .note("a project-wide declaration lives on the stage, so there can only be one"));
                         }
                         seen.insert(var.name.name.clone(), unit.path.clone());
-                        let mut info = var_info(var, true)?;
-                        info.scratch = scratch_decorators(var, &unit.source)?;
+                        if !var.public {
+                            continue;
+                        }
+                        let mut info = var_info(var, storage)?;
                         if info.ty.is_place() {
                             return Err(Error::new(
                                 unit.source
@@ -443,7 +566,7 @@ impl Globals {
                                         ),
                                     )
                                     .span(var.name.span.len.max(1))
-                                    .note("a struct is a frame of cells in one target's VMS")
+                                    .note("a struct is a frame of cells in one target, so it cannot be shared by `pub`")
                                     .note("declare it inside the `sprite` or `stage` block, without `pub`"),
                             ));
                         }
@@ -451,35 +574,24 @@ impl Globals {
                             if globals.watches.contains(&var.name.name) {
                                 // A watched list is a real Scratch list: it is
                                 // the one thing that can carry a monitor.
-                                info.scratch = true;
-                            } else if info.scratch {
-                                // `@scratch`: Scratch's own list, by name.
+                                info.storage = Storage::ScratchGlobal;
+                            } else if info.storage.is_scratch() {
+                                // Scratch's own list, by name.
                             } else if mutates.contains(&var.name.name) {
                                 // A run that may grow lives in the heap.
                                 info.dynamic = true;
-                                info.cell = lay_out_complex(
-                                    &mut globals.heap,
-                                    &mut globals.heap_init,
-                                    &info.items,
-                                );
-                                globals.grows = true;
+                                info.cell = memory.alloc_heap_complex(&info.items);
                             } else {
-                                info.cell = lay_out_complex(
-                                    &mut globals.arena,
-                                    &mut globals.cell_init,
-                                    &info.items,
-                                );
-                                globals.complex = true;
+                                info.cell = memory.alloc_complex(&info.items);
                             }
-                        } else if info.scratch {
-                            // `@scratch`: a real project-wide Scratch variable.
-                            // Nothing is allocated in `_gvm`.
+                        } else if info.storage.is_scratch() {
+                            // A real Scratch variable; nothing is allocated in
+                            // the arena.
                         } else {
-                            // A project-wide scalar is a cell in the project's
-                            // arena; the index is the same in every target.
-                            globals.arena += 1;
-                            info.cell = globals.arena;
-                            set_cell_init(&mut globals.cell_init, info.cell, info.init.clone());
+                            // A project-wide scalar is a cell of the one arena;
+                            // the index means the same thing in every target.
+                            info.cell = memory.alloc_fixed();
+                            memory.set_fixed_init(info.cell, info.init.clone());
                         }
                         globals.vars.push(info);
                     }
@@ -526,19 +638,6 @@ impl Globals {
             visit(unit, &mut globals)?;
             globals.console |= items_use_console(&items_of(unit));
         }
-        // Each global helper family works in one list for the whole project, so
-        // every target must agree on which cells are its temporaries. One more
-        // cell each is where the helper writes the answer a call reads back.
-        if globals.complex {
-            globals.temps_fixed = globals.arena + 1;
-            globals.out_fixed = globals.temps_fixed + GLOBAL_HELPER_CELLS;
-            globals.arena += GLOBAL_HELPER_CELLS + 1;
-        }
-        if globals.grows {
-            globals.temps_heap = globals.heap + 1;
-            globals.out_heap = globals.temps_heap + GLOBAL_HELPER_CELLS;
-            globals.heap += GLOBAL_HELPER_CELLS + 1;
-        }
         for plan in &program.targets {
             if plan.kind == ast::TargetKind::Sprite {
                 globals.sprite_names.push(plan.name.clone());
@@ -551,8 +650,8 @@ impl Globals {
         self.vars.iter().find(|v| v.name == name)
     }
 
-    /// Where a project-wide scalar lives: a cell of the project arena, or the
-    /// real Scratch variable a `@scratch` declaration asked for.
+    /// Where a project-wide scalar lives: a cell of the one arena, or the real
+    /// Scratch variable a decorator asked for.
     fn scalar_addr(&self, name: &str) -> Option<(Addr, Ty)> {
         let var = self.vars.iter().find(|v| v.name == name && !v.is_list)?;
         Some((var.addr(), var.ty))
@@ -571,7 +670,7 @@ fn watch_names(unit: &FileUnit) -> Vec<String> {
         .collect()
 }
 
-/// Record the value a cell starts with.
+/// Record the value a cell of a declared arena starts with.
 fn set_cell_init(cell_init: &mut Vec<Option<rasm::Literal>>, cell: usize, value: rasm::Literal) {
     while cell_init.len() < cell {
         cell_init.push(None);
@@ -734,7 +833,7 @@ fn short(path: &Path) -> String {
 
 /// A user declaration of a name the virtual memory system owns.
 fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
-    if name == VMS || name == GLOBAL_VM || name == HEAP || name == GLOBAL_HEAP {
+    if name == VMS || name == HEAP || name == CONSOLE || name.starts_with(STACK) {
         Some(Error::new(
             source
                 .error(
@@ -744,7 +843,7 @@ fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
                 .span(span.len.max(1))
                 .note("every variable, `let`, `for` counter and procedure return value lives in it; pick another name"),
         ))
-    } else if ["__vm_", "__vh_", "__gm_", "__gh_"]
+    } else if ["__vm_", "__vh_"]
         .iter()
         .any(|prefix| name.starts_with(prefix))
     {
@@ -755,73 +854,162 @@ fn reserved(name: &str, span: Span, source: &Source) -> Option<Error> {
                     format!("`{name}` is reserved for the memory manager"),
                 )
                 .span(span.len.max(1))
-                .note("`__vm_`, `__vh_`, `__gm_` and `__gh_` name the procedures that grow a run of an arena; pick another name"),
+                .note("`__vm_` and `__vh_` name the procedures that grow a run of an arena; pick another name"),
         ))
     } else {
         None
     }
 }
 
-/// Whether a declaration's decorators ask for a real Scratch variable or list.
+/// Which storage a declaration's decorators ask for.
 ///
-/// `@scratch` is the one decorator. Everything it changes is *where the storage
-/// is*: the name, its type and every statement that reads or writes it are the
-/// same, so nothing else in the language needs to know. A decorator that is not
-/// `@scratch` is refused by name rather than ignored, and so is a second
-/// `@scratch` on the same declaration.
-fn scratch_decorators(var: &ast::VarDecl, source: &Source) -> Result<bool> {
-    let mut scratch = false;
+/// The decorators exist for exactly one decision, and it is written down rather
+/// than inferred from the file the declaration happens to sit in:
+/// `@scratch_global` stores the declaration as a real Scratch variable or list
+/// on the stage, `@scratch_sprite` stores it as one of the declaring sprite's
+/// own. A declaration with neither decorator is a cell or run of the one VMS
+/// arena.
+///
+/// A decorator changes *where the storage is* and nothing else: the name, its
+/// type and every statement that reads or writes it are the same, so nothing
+/// else in the language needs to know. A decorator that is not one of the two is
+/// refused by name rather than ignored, and so is a second one on the same
+/// declaration.
+fn storage_of(
+    var: &ast::VarDecl,
+    source: &Source,
+    is_stage: bool,
+    is_module: bool,
+) -> Result<Storage> {
+    let mut global = false;
+    let mut sprite = false;
     for decorator in &var.decorators {
-        if decorator.name.name != "scratch" {
-            return Err(Error::new(
-                source
-                    .error(
-                        decorator.name.span.pos,
-                        format!("there is no decorator called `@{}`", decorator.name.name),
-                    )
-                    .span(decorator.name.span.len.max(1))
-                    .note("the one decorator is `@scratch`, which stores a `var` or a `list` as a real Scratch variable or list"),
-            ));
+        let name = decorator.name.name.as_str();
+        let at = decorator.name.span;
+        if name != "scratch_global" && name != "scratch_sprite" {
+            let mut error = source
+                .error(at.pos, format!("there is no decorator called `@{name}`"))
+                .span(at.len.max(1))
+                .note("the decorators are `@scratch_global` and `@scratch_sprite`, which choose where a `var` or a `list` is stored");
+            if name == "scratch" {
+                error = error.note("`@scratch` is now `@scratch_global` or `@scratch_sprite`: say which Scratch storage the declaration wants");
+            }
+            return Err(Error::new(error));
         }
         if !decorator.args.is_empty() {
             return Err(Error::new(
                 source
-                    .error(decorator.span.pos, "`@scratch` takes no arguments")
+                    .error(decorator.span.pos, format!("`@{name}` takes no arguments"))
                     .span(decorator.span.len.max(1))
-                    .note("write it as `@scratch var name: type = value;`"),
-            ));
-        }
-        if scratch {
-            return Err(Error::new(
-                source
-                    .error(
-                        decorator.name.span.pos,
-                        format!("`{}` is decorated with `@scratch` twice", var.name.name),
-                    )
-                    .span(decorator.name.span.len.max(1)),
+                    .note(format!("write it as `@{name} var name: type = value;`")),
             ));
         }
         if var.ty.is_place() {
             return Err(Error::new(
                 source
                     .error(
-                        decorator.name.span.pos,
+                        at.pos,
                         format!(
                             "`{}` is a struct, so it cannot be a Scratch variable",
                             var.name.name
                         ),
                     )
-                    .span(decorator.name.span.len.max(1))
+                    .span(at.len.max(1))
                     .note("a struct is a run of cells, laid out by the compiler")
                     .note("a Scratch variable is one cell, reached by name"),
             ));
         }
-        scratch = true;
+        if name == "scratch_global" {
+            if global {
+                return Err(decorated_twice(var, source, at, name));
+            }
+            global = true;
+        } else {
+            if sprite {
+                return Err(decorated_twice(var, source, at, name));
+            }
+            if is_module {
+                return Err(Error::new(
+                    source
+                        .error(
+                            at.pos,
+                            format!(
+                                "`{}` is `@scratch_sprite`, but a module has no target",
+                                var.name.name
+                            ),
+                        )
+                        .span(at.len.max(1))
+                        .note("a sprite-local Scratch value belongs to one sprite, and a module belongs to none")
+                        .note("declare it inside the `sprite` block that needs it, or use `@scratch_global`"),
+                ));
+            }
+            if is_stage {
+                return Err(Error::new(
+                    source
+                        .error(
+                            at.pos,
+                            format!(
+                                "`{}` is `@scratch_sprite`, but the stage has no sprite-local storage",
+                                var.name.name
+                            ),
+                        )
+                        .span(at.len.max(1))
+                        .note("a stage's variables and lists are project-wide")
+                        .note("write `@scratch_global` for a real Scratch variable, or drop the decorator for a VMS cell"),
+                ));
+            }
+            sprite = true;
+        }
     }
-    Ok(scratch)
+    if global && sprite {
+        return Err(Error::new(
+            source
+                .error(
+                    var.name.span.pos,
+                    format!(
+                        "`{}` is decorated with both `@scratch_global` and `@scratch_sprite`",
+                        var.name.name
+                    ),
+                )
+                .span(var.name.span.len.max(1))
+                .note("the two name different storage; keep one of them"),
+        ));
+    }
+    if sprite && var.public {
+        return Err(Error::new(
+            source
+                .error(
+                    var.name.span.pos,
+                    format!(
+                        "`{}` is `@scratch_sprite`, so it cannot be `pub`",
+                        var.name.name
+                    ),
+                )
+                .span(var.name.span.len.max(1))
+                .note("a `pub` name is importable by other files, and a sprite-local Scratch value belongs to one sprite")
+                .note("use `@scratch_global` for a Scratch value other files can name, or drop `pub`"),
+        ));
+    }
+    Ok(match (global, sprite) {
+        (true, _) => Storage::ScratchGlobal,
+        (_, true) => Storage::ScratchSprite,
+        _ => Storage::Vms,
+    })
 }
 
-fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
+/// A declaration wearing the same decorator twice.
+fn decorated_twice(var: &ast::VarDecl, source: &Source, at: Span, name: &str) -> Error {
+    Error::new(
+        source
+            .error(
+                at.pos,
+                format!("`{}` is decorated with `@{name}` twice", var.name.name),
+            )
+            .span(at.len.max(1)),
+    )
+}
+
+fn var_info(var: &ast::VarDecl, storage: Storage) -> Result<VarInfo> {
     let is_list = var.ty.is_list();
     // A struct is a place, not a value: it has no single starting value, so it
     // is laid out by the caller and this entry only carries its type.
@@ -832,10 +1020,9 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
             init: rasm::Literal::Str(String::new()),
             items: Vec::new(),
             is_list: false,
-            scratch: false,
+            storage,
             dynamic: false,
             declared_empty: false,
-            global,
             cell: 0,
             pos: var.span.pos,
         });
@@ -872,10 +1059,9 @@ fn var_info(var: &ast::VarDecl, global: bool) -> Result<VarInfo> {
         init,
         items,
         is_list,
-        scratch: false,
+        storage,
         dynamic: false,
         declared_empty: is_list && var.init_items_empty(),
-        global,
         cell: 0,
         pos: var.span.pos,
     })
@@ -889,7 +1075,7 @@ fn to_literal(literal: &ast::Literal) -> rasm::Literal {
     }
 }
 
-/// `item (cell) of _vms` — the target's own arena.
+/// `item (cell) of _vms` — the project's one arena.
 fn cell_read(cell: usize) -> rasm::Expr {
     arena_read(cell, VMS)
 }
@@ -933,14 +1119,10 @@ fn write_cell(cell: usize, space: Space, value: rasm::Expr) -> rasm::Stmt {
 /// list of its own so that a large table cannot stop it growing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Space {
-    /// The target's fixed arena, `_vms`.
+    /// The project's fixed arena, `_vms`.
     Fixed,
-    /// The target's heap, `_heap`.
+    /// The project's heap, `_heap`.
     Heap,
-    /// The project's fixed arena, `_gvm`.
-    GlobalFixed,
-    /// The project's heap, `_gheap`.
-    GlobalHeap,
 }
 
 impl Space {
@@ -949,8 +1131,6 @@ impl Space {
         match self {
             Space::Fixed => VMS,
             Space::Heap => HEAP,
-            Space::GlobalFixed => GLOBAL_VM,
-            Space::GlobalHeap => GLOBAL_HEAP,
         }
     }
 
@@ -959,8 +1139,6 @@ impl Space {
         match self {
             Space::Fixed => "__vm_",
             Space::Heap => "__vh_",
-            Space::GlobalFixed => "__gm_",
-            Space::GlobalHeap => "__gh_",
         }
     }
 }
@@ -1802,12 +1980,12 @@ impl StructInfo {
 ///
 /// The split is by **lifetime**, and it is what makes the memory dynamic:
 ///
-/// * [`Arena::Local`] is the target's arena, `_vms`. It holds what has to
-///   outlive a script — a `var` that is not `@scratch`, and a `proc`'s frame,
-///   which a re-entrant
-///   (recursive) procedure shares with itself. It is grown on demand and never
-///   shrinks, because its size is decided by the program, not by the data.
-/// * [`Arena::Global`] is the project arena, `_gvm`, on the stage.
+/// * [`Arena::Vms`] is the project's one arena, `_vms`, on the stage. It holds
+///   what has to outlive a script — a `var` that is not Scratch's own, and a
+///   `proc`'s frame, which a re-entrant
+///   (recursive) procedure shares with itself. It is declared with one item per
+///   cell and never grows, because its size is decided by the program, not by
+///   the data.
 /// * [`Arena::Stack`] is the running script's own stack, `_stack<n>`. Every
 ///   block-scoped cell — a `let`, a `for` counter, a temporary — is *pushed*
 ///   when its declaration runs and *popped* when its block ends, so the list
@@ -1815,8 +1993,7 @@ impl StructInfo {
 ///   two scripts running at once cannot see each other's frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Arena {
-    Local,
-    Global,
+    Vms,
     Stack(usize),
 }
 
@@ -1824,15 +2001,14 @@ impl Arena {
     /// The list this arena lives in.
     fn list(self) -> String {
         match self {
-            Arena::Local => VMS.to_string(),
-            Arena::Global => GLOBAL_VM.to_string(),
+            Arena::Vms => VMS.to_string(),
             Arena::Stack(index) => format!("{STACK}{index}"),
         }
     }
 }
 
-/// Where a place lives: a constant cell of one of the arenas, or a real Scratch
-/// variable that `@scratch` asked for, reached by name.
+/// Where a place lives: a constant cell of an arena, or a real Scratch variable
+/// a decorator asked for, reached by name.
 #[derive(Clone, Debug)]
 enum Addr {
     /// A constant cell of an arena list.
@@ -1876,7 +2052,7 @@ impl Addr {
     /// The same arena, `offset` cells further on.
     ///
     /// `None` for a Scratch variable: a struct is a run of cells and a Scratch
-    /// variable is one cell, so `@scratch` cannot name a struct — [`Unit::place`]
+    /// variable is one cell, so a decorator cannot name a struct — [`Unit::place`]
     /// turns a miss into a diagnostic rather than a wrong constant.
     fn offset(&self, offset: usize) -> Option<Self> {
         match self {
@@ -1911,6 +2087,9 @@ struct Unit<'a> {
     program: &'a Program,
     plan: &'a TargetPlan,
     globals: &'a Globals,
+    /// The project's one arena and its script stacks, shared with every other
+    /// target: a cell handed out here means the same thing in a sprite.
+    memory: &'a mut Memory,
 
     macros: HashMap<String, Rc<MacroDef>>,
     consts: HashMap<String, ast::Literal>,
@@ -1936,15 +2115,6 @@ struct Unit<'a> {
     /// The target's own `var` declarations, which are in scope everywhere in
     /// the target rather than in one block.
     base_scope: HashMap<String, Local>,
-    /// How many `_vms` cells have been handed out. Cell 1 is the first.
-    cells: usize,
-    /// The value each cell starts with, by cell index - 1. A cell with no
-    /// entry starts empty.
-    cell_init: Vec<Option<rasm::Literal>>,
-    /// How many `_heap` cells have been handed out.
-    heap: usize,
-    /// The starting value of each heap cell.
-    heap_init: Vec<Option<rasm::Literal>>,
     /// Which complex values have to be able to grow.
     mutations: HashSet<String>,
     /// The memory-manager helpers this target needs.
@@ -1953,17 +2123,14 @@ struct Unit<'a> {
     out_fixed: Option<usize>,
     /// The `_heap` cell a value-producing helper writes its answer into.
     out_heap: Option<usize>,
-    /// Which script is being lowered. Scripts are numbered in source order, and
-    /// each one has its own stack.
+    /// The project-wide index of the script being lowered, which is also the
+    /// stack it uses. Scripts are numbered in source order across every target.
     script: usize,
     /// `true` while a script body is being lowered, so a block-scoped cell goes
-    /// on that script's stack rather than into the target arena.
+    /// on that script's stack rather than into the arena.
     in_script: bool,
     /// How many cells the running script's stack holds right now.
     depth: usize,
-    /// The deepest cell each script's stack reaches, by script index. A script
-    /// that never allocates a cell gets no stack list at all.
-    stacks: Vec<usize>,
     /// Statements a returning call hoisted above the statement being lowered.
     pre: Vec<rasm::Stmt>,
     /// The return cell of each value-returning `proc` in this target.
@@ -1983,6 +2150,7 @@ impl<'a> Unit<'a> {
         program: &'a Program,
         plan: &'a TargetPlan,
         globals: &'a Globals,
+        memory: &'a mut Memory,
         prelude: &'a Prelude,
         mutations: HashSet<String>,
     ) -> Result<Self> {
@@ -1990,6 +2158,7 @@ impl<'a> Unit<'a> {
             program,
             plan,
             globals,
+            memory,
             macros: prelude.macros.clone(),
             consts: HashMap::new(),
             structs: HashMap::new(),
@@ -2005,10 +2174,6 @@ impl<'a> Unit<'a> {
             emitted: HashSet::new(),
             scopes: Vec::new(),
             base_scope: HashMap::new(),
-            cells: 0,
-            cell_init: Vec::new(),
-            heap: 0,
-            heap_init: Vec::new(),
             mutations,
             helpers: HashSet::new(),
             out_fixed: None,
@@ -2016,8 +2181,6 @@ impl<'a> Unit<'a> {
             script: 0,
             in_script: false,
             depth: 0,
-            // Script numbers start at 1, so index 0 is never a stack.
-            stacks: vec![0],
             pre: Vec::new(),
             ret_cells: HashMap::new(),
             macro_depth: 0,
@@ -2047,21 +2210,27 @@ impl<'a> Unit<'a> {
         let items = items_of(&self.plan.main);
         let path = self.plan.main.path.clone();
         for item in &items {
-            self.register(&path, &source, item)?;
+            self.register(&path, &source, item, false)?;
         }
         for module in &self.plan.modules {
             let source = module.source.clone();
             let path = module.path.clone();
             for item in items_of(module) {
                 if item.is_public() {
-                    self.register(&path, &source, &item)?;
+                    self.register(&path, &source, &item, true)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn register(&mut self, path: &Path, source: &Rc<Source>, item: &Item) -> Result<()> {
+    fn register(
+        &mut self,
+        path: &Path,
+        source: &Rc<Source>,
+        item: &Item,
+        is_module: bool,
+    ) -> Result<()> {
         match item {
             Item::Var(var) => {
                 if let Some(error) = reserved(&var.name.name, var.name.span, source) {
@@ -2090,40 +2259,45 @@ impl<'a> Unit<'a> {
                         format!("`{}` is declared twice", var.name.name),
                     )));
                 }
-                let mut info = var_info(var, false)?;
-                info.scratch = scratch_decorators(var, source)?;
+                let is_stage = !is_module && self.plan.kind == ast::TargetKind::Stage;
+                let storage = storage_of(var, source, is_stage, is_module)?;
+                let mut info = var_info(var, storage)?;
                 if let Ty::Struct(id) = info.ty {
                     // A struct is a frame: `size` cells, the first of which is
                     // the binding's own cell.
                     let layout = self.struct_of(id, source, var.name.span)?;
-                    let base = self.alloc_cells(layout.size);
+                    let base = self.memory.alloc_fixed_cells(layout.size);
                     info.cell = base;
                     self.init_struct(base, &layout, &var.init, source, var.name.span)?;
                     self.base_scope.insert(
                         var.name.name.clone(),
                         Local {
-                            addr: Addr::cell(base, Arena::Local),
+                            addr: Addr::cell(base, Arena::Vms),
                             ty: var.ty,
                         },
                     );
                 } else if info.is_list {
-                    // A list no `watch` and no `@scratch` asked for is a run of
+                    // A list no `watch` and no decorator asked for is a run of
                     // an arena: a handle, then its starting items. Either one
                     // makes it a real Scratch list, because a monitor is a
                     // Scratch list and nothing else.
-                    if self.watches.contains(&var.name.name) {
-                        info.scratch = true;
-                    } else if info.scratch {
-                        // `@scratch`: the list is Scratch's own, by name.
+                    if self.watches.contains(&var.name.name) && !info.storage.is_scratch() {
+                        info.storage = if is_stage {
+                            Storage::ScratchGlobal
+                        } else {
+                            Storage::ScratchSprite
+                        };
+                    } else if info.storage.is_scratch() {
+                        // Scratch's own list, by name.
                     } else if self.mutations.contains(&info.name) {
                         info.dynamic = true;
-                        info.cell = self.alloc_heap_complex(&info.items);
+                        info.cell = self.memory.alloc_heap_complex(&info.items);
                     } else {
-                        info.cell = self.alloc_complex(&info.items);
+                        info.cell = self.memory.alloc_complex(&info.items);
                     }
-                } else if info.scratch {
-                    // `@scratch`: a real Scratch variable with the same name.
-                    // Nothing is allocated in the arena and no cell is written.
+                } else if info.storage.is_scratch() {
+                    // A real Scratch variable with the same name. Nothing is
+                    // allocated in the arena and no cell is written.
                     self.base_scope.insert(
                         var.name.name.clone(),
                         Local {
@@ -2134,16 +2308,16 @@ impl<'a> Unit<'a> {
                         },
                     );
                 } else {
-                    // A target-level scalar is a cell in the target's own
-                    // arena. It is in scope for every script and every `proc`
-                    // body of the target, so it goes in the base scope.
-                    let cell = self.alloc_cell();
-                    self.set_cell_init(cell, info.init.clone());
+                    // A target-level scalar is a cell of the one arena. It is in
+                    // scope for every script and every `proc` body of the
+                    // target, so it goes in the base scope.
+                    let cell = self.memory.alloc_fixed();
+                    self.memory.set_fixed_init(cell, info.init.clone());
                     info.cell = cell;
                     self.base_scope.insert(
                         var.name.name.clone(),
                         Local {
-                            addr: Addr::cell(cell, Arena::Local),
+                            addr: Addr::cell(cell, Arena::Vms),
                             ty: var.ty,
                         },
                     );
@@ -2377,9 +2551,10 @@ impl<'a> Unit<'a> {
         let mut scripts: Vec<rasm::Stmt> = Vec::new();
         for item in &body {
             if let Item::Script(script) = item {
-                // Every script gets its own stack, so two of them running at
-                // once cannot pull the ground out from under each other.
-                self.script += 1;
+                // Every script gets its own stack, numbered across the whole
+                // project, so two of them running at once cannot pull the ground
+                // out from under each other and no two share a name.
+                self.script = self.memory.alloc_script();
                 self.in_script = true;
                 self.depth = 0;
                 let stmt = self.script(script, &source)?;
@@ -2399,27 +2574,10 @@ impl<'a> Unit<'a> {
             out.push(rasm::Item::Stmt(stmt));
         }
 
-        // Declarations first, so the emitted file reads top-down: the arenas,
-        // then one stack per script that keeps block-scoped state.
+        // Declarations first: the target's own Scratch variables, then its
+        // statements. The one arena and the stacks are project-wide and the
+        // stage declares them, in `emit_globals`.
         let mut locals: Vec<rasm::Item> = Vec::new();
-        if self.cells > 0 {
-            locals.push(self.vms_item());
-        }
-        if self.heap > 0 {
-            locals.push(self.arena_item(HEAP, false, self.heap, &self.heap_init));
-        }
-        for (index, high) in self.stacks.iter().enumerate() {
-            if *high > 0 {
-                locals.push(rasm::Item::List(rasm::ListDecl {
-                    global: false,
-                    visible: false,
-                    monitor: rasm::MonitorSpec::default(),
-                    name: format!("{STACK}{index}"),
-                    init: Vec::new(),
-                    pos: Pos::default(),
-                }));
-            }
-        }
         locals.extend(
             self.locals
                 .iter()
@@ -2432,24 +2590,25 @@ impl<'a> Unit<'a> {
         );
         locals.append(&mut out);
 
-        // A `watch`ed scalar that is *not* `@scratch` is a real Scratch variable
+        // A `watch`ed scalar that is not Scratch's own is a real Scratch variable
         // with a visible monitor, which the cell writes keep in step; a `watch`ed
         // list is a real Scratch list, so its monitor is the list's own.
-        let mut mirrored: Vec<&VarInfo> = self
+        let mut mirrored: Vec<(&VarInfo, bool)> = self
             .locals
             .iter()
-            .filter(|v| !v.is_list && !v.scratch && self.watches.contains(&v.name))
+            .filter(|v| !v.is_list && !v.storage.is_scratch() && self.watches.contains(&v.name))
+            .map(|v| (v, self.plan.kind == ast::TargetKind::Stage))
             .collect();
-        let global_mirrors: Vec<&VarInfo> = self
+        let global_mirrors = self
             .globals
             .vars
             .iter()
-            .filter(|v| !v.is_list && !v.scratch && self.watches.contains(&v.name))
-            .collect();
+            .filter(|v| !v.is_list && !v.storage.is_scratch() && self.watches.contains(&v.name))
+            .map(|v| (v, true));
         mirrored.extend(global_mirrors);
-        for var in mirrored {
+        for (var, global) in mirrored {
             locals.push(rasm::Item::Var(rasm::VarDecl {
-                global: var.global,
+                global,
                 visible: true,
                 monitor: rasm::MonitorSpec::default(),
                 name: var.name.clone(),
@@ -2476,62 +2635,99 @@ impl<'a> Unit<'a> {
             items: Vec::new(),
         })
     }
+}
 
-    /// Add the project-wide declarations, which only the stage file carries.
-    fn emit_globals(&self, file: &mut rasm::File) {
-        if let Some(target) = &mut file.target {
-            let mut globals: Vec<rasm::Item> = Vec::new();
-            if self.globals.arena > 0 {
-                globals.push(self.global_vms_item());
-            }
-            if self.globals.heap > 0 {
-                globals.push(self.arena_item(
-                    GLOBAL_HEAP,
-                    true,
-                    self.globals.heap,
-                    &self.globals.heap_init,
-                ));
-            }
-            // The console is a list, so a log line is one `add`. It is
-            // declared only when something logs, and its monitor starts
-            // hidden: the developer ticks it in the editor when wanted.
-            if self.globals.console {
-                globals.push(rasm::Item::List(rasm::ListDecl {
-                    global: true,
-                    visible: false,
-                    monitor: rasm::MonitorSpec::default(),
-                    name: CONSOLE.to_string(),
-                    init: Vec::new(),
-                    pos: Pos::default(),
-                }));
-            }
-            // A project-wide `var` is declared on the stage whatever file wrote
-            // it, so `@scratch` variables and lists land here, and a `watch`
-            // anywhere in the project is what makes one visible.
-            let watched = |name: &str| self.globals.watches.contains(name);
-            globals.extend(
-                self.globals
-                    .vars
-                    .iter()
-                    .filter_map(|v| v.as_var_item(watched(&v.name))),
-            );
-            globals.extend(
-                self.globals
-                    .vars
-                    .iter()
-                    .filter_map(|v| v.as_list_item(watched(&v.name))),
-            );
-            globals.extend(self.globals.broadcasts.iter().map(|name| {
-                rasm::Item::Broadcast(rasm::BroadcastDecl {
-                    name: name.clone(),
-                    pos: Pos::default(),
-                })
+/// Add the project-wide declarations, which only the stage file carries.
+///
+/// The one arena and its heap are declared here, once every target has been
+/// compiled, with **one item per cell** carrying its starting value: Scratch
+/// cannot grow a list by replacing into it, so a constant cell index only works
+/// because the list is sized at load time. The script stacks are global lists
+/// too — a stack is private to its script by its name, not by its target — and
+/// so is the console.
+fn emit_globals(globals: &Globals, memory: &Memory, file: &mut rasm::File) {
+    let Some(target) = &mut file.target else {
+        return;
+    };
+    let mut items: Vec<rasm::Item> = Vec::new();
+    if memory.fixed > 0 {
+        items.push(arena_item(VMS, memory.fixed, &memory.fixed_init));
+    }
+    if memory.heap > 0 {
+        items.push(arena_item(HEAP, memory.heap, &memory.heap_init));
+    }
+    for (index, high) in memory.stacks.iter().enumerate() {
+        if *high > 0 {
+            items.push(rasm::Item::List(rasm::ListDecl {
+                global: true,
+                visible: false,
+                monitor: rasm::MonitorSpec::default(),
+                name: format!("{STACK}{index}"),
+                init: Vec::new(),
+                pos: Pos::default(),
             }));
-            globals.append(&mut target.items);
-            target.items = globals;
         }
     }
+    // The console is a list, so a log line is one `add`. It is declared only
+    // when something logs, and its monitor starts hidden: the developer ticks
+    // it in the editor when wanted.
+    if globals.console {
+        items.push(rasm::Item::List(rasm::ListDecl {
+            global: true,
+            visible: false,
+            monitor: rasm::MonitorSpec::default(),
+            name: CONSOLE.to_string(),
+            init: Vec::new(),
+            pos: Pos::default(),
+        }));
+    }
+    // A project-wide `var` is declared on the stage whatever file wrote it, so
+    // Scratch-storage variables and lists land here, and a `watch` anywhere in
+    // the project is what makes one visible.
+    let watched = |name: &str| globals.watches.contains(name);
+    items.extend(
+        globals
+            .vars
+            .iter()
+            .filter_map(|v| v.as_var_item(watched(&v.name))),
+    );
+    items.extend(
+        globals
+            .vars
+            .iter()
+            .filter_map(|v| v.as_list_item(watched(&v.name))),
+    );
+    items.extend(globals.broadcasts.iter().map(|name| {
+        rasm::Item::Broadcast(rasm::BroadcastDecl {
+            name: name.clone(),
+            pos: Pos::default(),
+        })
+    }));
+    items.append(&mut target.items);
+    target.items = items;
+}
 
+/// One global arena list of `cells` items, each carrying its starting value.
+fn arena_item(name: &str, cells: usize, cell_init: &[Option<rasm::Literal>]) -> rasm::Item {
+    let init = (1..=cells)
+        .map(|cell| {
+            cell_init
+                .get(cell - 1)
+                .and_then(Clone::clone)
+                .unwrap_or_else(|| rasm::Literal::Str(String::new()))
+        })
+        .collect();
+    rasm::Item::List(rasm::ListDecl {
+        global: true,
+        visible: false,
+        monitor: rasm::MonitorSpec::default(),
+        name: name.to_string(),
+        init,
+        pos: Pos::default(),
+    })
+}
+
+impl<'a> Unit<'a> {
     /// Where this target's complex values ended up, for `--debug`.
     ///
     /// A built project carries no names for them — that is the point — so a tool
@@ -2544,17 +2740,15 @@ impl<'a> Unit<'a> {
                 out.push(Layout {
                     target: self.plan.name.clone(),
                     name: var.name.clone(),
-                    // A `@scratch` scalar is a nameless thing no longer: its own
-                    // name is the Scratch variable, and `handle` is 0 because it
-                    // is not a cell of any list.
-                    list: if var.scratch {
+                    // A Scratch-storage scalar is a nameless thing no longer:
+                    // its own name is the Scratch variable, and `handle` is 0
+                    // because it is not a cell of any list.
+                    list: if var.storage.is_scratch() {
                         var.name.clone()
-                    } else if var.global {
-                        GLOBAL_VM.to_string()
                     } else {
                         VMS.to_string()
                     },
-                    handle: if var.scratch || var.ty.is_place() {
+                    handle: if var.storage.is_scratch() || var.ty.is_place() {
                         0
                     } else {
                         var.cell
@@ -2564,7 +2758,7 @@ impl<'a> Unit<'a> {
                 });
                 return;
             }
-            if var.scratch {
+            if var.storage.is_scratch() {
                 out.push(Layout {
                     target: self.plan.name.clone(),
                     name: var.name.clone(),
@@ -2575,11 +2769,10 @@ impl<'a> Unit<'a> {
                 });
                 return;
             }
-            let space = match (var.global, var.dynamic) {
-                (false, false) => Space::Fixed,
-                (false, true) => Space::Heap,
-                (true, false) => Space::GlobalFixed,
-                (true, true) => Space::GlobalHeap,
+            let space = if var.dynamic {
+                Space::Heap
+            } else {
+                Space::Fixed
             };
             out.push(Layout {
                 target: self.plan.name.clone(),
@@ -2648,59 +2841,20 @@ impl<'a> Unit<'a> {
         Ok(())
     }
 
-    /// The target's `_vms` list, declared only when a cell was handed out.
-    ///
-    /// The list is declared with **one item per cell**, because Scratch
-    /// cannot grow a list by replacing into it: `data_replaceitemoflist` runs
-    /// `Cast.toListIndex(index, length, false)`, which rejects an index past the
-    /// end, so a write into a shorter list is silently dropped. Sizing the list
-    /// at load time is what makes a constant cell index work at all — and it is
-    /// also why reads of an unwritten cell return `""` rather than failing.
-    ///
-    /// A cell that belongs to a `var` starts with that variable's declared
-    /// value, because the declaration's initialiser is part of the arena: a
-    /// `var score: num = 0;` is a cell that holds `0` before any script runs.
-    /// That is how raven keeps a Scratch variable's "starts at its declared
-    /// value" behaviour without declaring a Scratch variable.
-    fn vms_item(&self) -> rasm::Item {
-        self.arena_item(VMS, false, self.cells, &self.cell_init)
-    }
-
-    /// The project-wide arena, declared on the stage and visible everywhere.
-    ///
-    /// Every target reads the same `_gvm`, so the stage declares it with the
-    /// project's own starting values and the global helpers' temporary pool.
-    fn global_vms_item(&self) -> rasm::Item {
-        self.arena_item(GLOBAL_VM, true, self.globals.arena, &self.globals.cell_init)
-    }
-
     /// The helpers the target needs, with their temporaries allocated.
     ///
-    /// A helper's working cells live in the arena it works in. The local ones
-    /// are new cells of `_vms`; the global ones are slices of the fixed pool the
-    /// stage reserved, because every target's copy of `_gm_*` has to agree on
-    /// which cells of the project arena it may use.
+    /// A helper's working cells are new cells of the one arena or heap; each
+    /// target's copy gets its own, because every cell index in the project is
+    /// unique.
     fn helper_items(&mut self) -> Vec<rasm::Item> {
         let mut needed: Vec<(Helper, Space)> = self.helpers.iter().copied().collect();
         needed.sort_by_key(|(kind, space)| (format!("{kind:?}"), format!("{space:?}")));
         let mut items = Vec::new();
-        let mut global_fixed = self.globals.temps_fixed;
-        let mut global_heap = self.globals.temps_heap;
         for (kind, space) in needed {
             let count = kind.temps();
             let base = match space {
                 Space::Fixed => self.alloc_cells(count),
                 Space::Heap => self.alloc_heap_cells(count),
-                Space::GlobalFixed => {
-                    let base = global_fixed;
-                    global_fixed += count;
-                    base
-                }
-                Space::GlobalHeap => {
-                    let base = global_heap;
-                    global_heap += count;
-                    base
-                }
             };
             let temps: Vec<usize> = (0..count).map(|index| base + index).collect();
             items.push(helper_proc(kind, space, &temps));
@@ -2708,68 +2862,35 @@ impl<'a> Unit<'a> {
         items
     }
 
-    /// One arena list of `cells` items, each carrying its starting value.
-    fn arena_item(
-        &self,
-        name: &str,
-        global: bool,
-        cells: usize,
-        cell_init: &[Option<rasm::Literal>],
-    ) -> rasm::Item {
-        let init = (1..=cells)
-            .map(|cell| {
-                cell_init
-                    .get(cell - 1)
-                    .and_then(Clone::clone)
-                    .unwrap_or_else(|| rasm::Literal::Str(String::new()))
-            })
-            .collect();
-        rasm::Item::List(rasm::ListDecl {
-            global,
-            visible: false,
-            monitor: rasm::MonitorSpec::default(),
-            name: name.to_string(),
-            init,
-            pos: Pos::default(),
-        })
-    }
-
     /// Record the value a cell starts with.
     fn set_cell_init(&mut self, cell: usize, value: rasm::Literal) {
-        while self.cell_init.len() < cell {
-            self.cell_init.push(None);
-        }
-        self.cell_init[cell - 1] = Some(value);
+        self.memory.set_fixed_init(cell, value);
     }
 
-    /// Hand out the next cell index. Cells are 1-based, as Scratch lists are.
+    /// Hand out the next cell of the one arena. Cells are 1-based, as Scratch
+    /// lists are.
     fn alloc_cell(&mut self) -> usize {
-        self.cells += 1;
-        self.cells
+        self.memory.alloc_fixed()
     }
 
-    /// Hand out `n` cells and return the first one, 1-based.
+    /// Hand out `n` arena cells and return the first one, 1-based.
     fn alloc_cells(&mut self, n: usize) -> usize {
-        let base = self.cells + 1;
-        self.cells += n;
-        base
+        self.memory.alloc_fixed_cells(n)
     }
 
-    /// Lay a list or map out in the target's fixed arena and return its handle.
+    /// Lay a list or map out in the fixed arena and return its handle.
     fn alloc_complex(&mut self, items: &[rasm::Literal]) -> usize {
-        lay_out_complex(&mut self.cells, &mut self.cell_init, items)
+        self.memory.alloc_complex(items)
     }
 
-    /// Lay a list or map out in the target's heap and return its handle.
+    /// Lay a list or map out in the heap and return its handle.
     fn alloc_heap_complex(&mut self, items: &[rasm::Literal]) -> usize {
-        lay_out_complex(&mut self.heap, &mut self.heap_init, items)
+        self.memory.alloc_heap_complex(items)
     }
 
-    /// Hand out `n` cells of the target's heap.
+    /// Hand out `n` cells of the heap.
     fn alloc_heap_cells(&mut self, n: usize) -> usize {
-        let base = self.heap + 1;
-        self.heap += n;
-        base
+        self.memory.alloc_heap(n)
     }
 
     /// Note that a helper is needed, and in which space.
@@ -2839,15 +2960,12 @@ impl<'a> Unit<'a> {
         if self.in_script {
             Arena::Stack(self.script)
         } else {
-            Arena::Local
+            Arena::Vms
         }
     }
 
     fn note_stack(&mut self) {
-        while self.stacks.len() <= self.script {
-            self.stacks.push(0);
-        }
-        self.stacks[self.script] = self.stacks[self.script].max(self.depth);
+        self.memory.note_stack(self.script, self.depth);
     }
 
     /// A fresh temporary cell, already holding `value`.
@@ -3335,16 +3453,13 @@ impl<'a> Unit<'a> {
         let args = self.arguments(spec, &script.hat.args, source, &[])?;
         let mut hoisted = std::mem::take(&mut self.pre);
         let body = self.block_stmts(&script.body, source, &[])?;
-        // The script's prologue: its stack is emptied, and the arenas are grown
-        // to what this target can use and given their declared values. Both are
-        // idempotent, so a script that runs a second time pays one block.
-        if self.stacks.get(self.script).copied().unwrap_or(0) > 0 {
+        // The script's prologue empties its stack, so a run that was stopped
+        // mid-block cannot leave the next one out of step.
+        if self.memory.stacks.get(self.script).copied().unwrap_or(0) > 0 {
             // A stack list exists only for a script that pushes something onto
             // it, and only that script has to empty it.
             hoisted.push(arena_clear(&Arena::Stack(self.script).list()));
         }
-        // The calls that grow the arenas are added once the whole target is
-        // lowered: how big an arena is is not known until then.
         hoisted.extend(body);
         Ok(mk_block(opcode, args, hoisted))
     }
@@ -3621,10 +3736,14 @@ impl<'a> Unit<'a> {
                 {
                     return Ok(Vec::new());
                 }
-                let mut info = var_info(decl, false)?;
+                let mut info = var_info(decl, Storage::Vms)?;
                 if info.is_list {
                     if self.watches.contains(&info.name) {
-                        info.scratch = true;
+                        info.storage = if self.plan.kind == ast::TargetKind::Stage {
+                            Storage::ScratchGlobal
+                        } else {
+                            Storage::ScratchSprite
+                        };
                     } else if self.mutations.contains(&info.name) {
                         info.dynamic = true;
                         info.cell = self.alloc_heap_complex(&info.items);
@@ -4169,8 +4288,8 @@ impl<'a> Unit<'a> {
                     .note("a list is not a value; read an item with `name[i]`, or use a method such as `name.len()`"),
             ));
         }
-        // A project-wide scalar: a cell of `_gvm`, or the Scratch variable a
-        // `@scratch` declaration asked for.
+        // A project-wide scalar: a cell of the one arena, or the Scratch variable
+        // a decorator asked for.
         if let Some((addr, ty)) = self.globals.scalar_addr(&name) {
             return Ok(Typed {
                 expr: read_bool(ty, addr.read()),
@@ -5283,11 +5402,16 @@ impl<'a> Unit<'a> {
 
     /// Whether `name`'s storage is Scratch's own.
     ///
-    /// A `@scratch` name is already the variable a `watch` would otherwise
+    /// A Scratch-storage name is already the variable a `watch` would otherwise
     /// mirror, so a write to it must not also set a mirror to itself.
     fn is_scratch(&self, name: &str) -> bool {
-        self.locals.iter().any(|v| v.name == name && v.scratch)
-            || self.globals.var(name).is_some_and(|v| v.scratch)
+        self.locals
+            .iter()
+            .any(|v| v.name == name && v.storage.is_scratch())
+            || self
+                .globals
+                .var(name)
+                .is_some_and(|v| v.storage.is_scratch())
     }
 
     /// The mirror a `watch` asked for, when the cell a write went to needs one.
@@ -5352,14 +5476,13 @@ impl<'a> Unit<'a> {
         if !var.is_list {
             return Err(list_where_scalar(source, span, name));
         }
-        if var.scratch {
+        if var.storage.is_scratch() {
             return Ok(Container::Scratch(name.to_string()));
         }
-        let space = match (var.global, var.dynamic) {
-            (false, false) => Space::Fixed,
-            (false, true) => Space::Heap,
-            (true, false) => Space::GlobalFixed,
-            (true, true) => Space::GlobalHeap,
+        let space = if var.dynamic {
+            Space::Heap
+        } else {
+            Space::Fixed
         };
         Ok(Container::Vms {
             handle: var.cell,
@@ -5501,8 +5624,6 @@ impl<'a> Unit<'a> {
                     cell
                 }
             },
-            Space::GlobalFixed => self.globals.out_fixed,
-            Space::GlobalHeap => self.globals.out_heap,
         }
     }
 
@@ -5536,7 +5657,7 @@ impl<'a> Unit<'a> {
                 expect(&value, expected, &format!("`{name}`"), source)?;
                 Ok(vec![Addr::cell(
                     self.cell_of(&name, source, target.name.span)?,
-                    Arena::Local,
+                    Arena::Vms,
                 )
                 .write(value.expr)])
             }
@@ -5591,7 +5712,7 @@ impl<'a> Unit<'a> {
                 } else {
                     let ty = self.variable_ty(&name, source, target.name.span)?;
                     (
-                        Addr::cell(self.cell_of(&name, source, target.name.span)?, Arena::Local),
+                        Addr::cell(self.cell_of(&name, source, target.name.span)?, Arena::Vms),
                         ty,
                     )
                 };

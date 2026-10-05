@@ -363,9 +363,10 @@ pub static BINDINGS: &[Row] = &[
     // --------------------------------------------------------------- Data --
     //
     // Nothing here names a Scratch variable, because raven does not declare one
-    // unless the source asked: `@scratch` on a `var` stores it in a real Scratch
-    // variable or list, and everything else is a cell of the virtual memory
-    // system. The five blocks below are therefore refused rather than bound:
+    // unless the source asked: a Scratch-storage decorator on a `var` stores it
+    // in a real Scratch variable or list, and everything else is a cell of the
+    // virtual memory system. The five blocks below are therefore refused rather
+    // than bound:
     // they are the low-level name-and-value interface, and raven's whole claim
     // is that a program cannot reach it.
     row(
@@ -381,7 +382,7 @@ pub static BINDINGS: &[Row] = &[
         no(
             "data",
             "set_variable_to",
-            "variables are VMS cells; write `n = value;`, or `@scratch` the declaration to store it in Scratch's own variable",
+            "variables are VMS cells; write `n = value;`, or decorate the declaration to store it in Scratch's own variable",
         ),
     ),
     row(
@@ -393,7 +394,7 @@ pub static BINDINGS: &[Row] = &[
         no(
             "data",
             "show_variable",
-            "a VMS cell has no monitor; `watch n;` shows a mirror, and `@scratch` stores it in a Scratch variable",
+            "a VMS cell has no monitor; `watch n;` shows a mirror, and a decorator stores it in a Scratch variable",
         ),
     ),
     row(
@@ -401,7 +402,7 @@ pub static BINDINGS: &[Row] = &[
         no(
             "data",
             "hide_variable",
-            "a VMS cell has no monitor; `watch n;` shows a mirror, and `@scratch` stores it in a Scratch variable",
+            "a VMS cell has no monitor; `watch n;` shows a mirror, and a decorator stores it in a Scratch variable",
         ),
     ),
     // A list is a run of the virtual memory system now, not a Scratch list, so
@@ -452,7 +453,7 @@ pub static BINDINGS: &[Row] = &[
     ),
     row(
         "data_showlist",
-        no("data", "show_list", "a list is a run of the VMS and has no monitor; `watch xs;` shows one, and `@scratch` makes the list Scratch's own"),
+        no("data", "show_list", "a list is a run of the VMS and has no monitor; `watch xs;` shows one, and a decorator makes the list Scratch's own"),
     ),
     row(
         "data_hidelist",

@@ -10,7 +10,7 @@ raven-asm's rule is inherited, not weakened: a raven statement eventually become
 Scratch blocks that *are* those statements, and a raven expression becomes
 reporter blocks that *are* that expression. raven adds no runtime of its own — no
 dispatch, no frame layout, no bookkeeping. The lists it declares, `_vms` and
-`_gvm`, are fixed arrays indexed by constants, and every access to them is a
+`_heap`, are fixed arrays indexed by constants, and every access to them is a
 block the source asked for. A `list` is a run of that memory and its helpers are
 `warp` procedures the expansion prints; nothing runs that `raven expand` does not
 show. If a construct cannot be expressed as blocks, it is a compile error, not a
@@ -108,28 +108,30 @@ with `data_itemoflist` and written with `data_replaceitemoflist`. The one Scratc
 variable a project can declare is the mirror `watch` asks for, and that exists to
 be looked at on the stage rather than programmed with.
 
-There is exactly one deliberate exception, and it is written down: the
-[`@scratch`](/raven/syntax#scratch) decorator on a `var` or a `list` stores that
-declaration in a real Scratch variable or list of its own name instead of a cell.
-The name, its type and every statement that uses it are unchanged — `raven
-expand` shows `data_variable` where a cell would show `data_itemoflist` — so the
-exception is visible in the expansion, and a declaration that takes it gives up
-the finite, compiled-in arena on purpose. It is there for a value another
-Scratch program, an extension or the editor has to reach.
+There is exactly one deliberate exception, and it is written down: a
+[`@scratch_global` or `@scratch_sprite`](/raven/syntax) decorator
+on a `var` or a `list` stores that declaration in a real Scratch variable or list
+of its own name instead of a cell. Which Scratch scope it gets is written down
+rather than guessed from the file the declaration sits in. The name, its type and
+every statement that uses it are unchanged — `raven expand` shows `data_variable`
+where a cell would show `data_itemoflist` — so the exception is visible in the
+expansion, and a declaration that takes it gives up the finite, compiled-in arena
+on purpose. It is there for a value another Scratch program, an extension or the
+editor has to reach.
 
-There are five lists, and the split between them is by **lifetime** and by
-whether the storage *grows*:
+There is **one** virtual memory system, and it belongs to the project: the stage
+declares it, every target reads the same cells, and no sprite owns an arena that
+the others cannot see. Cell indices are handed out once for the whole project, so
+`item 7 of _vms` means the same thing in every target.
 
 | | |
 | --- | --- |
-| `_vms` | the target's arena: its `var`s that are not `@scratch`, every `proc`'s frame, and every list or map that is only ever read or written in place. Declared with one item per cell, so a table costs nothing to start. |
-| `_heap` | the target's heap: the runs that grow. A list of its own, because Scratch refuses to add to a list of 200,000 items — one large table in `_vms` would otherwise stop every list in the program from growing. |
-| `_gvm` | the project's arena, declared on the stage: every `pub var`, and every stage `var`, that is not `@scratch` |
-| `_gheap` | the project's heap, declared on the stage |
-| `_stack1`, `_stack2`, … | one per script: everything block-scoped. **It grows and shrinks with the scopes that use it.** |
+| `_vms` | the project's fixed arena, declared on the stage: every `var` that is not Scratch's own, every `proc`'s frame, and every list or map that is only ever read or written in place. Declared with one item per cell, so a table costs nothing to start. |
+| `_heap` | the project's heap, declared on the stage: the runs that grow. A list of its own, because Scratch refuses to add to a list of 200,000 items — one large table in `_vms` would otherwise stop every list in the program from growing. |
+| `_stack1`, `_stack2`, … | one per script, numbered across the project: everything block-scoped. **It grows and shrinks with the scopes that use it.** |
 | `_console` | the log, when something logs |
 
-None of them is declared unless the program uses it: a target with no `var`, no
+None of them is declared unless the program uses it: a program with no `var`, no
 `let` and no `proc` cell emits no arena at all, a script that never pushes a
 block-scoped cell gets no stack, and a project that never logs gets no console.
 
@@ -148,7 +150,7 @@ and a broadcast, say — cannot pull the ground out from under each other.
 
 ### The arenas are declared, not grown
 
-`_vms` and `_gvm` hold what has to outlive a script: a `var`, a `proc`'s frame,
+`_vms` and `_heap` hold what has to outlive a script: a `var`, a `proc`'s frame,
 which every call of that procedure shares (that is what makes recursion work with
 a constant index), and the lists and maps that do not grow. They are declared
 with **one item per cell**, each carrying its starting value, so a `var score:
@@ -169,15 +171,15 @@ should take what it needs as a parameter, or be written `warp` so it cannot yiel
 halfway.
 
 The payoff is that the storage of a raven program is *finite and known*. Nothing
-makes a variable the editor can see unless the source wrote `watch` or
-`@scratch`, nothing reaches one by name unless `@scratch` bound it, and no macro
-can quietly add either. `raven expand` prints every cell, and the count of them
-is the count in the source.
+makes a variable the editor can see unless the source wrote `watch` or a
+Scratch-storage decorator, nothing reaches one by name unless a decorator bound
+it, and no macro can quietly add either. `raven expand` prints every cell, and
+the count of them is the count in the source.
 
 ### A list is a run of cells
 
 A `list<T>` or a `map<K, V>` is not a Scratch list. It is a **run of cells** in
-one of the arenas, starting with a handle — the cell the items begin at, the
+the fixed arena, starting with a handle — the cell the items begin at, the
 length, and the capacity — and reached through raven's checked methods:
 
 ```rasm
@@ -191,7 +193,7 @@ a constant offset plus one base read.
 
 A run that is never pushed or inserted into is a **table**, and stays in the fixed
 arena, where a literal initializer is part of the declaration and costs nothing at
-run time. A run that grows lives in `_heap` or `_gheap`. The two live in different
+run time. A run that grows lives in `_heap`. The two live in different
 lists for one reason, and it is Scratch's: `add to list` is refused once a list
 holds 200,000 items, so a large table sharing the arena with a growable run would
 freeze that run. Which lists grow is read out of the source — `push`, `insert`
@@ -285,11 +287,18 @@ different values rather than the same one twice. All of it is printed by
 
 ## 8. Ownership is declared, never inferred
 
-`pub` on a declaration is what puts it on the stage and makes it visible to every
-sprite. Without it, a declaration belongs to the file that declares it. A module
-has no target of its own, so anything a module exports is project-wide by
-construction — a module cannot bind one name to two different things for two
+`pub` on a declaration is what makes it visible to every file, and nothing else:
+it never decides where a value lives. Every VMS declaration is a cell or run of
+the project's one arena whatever its visibility, so a file-private `var` still has
+exactly one instance the whole program shares — another file simply cannot name
+it. A module has no target of its own, so anything a module exports is `pub` by
+construction; a module cannot bind one name to two different things for two
 different users.
+
+Where a declaration is *stored* is written down too, by a decorator:
+`@scratch_global` and `@scratch_sprite` name Scratch's own storage and its scope,
+and a declaration with neither is a VMS cell. Nothing is guessed from the file the
+declaration happens to sit in.
 
 `use` is inclusion, not Rust's name import: a Scratch custom block belongs to one
 target, so importing a `proc` copies it into each importer, and raven says so in

@@ -70,7 +70,7 @@ try {
   console.error("no examples/raven/chess/dist/layout.json — build with --debug");
   process.exit(1);
 }
-const globals = ["_gvm", "_gheap", "_console"];
+const globals = ["_vms", "_heap", "_console"];
 const list = (name) => {
   const where = layout.find((entry) => entry.name === name);
   if (!where) throw new Error(`the project has no list called ${name}`);

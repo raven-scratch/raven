@@ -108,7 +108,7 @@ the construct adds *beyond* the code you wrote inside it.
 | the end of a block that pushed `k` cells | `data_deleteoflist(N, "_stack1");` × `k` | `k` |
 | `x = e;` where `x` is a `var` | `data_replaceitemoflist(N, "_vms", e);` | 1 |
 | `x = e;` where `x` is a `let` | the same, on the cell the binding names | 1 |
-| `x = e;` where `x` is a `pub var` | `data_replaceitemoflist(N, "_gvm", e);` | 1 |
+| `x = e;` where `x` is a `pub var` | the same — `pub` changes who may name it, not the list it is in | 1 |
 | `x = e;` where `x` is a `bool` | the same, storing the comparison's value | 1, and `<value = "true">` on every read |
 | `x += e;` | `data_replaceitemoflist(N, A, operator_add(data_itemoflist(N, A), e));` | 3 |
 | `x -= e;`, `x *= e;`, `x /= e;`, `x %= e;` | the same shape with `operator_subtract`, `operator_multiply`, `operator_divide`, `operator_mod` | 3 |
@@ -140,7 +140,7 @@ the construct adds *beyond* the code you wrote inside it.
 
 `let`, `for` and `var` are what introduce state, and none of them adds anything to
 the project's variable list, because a raven project has no variable list: a `var`
-writes a cell of `_vms` (or `_gvm` for a `pub var`), while a `let` and a `for`
+writes a cell of `_vms` whether or not it is `pub`, while a `let` and a `for`
 counter outside a `proc` are pushed on the script's own `_stackN` and popped when
 their block ends. A `let` in a script is therefore gone when the block is; a `let`
 in a `proc` is a `_vms` cell instead, because the stack belongs to the script.
@@ -215,13 +215,14 @@ A `proc` is emitted once per target that calls it, and only if it is called. A
 | raven | Effect in the project | Blocks |
 | --- | --- | --- |
 | `var x: num = 0;` | one cell of `_vms`, declared with its starting value as that cell's item | 0 |
-| `pub var x: num = 0;` | one cell of `_gvm`, the arena the stage declares | 0 |
+| `pub var x: num = 0;` | the same cell, and a name other files may import | 0 |
+| `@scratch_global var x: num = 0;` | a real Scratch variable on the stage | 0 |
+| `@scratch_sprite var x: num = 0;` | a real Scratch variable of the declaring sprite | 0 |
 | `var l: list<num> = [];` | a run of `_vms`, or of `_heap` when it grows: a three-cell handle, then one cell per starting item | 0 |
 | `var p: Point = Point { x: 0, y: 0 };` | one cell per field, in declaration order, started from the literals | 0 |
-| the first arena cell a target uses | `_vms`, declared with one item per cell | 0 |
-| the first growable run a target uses | `_heap`, declared with the run's starting items | 0 |
-| the first block-scoped cell a script uses | `_stack<n>`, declared **empty**: it holds exactly the cells alive right now | 0 |
-| the first project-wide cell | one list, `_gvm`, declared on the stage | 0 |
+| the first arena cell any target uses | `_vms`, declared on the stage with one item per cell | 0 |
+| the first growable run any target uses | `_heap`, declared on the stage with the run's starting items | 0 |
+| the first block-scoped cell a script uses | `_stack<n>`, declared **empty** on the stage: it holds exactly the cells alive right now | 0 |
 | `struct Point { x: num, y: num }` | *nothing* on its own — a shape, not storage | 0 |
 | `const N: num = 4;` | *nothing* — substituted at each use | 0 |
 | `costume "idle" = "assets/idle.svg";` | a costume, hashed and packed | 0 |
@@ -232,8 +233,8 @@ A `proc` is emitted once per target that calls it, and only if it is called. A
 A program that declares no state at all does not declare `_vms`, and looks exactly
 like a raven-asm project of the same shape. Nothing a program *writes* can name a
 Scratch variable; the ones it can declare are the mirror `watch` asks for, which
-exists to be looked at, and the name `@scratch` binds, which is a real Scratch
-variable or list and lowers to `data_variable`/`data_setvariableto` (or the list
+exists to be looked at, and the names a decorator binds, which are real Scratch
+variables or lists and lower to `data_variable`/`data_setvariableto` (or the list
 blocks) in place of a cell. A `bool` is kept like anything else, converted back
 into a block when it is read; see
 [types](/raven/types#booleans-stored-as-a-value-converted-on-the-way-out).
@@ -273,8 +274,8 @@ The lowering is deterministic in the strong sense that raven-asm guarantees:
   produced it, so identifiers do not depend on hash-map iteration order;
 * a macro-generated name is derived from the macro's name and the expansion
   index, so the same program produces the same generated names;
-* a `_vms` or `_gvm` cell index is handed out in source order, so the same program
-  produces the same cells;
+* a `_vms` or `_heap` cell index is handed out in source order across the whole
+  project, so the same program produces the same cells;
 * `project.json` keys are ordered, and the ZIP timestamp is pinned.
 
 The test that proves it is the one raven-asm already has, applied to raven: build

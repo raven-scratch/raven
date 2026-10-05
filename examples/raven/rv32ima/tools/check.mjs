@@ -239,7 +239,7 @@ for (const image of chosen) {
     const shown = rows.join('\n');
 
     // The keyboard, both ways. What the keyboard sent is the machine's console
-    // input, and that is run 1 of the stage's `_gheap`: a run is a handle of
+    // input, and that is run 1 of the stage's `_heap`: a run is a handle of
     // (base, length, capacity) followed by its items, which is how raven lays
     // one out. Reading it is how the check sees the byte without waiting for a
     // login prompt to echo it -- the guest does read the console, but through a
@@ -304,7 +304,7 @@ for (const image of chosen) {
     }
 
     // The keyboard, both ways, and read off the machine's console *input* --
-    // run 1 of the stage's `_gheap`, a run being a handle of (base, length,
+    // run 1 of the stage's `_heap`, a run being a handle of (base, length,
     // capacity) followed by its items. Reading it is how the check sees the byte
     // without waiting for the shell to echo it, which is thousands of frames of
     // this machine's speed per character. It runs after the typed commands
@@ -312,7 +312,7 @@ for (const image of chosen) {
     // would otherwise be part of the next command's line.
     if (image.keyboard) {
         const consoleInput = () => {
-            const heap = value(runtime.getTargetForStage(), '_gheap');
+            const heap = value(runtime.getTargetForStage(), '_heap');
             return heap.slice(heap[0] - 1, heap[0] - 1 + heap[1]);
         };
         const send = (key) => {
@@ -402,9 +402,9 @@ for (const image of chosen) {
     // terminal rather than through the guest, because this is the half of the
     // escape handling no boot log exercises: the machine is idle, so the
     // machine's *console output* run is written to by hand -- run 2 of the
-    // stage's `_gheap` -- and what the terminal did with it is read back.
+    // stage's `_heap` -- and what the terminal did with it is read back.
     if (image.colours || image.erase || image.terminal) {
-        const heap = value(runtime.getTargetForStage(), '_gheap');
+        const heap = value(runtime.getTargetForStage(), '_heap');
         const base = heap[3];
         const oneStep = () => runtime._step();
         const feed = (codes) => {

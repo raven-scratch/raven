@@ -342,11 +342,13 @@ generated from the binding table, and the docs are checked against the code.
 
 * `for x in items` takes the list's *name*, not an expression: the macro reads the
   list's length through an `ident` parameter, so `items.at(2)` is refused.
-* A `sound` or a non-`pub` `var` written in a *module* file is accepted and then
-  ignored. So is a non-`pub` `proc`, `fn`, `const` or `macro`, with no diagnostic
-  at all — `lib/penfont/engine.rav` is `pub` everywhere for that reason. A
-  `costume` is the exception: every target that uses the module wears it, which is
-  how `lib/case` installs 53 costumes with one `use`.
+* A `sound`, or a non-`pub` `proc`, `fn`, `const` or `macro` written in a *module*
+  file is accepted and then ignored, with no diagnostic at all —
+  `lib/penfont/engine.rav` is `pub` everywhere for that reason. A non-`pub` `var`
+  in a module is the exception: it is diagnosed, because a module has no target
+  for the name to belong to. A `costume` is the exception the other way: every
+  target that uses the module wears it, which is how `lib/case` installs 53
+  costumes with one `use`.
 * A module is compiled into each target that uses it, and a procedure parameter
   does not survive that as a local: if the target has a variable of the same
   name, the *target's* wins inside the procedure, silently. `lib/penfont` spells
@@ -355,8 +357,3 @@ generated from the binding table, and the docs are checked against the code.
 * `control_while`, `control_for_each`, the counter blocks and `sensing_online`
   are extended (TurboWarp-only): reachable, warned about, refused under
   `--strict`.
-* A `let` or a `for` in a *stage* script emits a stack list named `_stack1`, and
-  so does one in any sprite — but a stage's lists are project-wide and a sprite's
-  are its own, so the second is refused with "`_stack1` is already a global list".
-  A stage script that needs a block-scoped cell has to be moved to a sprite until
-  the naming is fixed; the diagnostic already says it is a bug in raven.

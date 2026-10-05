@@ -35,8 +35,8 @@ use rv32::io;
 sprite "Input" {
     costume "blank" = "assets/blank.svg";
 
-    @scratch var held_delete: num = 0;
-    @scratch var held: list<num> = [];
+    @scratch_sprite var held_delete: num = 0;
+    @scratch_sprite var held: list<num> = [];
 
     /// Every key the poll watches: the ones with no dropdown name, and the byte
     /// each one makes. `delete` is not here -- it is four bytes and not one, and

@@ -20,12 +20,13 @@ raven clean           # remove dist/
 ```
 
 A raven project declares no Scratch variables: every `var`, `let`, `for` counter
-and returned value is a cell of `_vms` (the target's arena) or `_gvm` (the
-project's), addressed by a constant index. The five blocks that name a Scratch
-variable are refused with an explanation. `list<T>` and `map<K, V>` are Scratch
-lists reached through raven's checked methods, and a `struct` is a fixed frame of
-cells — a place, not a value. A `bool` can be stored anywhere a value can, because
-reading one back is a single comparison: `<value = "true">`.
+and returned value is a cell of `_vms`, the project's one arena, addressed by a
+constant index. The five blocks that name a Scratch variable are refused with an
+explanation, and a `@scratch_global` or `@scratch_sprite` decorator is how a
+declaration asks for Scratch's own storage instead. `list<T>` and `map<K, V>` are
+runs of cells reached through raven's checked methods, and a `struct` is a fixed
+frame of cells — a place, not a value. A `bool` can be stored anywhere a value
+can, because reading one back is a single comparison: `<value = "true">`.
 
 Where the pieces live:
 

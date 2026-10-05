@@ -114,10 +114,11 @@ initializer is only written where a place is being made — the initializer of a
 | `bool` | `true` / `false` | Only as a variable's initial value; boolean **inputs** want a boolean expression. |
 | `list<T>` | a run of cells, starting empty or with the literal items | a run of `_vms`, or of `_heap` when it grows |
 
-`pub` puts the declaration on the stage, where every sprite can see it. Without
-it the declaration belongs to the file's target — a sprite-local variable, or, in
-the stage file, a project-wide one. A module file has no target, so everything it
-exports is `pub` by construction.
+`pub` decides who may name the declaration: every file that imports it. It never
+changes where the value lives — every `var` is a cell or run of the project's one
+arena — and without it a declaration is visible only inside the file that wrote
+it. A module file has no target, so it may only declare `pub` items; a non-`pub`
+declaration in a module is an error.
 
 `const` is a literal with a name. It is substituted at every use and costs
 nothing; it cannot be computed, because raven has no compile-time evaluation
@@ -149,24 +150,32 @@ A watched **list** needs no mirror: it already has a monitor, so `watch` only
 shows it. Anything watched has to be declared in the target that watches it (or
 be a `pub var`), which the checker enforces.
 
-### `@scratch`
+### `@scratch_global` and `@scratch_sprite`
 
 ```text
 decorator = "@" IDENT [ "(" [ expr { "," expr } ] ")" ]
 ```
 
-A decorator is written on the line above a declaration, one per line, and
-`@scratch` is the one raven has. It changes where the storage is: instead of a
-cell of `_vms` (or a run of one), the name is a **real Scratch variable or
-list**, reached by its own name.
+A decorator is written on the line above a declaration, one per line, and answers
+exactly one question: **where is the storage?** raven has two answers, and each is
+written down rather than guessed from the file the declaration sits in.
+
+* No decorator: a cell or run of `_vms`, the project's one arena.
+* `@scratch_global`: a **real Scratch variable or list on the stage**, reached by
+  its own name.
+* `@scratch_sprite`: a **real Scratch variable or list of the declaring sprite**,
+  reached by its own name.
 
 ```rav
 sprite "Player" {
-    @scratch
+    @scratch_sprite
     var score: num = 0;                 // data_variable("score") / setvariableto
 
-    @scratch
+    @scratch_sprite
     var trail: list<num> = [1, 2];      // the Scratch list "trail" itself
+
+    @scratch_global
+    pub var best: num = 0;              // one Scratch variable, on the stage
 
     on flag_clicked {
         score += 1;                     // the same statement a cell would take
@@ -177,23 +186,26 @@ sprite "Player" {
 
 Nothing else about the name changes. It has the same type, the same scope rules
 and the same statements; `raven expand` simply prints `data_variable` and
-`data_setvariableto` where a cell would print `data_itemoflist`. A `@scratch`
+`data_setvariableto` where a cell would print `data_itemoflist`. A Scratch-storage
 `list<T>` — or `map<K, V>`, which is a container too — is a Scratch list, so
 `data_addtolist`, `data_deleteoflist` and the rest are what its methods lower to.
 
-That is what it is for: a value another Scratch program, an extension or the
-editor's own variable pane has to see, and a value that should keep Scratch's
-own length and item rules. It is the only way raven declares a Scratch variable
-a program can name, and it costs that declaration the memory system's
-guarantees — the value is no longer part of the finite, compiled-in arena.
+That is what they are for: a value another Scratch program, an extension or the
+editor's own variable pane has to see, and a value that should keep Scratch's own
+length and item rules. They are the only way raven declares a Scratch variable a
+program can name, and each costs that declaration the memory system's guarantees —
+the value is no longer part of the finite, compiled-in arena.
 
-`@scratch` takes no arguments, may be written only on a `var`, and cannot be
-repeated. A `struct` cannot take it: a struct is a run of cells and a Scratch
-variable is one cell.
+A decorator takes no arguments, may be written only on a `var`, and cannot be
+repeated or combined with the other one. `@scratch_sprite` needs a sprite: it is
+refused on the stage, whose variables are project-wide, and in a module, which has
+no target of its own. A `pub @scratch_sprite` is refused too — a sprite-local
+value cannot be imported. A `struct` cannot take either: a struct is a run of cells
+and a Scratch variable is one cell.
 
-`watch` and `@scratch` are independent and compose: `watch` decides whether the
-monitor starts visible, `@scratch` where the value is stored. Watching a
-`@scratch` name only shows its monitor; it does not add a mirror.
+`watch` and the decorators are independent and compose: `watch` decides whether the
+monitor starts visible, a decorator where the value is stored. Watching a
+Scratch-storage name only shows its monitor; it does not add a mirror.
 
 ## Definitions
 
@@ -333,7 +345,7 @@ The `_` arm must be last, and a `match` needs at least one arm.
 | --- | --- | --- |
 | `let x = e` | core | a `data_addtolist` onto the script's `_stackN`, and a `data_deleteoflist` when the block ends; each read is a `data_itemoflist` |
 | `let p: Point = Point { … }` | core | one cell push per field, into a fresh frame |
-| `x = e` | core | one cell write: the script's `_stackN` for a `let`, `_vms` for a `var`, `_gvm` for a `pub var` |
+| `x = e` | core | one cell write: the script's `_stackN` for a `let`, `_vms` for a `var` — `pub` or not |
 | `p.x = e` | core | one cell write at the field's constant offset |
 | `l[i] = e` | core | a grow-and-replace: the `replace item` block, plus up to five to lengthen the list first |
 | `x += e` | core | a read, the operator and a write — three blocks, wherever `x` lives |
@@ -373,8 +385,9 @@ A loop may sit inside a loop of the same kind: `for` inside `for`, `while` insid
 reinitializes its cell each iteration, and a `let` inside a block disappears when
 the block ends. If a name is already bound, the `let` shadows it for the rest of
 the enclosing block. To keep a value across statements of a target, or to share it
-with another script, declare a `var` — a cell that outlives every script, at
-target scope (`_vms`) or project scope (`pub`, in `_gvm`).
+with another script, declare a `var` — a cell of the project's one arena that
+outlives every script, visible in its file and, with `pub`, to every file that
+imports it.
 
 A `var` statement is allowed **only inside a macro body**, where it declares a
 cell for that expansion, or a name the caller passed as an `ident` parameter.
@@ -455,6 +468,6 @@ if c { 1 } else { 2 }      // no conditional expression: use an if statement
 break;                     // Scratch cannot leave a loop without ending the script
 var y: num = 0;            // inside a proc: use `let`, or declare it on the target
 a as num                   // no as: write num(a)
-#[warp]                    // no general attributes: a decorator goes on a `var`, and only `@scratch` exists
+#[warp]                    // no general attributes: a decorator goes on a `var`, and only `@scratch_global` and `@scratch_sprite` exist
 "score: " + score          // no string +: write f"score: {score}"
 ```

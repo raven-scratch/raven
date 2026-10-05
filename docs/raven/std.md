@@ -186,7 +186,7 @@ spelling.
 | `data_listcontainsitem` | *refused* — `trail.contains(v)` |
 | `data_itemnumoflist` | *refused* — `trail.index_of(v)` |
 | `data_listcontents` | *refused* — `trail.text()` |
-| `data_showlist`, `data_hidelist` | *refused* — a run has no monitor; `watch trail;` shows one, and `@scratch var trail: list<T>` makes it a Scratch list |
+| `data_showlist`, `data_hidelist` | *refused* — a run has no monitor; `watch trail;` shows one, and `@scratch_global var trail: list<T>` (or `@scratch_sprite`) makes it a Scratch list |
 | `control_repeat` | `repeat n { … }` |
 | `control_forever` | `forever { … }` |
 | `control_if`, `control_if_else` | `if c { … }`, `if c { … } else { … }` |
@@ -224,7 +224,7 @@ trail)` says `write `trail.push(v)``.
 
 They are the name-at-run-time interface, and raven's whole claim is that a
 program cannot reach it by accident: a raven project declares no Scratch variable
-a program can name unless the source asked for one with `@scratch`, and the only
+a program can name unless the source asked for one with a decorator, and the only
 other one it ever declares is the mirror `watch` asks for. See
 [the memory system](/raven/design#_7-there-is-no-raw-variable-access-only-the-virtual-memory-system).
 

@@ -20,7 +20,7 @@ window.
 raven explain rules        # the hard rules that reject code, first
 raven explain grammar      # EBNF, including all keywords
 raven explain costs        # blocks emitted per construct
-raven explain memory       # _vms, _gvm, _stackN, and what a cell is
+raven explain memory       # _vms, _stackN, and what a cell is
 raven explain stdlib       # one line per catalog block: opcode, spelling, args, result
 raven explain menus        # <MenuType>::<Variant> for every dropdown
 raven explain prelude      # crates/raven/src/prelude.rav, verbatim
@@ -45,10 +45,10 @@ raven explain cli          # every command, and what it writes
 ## What a generated program must respect
 
 * **No Scratch variables**, unless the source asks for one. Everything is a cell
-  of `_vms`, `_gvm` or the script's `_stackN`; `watch` declares a visible mirror
-  to be looked at, and the `@scratch` decorator binds a declaration to a real
-  Scratch variable or list of its own name. The five blocks that name a Scratch
-  variable are still refused.
+  of `_vms` or the script's `_stackN`; `watch` declares a visible mirror
+  to be looked at, and a `@scratch_global` or `@scratch_sprite` decorator binds a
+  declaration to a real Scratch variable or list of its own name. The five blocks
+  that name a Scratch variable are still refused.
 * **`raven-asm` never rewrites.** One statement below raven is one block. If a
   feature seems to need several blocks, it is a raven macro with a printed
   lowering, not a new block.

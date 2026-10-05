@@ -209,17 +209,19 @@ is the contract. It is implemented — `raven build` writes a working `.sb3`:
   value is a cell addressed by a constant index the compiler picks, and the
   memory is **dynamic**: a script's block-scoped cells live on its own stack
   (`_stack1`, `_stack2`, …), pushed when their declaration runs and popped when
-  their block ends, while `var`s and procedure frames live in an arena (`_vms`,
-  or `_gvm` on the stage) declared with one item per cell. A program cannot name
-  a Scratch variable or list — the blocks that do are refused with an explanation
-  — and the only Scratch variable or list a project gets is the mirror `watch`
-  asks for. A `struct` is a *place*: a fixed frame of cells, so `line.to.x` is one
-  block and cannot be copied. A `list<T>` is an owned **run of cells** with a
-  handle, and a `map<K, V>` is the same run holding alternating keys and values;
-  a run that grows lives in `_heap` or `_gheap`, which is a list of its own so
-  that a large table cannot stop a growing list. Lists and maps are never copied
-  or passed — owned, like a `struct`, which is what lets their storage be decided
-  while compiling.
+  their block ends, while `var`s and procedure frames live in the project's one
+  arena, `_vms`, declared on the stage with one item per cell. There is no
+  per-sprite arena: a cell index means the same thing in every target. A program
+  cannot name a Scratch variable or list — the blocks that do are refused with an
+  explanation — and the only Scratch variables or lists a project gets are the
+  mirror `watch` asks for and the ones a `@scratch_global` or `@scratch_sprite`
+  decorator names on purpose. A `struct` is a *place*: a fixed frame of cells, so
+  `line.to.x` is one block and cannot be copied. A `list<T>` is an owned **run of
+  cells** with a handle, and a `map<K, V>` is the same run holding alternating
+  keys and values; a run that grows lives in `_heap`, which is a list of its own
+  so that a large table cannot stop a growing list. Lists and maps are never
+  copied or passed — owned, like a `struct`, which is what lets their storage be
+  decided while compiling.
 * **`fn` and `macro`** — compile-time, hygienic, acyclic, and inlined at every
   call site, so they cost nothing at run time.
 * **Returning `proc`s** — `proc f(a: num) -> num { return a + 1; }`. `return` is

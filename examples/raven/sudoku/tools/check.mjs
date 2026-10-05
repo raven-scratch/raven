@@ -171,9 +171,8 @@ async function main() {
   // The VM only steps its threads while it is running.
   vm.start();
 
-  const board = vm.runtime.targets.find((t) => t.getName() === 'Board');
   // A raven `list` is a run of an arena rather than a Scratch list with a name,
-  // and a `pub var` is a cell of `_gvm` rather than a Scratch variable. The
+  // and a `pub var` is a cell of `_vms` rather than a Scratch variable. The
   // build (`--debug`) writes down where each one is, so a test can still read it
   // by name.
   let layout;
@@ -183,7 +182,7 @@ async function main() {
     console.error('no dist/layout.json — build the example with --debug');
     process.exit(1);
   }
-  const globals = ['_gvm', '_gheap', '_console'];
+  const globals = ['_vms', '_heap', '_console'];
   const owner = (where) =>
     globals.includes(where.list)
       ? vm.runtime.targets.find((t) => t.getName() === 'Stage')
@@ -302,12 +301,13 @@ async function main() {
     return false;
   };
 
-  // `cursor` is a raven `var`, so it is a cell of the target's arena rather than
-  // a Scratch variable a test could look up by name. Its slot is found instead
-  // of assumed: a right press adds one and a down press adds nine to exactly one
-  // cell, and that cell is the cursor.
+  // `cursor` is a raven `var`, so it is a cell of the project's one arena rather
+  // than a Scratch variable a test could look up by name. Its slot is found
+  // instead of assumed: a right press adds one and a down press adds nine to
+  // exactly one cell, and that cell is the cursor.
   const vms = () => {
-    const variable = board.lookupVariableByNameAndType('_vms', 'list');
+    const stage = vm.runtime.targets.find((t) => t.getName() === 'Stage');
+    const variable = stage.lookupVariableByNameAndType('_vms', 'list');
     return variable ? variable.value.map(Number) : [];
   };
   const calibrateCursor = async () => {

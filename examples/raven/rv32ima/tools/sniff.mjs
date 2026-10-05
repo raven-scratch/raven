@@ -3,7 +3,7 @@
 //
 //     node tools/sniff.mjs "busybox --list" [--frames N]
 //
-// The console's output lives in run 2 of the stage's `_gheap` arena, so a proxy
+// The console's output lives in run 2 of the stage's `_heap` arena, so a proxy
 // in front of that list sees every byte in the order it was written, which is
 // the only honest way to know what an editor actually emits. The stream is then
 // split into escape sequences and text: the sequences are counted and printed
@@ -109,7 +109,7 @@ const val = (t, n) => { const v = bind(t, n); return v ? v.value : undefined; };
 
 let frame = 0;
 const stream = [];
-const heapVar = bind(runtime.getTargetForStage(), '_gheap');
+const heapVar = bind(runtime.getTargetForStage(), '_heap');
 const raw = heapVar.value;
 heapVar.value = new Proxy(raw, {
     set(t, k, v) {

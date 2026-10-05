@@ -98,7 +98,7 @@ raven explain              # every section
 raven explain rules        # the hard rules that reject code
 raven explain grammar      # EBNF, with every keyword
 raven explain costs        # blocks emitted per construct
-raven explain memory       # _vms, _gvm, _stackN, and what a cell is
+raven explain memory       # _vms, _stackN, and what a cell is
 raven explain stdlib       # one line per catalog block: opcode, spelling, args, result
 raven explain menus        # <MenuType>::<Variant> for every dropdown
 raven explain prelude      # crates/raven/src/prelude.rav, verbatim

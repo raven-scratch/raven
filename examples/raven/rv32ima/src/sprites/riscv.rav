@@ -43,51 +43,51 @@ sprite "RISCV" {
     // The hart
     // ------------------------------------------------------------------
     //
-    // Every one of these is a Scratch variable of its own -- `@scratch` --
+    // Every one of these is a Scratch variable of its own -- `@scratch_sprite` --
     // rather than a cell of the arena. A cell costs a list read to look at and
     // a list write to change, and the inner loop of an interpreter does both
     // several times per instruction, so the arena would multiply the cost of
     // the one thing this project spends all its time doing.
 
-    @scratch var pc: num = 0;
-    @scratch var ir: num = 0;
-    @scratch var ofs_pc: num = 0;
-    @scratch var rdid: num = 0;
-    @scratch var exec_opcode: num = 0;
-    @scratch var op_switch: num = 0;
-    @scratch var load_switch: num = 0;
-    @scratch var store_switch: num = 0;
-    @scratch var branch_switch: num = 0;
-    @scratch var rv32a_switch: num = 0;
-    @scratch var microop: num = 0;
-    @scratch var csrno: num = 0;
-    @scratch var imm: num = 0;
-    @scratch var imm_se: num = 0;
-    @scratch var immm4: num = 0;
-    @scratch var reladdy: num = 0;
-    @scratch var addy: num = 0;
-    @scratch var rs1: num = 0;
-    @scratch var rs2: num = 0;
-    @scratch var rs1imm: num = 0;
-    @scratch var rsval: num = 0;
-    @scratch var rval: num = 0;
-    @scratch var write_val: num = 0;
-    @scratch var is_reg: num = 0;
-    @scratch var irmid: num = 0;
-    @scratch var dowrite: num = 0;
-    @scratch var trap: num = 0;
-    @scratch var a_work: num = 0;
-    @scratch var exec_return: num = 0;
-    @scratch var step_return: num = 0;
-    @scratch var start_mstatus: num = 0;
-    @scratch var start_extraflags: num = 0;
-    @scratch var csr_ptr: num = 0;
-    @scratch var csr_char: num = 0;
-    @scratch var instruction_n: num = 0;
-    @scratch var rt: num = 0;
-    @scratch var instct: num = -1;
-    @scratch var rv_state: num = 0;
-    @scratch var rv_khz: num = 0;
+    @scratch_sprite var pc: num = 0;
+    @scratch_sprite var ir: num = 0;
+    @scratch_sprite var ofs_pc: num = 0;
+    @scratch_sprite var rdid: num = 0;
+    @scratch_sprite var exec_opcode: num = 0;
+    @scratch_sprite var op_switch: num = 0;
+    @scratch_sprite var load_switch: num = 0;
+    @scratch_sprite var store_switch: num = 0;
+    @scratch_sprite var branch_switch: num = 0;
+    @scratch_sprite var rv32a_switch: num = 0;
+    @scratch_sprite var microop: num = 0;
+    @scratch_sprite var csrno: num = 0;
+    @scratch_sprite var imm: num = 0;
+    @scratch_sprite var imm_se: num = 0;
+    @scratch_sprite var immm4: num = 0;
+    @scratch_sprite var reladdy: num = 0;
+    @scratch_sprite var addy: num = 0;
+    @scratch_sprite var rs1: num = 0;
+    @scratch_sprite var rs2: num = 0;
+    @scratch_sprite var rs1imm: num = 0;
+    @scratch_sprite var rsval: num = 0;
+    @scratch_sprite var rval: num = 0;
+    @scratch_sprite var write_val: num = 0;
+    @scratch_sprite var is_reg: num = 0;
+    @scratch_sprite var irmid: num = 0;
+    @scratch_sprite var dowrite: num = 0;
+    @scratch_sprite var trap: num = 0;
+    @scratch_sprite var a_work: num = 0;
+    @scratch_sprite var exec_return: num = 0;
+    @scratch_sprite var step_return: num = 0;
+    @scratch_sprite var start_mstatus: num = 0;
+    @scratch_sprite var start_extraflags: num = 0;
+    @scratch_sprite var csr_ptr: num = 0;
+    @scratch_sprite var csr_char: num = 0;
+    @scratch_sprite var instruction_n: num = 0;
+    @scratch_sprite var rt: num = 0;
+    @scratch_sprite var instct: num = -1;
+    @scratch_sprite var rv_state: num = 0;
+    @scratch_sprite var rv_khz: num = 0;
 
     // ------------------------------------------------------------------
     // Memory and time
@@ -95,8 +95,8 @@ sprite "RISCV" {
 
     /// 64 MiB of RAM, one list item to the byte, and the RAM image starts at
     /// `0x8000_0000` in the guest's address space.
-    @scratch var ram_amount: num = 67108864;
-    @scratch var ram_offset: num = 2147483648;
+    @scratch_sprite var ram_amount: num = 67108864;
+    @scratch_sprite var ram_offset: num = 2147483648;
 
     /// Where in RAM the device tree sits: the last 1728 bytes of it, the way
     /// rv32ima places it, and the address the kernel is handed in `a1`.
@@ -110,13 +110,13 @@ sprite "RISCV" {
     /// the kernel then faults on a device tree full of code. Measured, not
     /// reasoned: the boot reaches a login prompt with the tree at the top of RAM
     /// and dies in an `ebreak` loop with it anywhere else.
-    @scratch var dtb_ptr: num = 0;
+    @scratch_sprite var dtb_ptr: num = 0;
 
-    @scratch var elapsed_us: num = 0;
-    @scratch var last_time: num = 0;
-    @scratch var new_timer: num = 0;
-    @scratch var runframe_start: num = 0;
-    @scratch var runframe_elapsed: num = 0;
+    @scratch_sprite var elapsed_us: num = 0;
+    @scratch_sprite var last_time: num = 0;
+    @scratch_sprite var new_timer: num = 0;
+    @scratch_sprite var runframe_start: num = 0;
+    @scratch_sprite var runframe_elapsed: num = 0;
 
     /// How long the machine may hold one frame before handing it back, in
     /// milliseconds: a little under the 33 ms the runtime steps at, so that the
@@ -129,39 +129,39 @@ sprite "RISCV" {
     /// clock runs at the five frames a second the machine's own slice sets. The
     /// run the machine gets per second is the same either way: it is the frame
     /// that gets shorter, not the arithmetic.
-    @scratch var frame_ms: num = 30;
-    @scratch var runframe_state: num = 0;
+    @scratch_sprite var frame_ms: num = 30;
+    @scratch_sprite var runframe_state: num = 0;
 
     // The CSR file. Everything the guest can read or write is one variable.
-    @scratch var state_pc: num = 0;
-    @scratch var state_mstatus: num = 0;
-    @scratch var state_cyclel: num = 0;
-    @scratch var state_cycleh: num = 0;
-    @scratch var state_timerl: num = 0;
-    @scratch var state_timerh: num = 0;
-    @scratch var state_timermatchl: num = 0;
-    @scratch var state_timermatchh: num = 0;
-    @scratch var state_mscratch: num = 0;
-    @scratch var state_mtvec: num = 0;
-    @scratch var state_mie: num = 0;
-    @scratch var state_mip: num = 0;
-    @scratch var state_mepc: num = 0;
-    @scratch var state_mtval: num = 0;
-    @scratch var state_mcause: num = 0;
-    @scratch var state_extraflags: num = 3;
+    @scratch_sprite var state_pc: num = 0;
+    @scratch_sprite var state_mstatus: num = 0;
+    @scratch_sprite var state_cyclel: num = 0;
+    @scratch_sprite var state_cycleh: num = 0;
+    @scratch_sprite var state_timerl: num = 0;
+    @scratch_sprite var state_timerh: num = 0;
+    @scratch_sprite var state_timermatchl: num = 0;
+    @scratch_sprite var state_timermatchh: num = 0;
+    @scratch_sprite var state_mscratch: num = 0;
+    @scratch_sprite var state_mtvec: num = 0;
+    @scratch_sprite var state_mie: num = 0;
+    @scratch_sprite var state_mip: num = 0;
+    @scratch_sprite var state_mepc: num = 0;
+    @scratch_sprite var state_mtval: num = 0;
+    @scratch_sprite var state_mcause: num = 0;
+    @scratch_sprite var state_extraflags: num = 3;
 
     /// The registers, `reg[1]` to `reg[32]`, so `reg[12]` is `a1`. `x0` is a
     /// slot like any other and is never written.
-    @scratch var reg: list<num> = [];
+    @scratch_sprite var reg: list<num> = [];
 
     /// `2^i`, so that a shift is one lookup rather than a loop.
-    @scratch var powers: list<num> = [];
+    @scratch_sprite var powers: list<num> = [];
 
     /// The RAM image itself. A write past the end grows the list through
     /// raven's own extent helper, which pushes the empty string -- Scratch
     /// reads that as zero -- so the guest may touch any byte of the 64 MiB
     /// without the image being filled in first.
-    @scratch var ram: list<num> = [];
+    @scratch_sprite var ram: list<num> = [];
 
     // ------------------------------------------------------------------
     // 32 bit readings

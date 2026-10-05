@@ -193,7 +193,7 @@ fn _unused(_: &Project) {}
 // ---------------------------------------------------------------------------
 
 /// A built project declares no Scratch variable except the ones the source
-/// asked for: the mirrors `watch` asked for, and the names `@scratch` bound.
+/// asked for: the mirrors `watch` asked for, and the names a decorator bound.
 /// Nothing else may appear in the editor's variable pane.
 #[test]
 fn a_built_project_declares_no_scratch_variables() {
@@ -202,7 +202,7 @@ fn a_built_project_declares_no_scratch_variables() {
         r#"sprite "A" {
             var score: num = 0;
             var trail: list<num> = [];
-            @scratch
+            @scratch_sprite
             var bound: num = 0;
             watch score;
 
@@ -223,32 +223,30 @@ fn a_built_project_declares_no_scratch_variables() {
         .expect("--debug writes project.json");
     let built: serde_json::Value = serde_json::from_str(&text).expect("valid json");
 
-    // A `watch` mirror and a `@scratch` binding are the two things that may
-    // declare a Scratch variable, and both exist on purpose.
+    // A `watch` mirror and a Scratch-storage declaration are the two things
+    // that may declare a Scratch variable, and both exist on purpose.
     let watched = ["score", "bound"];
     for target in built["targets"].as_array().expect("targets") {
         for value in target["variables"].as_object().expect("variables").values() {
             let variable = value[0].as_str().expect("a variable name");
             assert!(
                 watched.contains(&variable),
-                "`{}` declares the Scratch variable `{variable}` without a `watch` or `@scratch`",
+                "`{}` declares the Scratch variable `{variable}` without a `watch` or a decorator",
                 target["name"]
             );
         }
         for list in target["lists"].as_object().expect("lists").values() {
             let list_name = list[0].as_str().expect("a list name");
-            // The only lists a project declares are the arenas, the console,
-            // one stack per script that needs one, and the lists a `watch` or a
-            // `@scratch` asked to see. `trail` is none of those.
+            // The only lists a project declares are the one arena, the one heap,
+            // the console, one stack per script that needs one, and the lists a
+            // `watch` or a decorator asked to see. `trail` is none of those.
             let arena = list_name == "_vms"
-                || list_name == "_gvm"
                 || list_name == "_heap"
-                || list_name == "_gheap"
                 || list_name == "_console"
                 || list_name.starts_with("_stack");
             assert!(
                 arena || watched.contains(&list_name),
-                "`{list_name}` declares a Scratch list without a `watch` or `@scratch`"
+                "`{list_name}` declares a Scratch list without a `watch` or a decorator"
             );
         }
     }
@@ -821,6 +819,150 @@ fn an_imported_item_must_be_public() {
         .module("lib/m", "proc hidden() { looks::say(\"x\"); }")
         .sprite("A", "use lib::m::hidden;\nsprite \"A\" { }");
     expect_error_contains(&project, "has no public item `hidden`");
+}
+
+/// A module has no target, so a `var` it declares has nowhere to belong unless
+/// it is `pub`. The old silence was the wart; now it is a diagnostic.
+#[test]
+fn a_private_module_var_is_an_error() {
+    let project = Project::new("module-private-var")
+        .module("lib/m", "var hidden: num = 0;")
+        .sprite(
+            "A",
+            "use lib::m;\nsprite \"A\" { on flag_clicked { looks::hide(); } }",
+        );
+    expect_error_contains(&project, "declared in a module without `pub`");
+}
+
+/// `@scratch_sprite` names a sprite-local Scratch variable, and a module is not a
+/// sprite.
+#[test]
+fn a_sprite_local_scratch_var_cannot_be_declared_in_a_module() {
+    let project = Project::new("module-scratch-sprite")
+        .module("lib/m", "@scratch_sprite\npub var live: num = 0;")
+        .sprite(
+            "A",
+            "use lib::m;\nsprite \"A\" { on flag_clicked { looks::hide(); } }",
+        );
+    expect_error_contains(&project, "but a module has no target");
+}
+
+/// A `pub var` is one cell of the one arena, and other files reach that cell by
+/// importing the name — the same value, not a copy.
+#[test]
+fn an_imported_pub_var_is_one_shared_cell() {
+    let project = Project::new("shared-cell")
+        .module("lib/m", "pub var shared: num = 0;")
+        .sprite(
+            "A",
+            "use lib::m::shared;\nsprite \"A\" { on flag_clicked { shared += 1; } }",
+        )
+        .sprite(
+            "B",
+            "use lib::m::shared;\nsprite \"B\" { on flag_clicked { shared += 10; } }",
+        );
+    let asm = project.expand();
+    assert!(asm.contains("global list _vms = [0];"), "{asm}");
+    assert_eq!(
+        asm.matches("data_replaceitemoflist(1, \"_vms\"").count(),
+        2,
+        "both sprites write the same cell: {asm}"
+    );
+}
+
+/// A `@scratch_global` declaration is one Scratch variable whoever can name it,
+/// so two of them may not share a name even when neither is `pub`.
+#[test]
+fn two_scratch_globals_may_not_share_a_name() {
+    let project = Project::new("scratch-dup")
+        .stage("@scratch_global\npub var shared: num = 0;\nstage { }")
+        .sprite(
+            "A",
+            r#"sprite "A" {
+                @scratch_global
+                var shared: num = 1;
+                on flag_clicked { looks::hide(); }
+            }"#,
+        );
+    expect_error_contains(&project, "declared project-wide more than once");
+}
+
+/// A `pub` Scratch-global declaration travels: an importer reaches the one real
+/// Scratch variable the module named, not a copy of it.
+#[test]
+fn a_pub_scratch_global_can_be_imported() {
+    let project = Project::new("scratch-import")
+        .module("lib/m", "@scratch_global\npub var shared: num = 5;")
+        .sprite(
+            "A",
+            "use lib::m::shared;\nsprite \"A\" { on flag_clicked { shared += 1; } }",
+        );
+    let asm = project.expand();
+    assert!(asm.contains("global var shared = 5;"), "{asm}");
+    assert!(asm.contains("data_variable(\"shared\")"), "{asm}");
+    let _ = project.build();
+}
+
+/// A stage script and a sprite script each keep block-scoped state, and their
+/// stacks are numbered across the project so the two cannot collide on a name.
+#[test]
+fn a_stage_script_and_a_sprite_script_get_different_stacks() {
+    let project = Project::new("stacks-global")
+        .stage("stage { on flag_clicked { let a = 1; looks::say(a); } }")
+        .sprite(
+            "A",
+            r#"sprite "A" { on flag_clicked { let b = 2; looks::say(b); } }"#,
+        );
+    let asm = project.expand();
+    assert!(asm.contains("global list _stack1 = [];"), "{asm}");
+    assert!(asm.contains("global list _stack2 = [];"), "{asm}");
+    let _ = project.build();
+}
+
+/// Without `pub`, a declaration is still one cell of the one arena, but no other
+/// file can name it.
+#[test]
+fn a_private_var_is_not_visible_to_another_target() {
+    let project = Project::new("file-private")
+        .stage("stage { on flag_clicked { looks::say(score); } }")
+        .sprite(
+            "A",
+            r#"sprite "A" {
+                var score: num = 0;
+                on flag_clicked { looks::hide(); }
+            }"#,
+        );
+    expect_error_contains(&project, "cannot find `score`");
+}
+
+/// There is exactly one arena, and the stage owns it: no sprite declares a `_vms`
+/// of its own, so a cell index means the same thing everywhere.
+#[test]
+fn the_arena_is_one_list_the_stage_owns() {
+    let project = Project::new("one-arena")
+        .sprite(
+            "A",
+            r#"sprite "A" { var n: num = 1; on flag_clicked { looks::say(n); } }"#,
+        )
+        .sprite(
+            "B",
+            r#"sprite "B" { var n: num = 2; on flag_clicked { looks::say(n); } }"#,
+        );
+    project.write();
+    let mut options = project.options();
+    options.debug = true;
+    driver::build(&options).expect("the fixture builds");
+    let text = std::fs::read_to_string(project.dir.join("dist/project.json")).expect("json");
+    let built: serde_json::Value = serde_json::from_str(&text).expect("parse");
+    for target in built["targets"].as_array().expect("targets") {
+        let lists = target["lists"].as_object().expect("lists");
+        let has_arena = lists.values().any(|v| v[0] == "_vms");
+        if target["isStage"] == true {
+            assert!(has_arena, "the stage declares the one arena");
+        } else {
+            assert!(!has_arena, "a sprite must not declare an arena of its own");
+        }
+    }
 }
 
 #[test]
@@ -1740,7 +1882,7 @@ fn the_raw_variable_blocks_are_refused_with_an_explanation() {
 }
 
 #[test]
-fn a_project_wide_scalar_lives_in_the_stage_arena() {
+fn a_project_wide_scalar_lives_in_the_one_arena() {
     let project = Project::new("gvm")
         .stage("stage { pub var best: num = 4; }")
         .sprite(
@@ -1753,11 +1895,11 @@ fn a_project_wide_scalar_lives_in_the_stage_arena() {
         );
     let asm = project.expand();
     assert!(
-        asm.contains("global list _gvm = [4];"),
-        "one cell, holding its declared value: {asm}"
+        asm.contains("global list _vms = [4];"),
+        "one cell, holding its declared value, on the stage: {asm}"
     );
-    assert!(asm.contains("data_itemoflist(1, \"_gvm\")"), "{asm}");
-    assert!(asm.contains("data_replaceitemoflist(1, \"_gvm\""), "{asm}");
+    assert!(asm.contains("data_itemoflist(1, \"_vms\")"), "{asm}");
+    assert!(asm.contains("data_replaceitemoflist(1, \"_vms\""), "{asm}");
     assert!(!asm.contains("data_variable("), "{asm}");
 }
 
@@ -2020,19 +2162,19 @@ fn a_table_written_in_place_stays_out_of_the_heap() {
     );
     let asm = project.expand();
     assert!(
-        asm.contains("__gm_ensure("),
-        "the table's in-place write stays in `_gvm`: {asm}"
+        asm.contains("__vm_ensure("),
+        "the table's in-place write stays in `_vms`: {asm}"
     );
     assert!(
         asm.contains("data_replaceitemoflist(operator_add(data_itemoflist("),
-        "and the write itself names `_gvm`: {asm}"
+        "and the write itself names `_vms`: {asm}"
     );
     assert!(
-        asm.contains("__gh_push("),
+        asm.contains("__vh_push("),
         "the growing list is the heap's: {asm}"
     );
     assert!(
-        !asm.contains("__gm_push("),
+        !asm.contains("__vm_push("),
         "the table is never grown: {asm}"
     );
     let _ = project.build();
@@ -2368,7 +2510,7 @@ fn a_struct_can_have_a_boolean_field() {
 }
 
 #[test]
-fn a_project_wide_boolean_lives_in_the_stage_arena() {
+fn a_project_wide_boolean_lives_in_the_one_arena() {
     let project = Project::new("bool-global")
         .stage("stage { pub var ready: bool = true; }")
         .sprite(
@@ -2381,13 +2523,13 @@ fn a_project_wide_boolean_lives_in_the_stage_arena() {
             }"#,
         );
     let asm = project.expand();
-    assert!(asm.contains("global list _gvm = [true];"), "{asm}");
+    assert!(asm.contains("global list _vms = [true];"), "{asm}");
     assert!(
-        asm.contains("data_replaceitemoflist(1, \"_gvm\", operator_lt(1, 2))"),
+        asm.contains("data_replaceitemoflist(1, \"_vms\", operator_lt(1, 2))"),
         "{asm}"
     );
     assert!(
-        asm.contains("control_if(operator_equals(data_itemoflist(1, \"_gvm\"), \"true\"))"),
+        asm.contains("control_if(operator_equals(data_itemoflist(1, \"_vms\"), \"true\"))"),
         "{asm}"
     );
     let _ = project.build();
@@ -2515,11 +2657,11 @@ fn watching_something_undeclared_is_an_error() {
 }
 
 // ---------------------------------------------------------------------------
-// `@scratch`: storage, not syntax
+// The decorators: storage, not syntax
 // ---------------------------------------------------------------------------
 
-/// `@scratch` moves a `var` or a `list` out of the virtual memory system and
-/// into a real Scratch variable or list. Nothing else changes: the name, the
+/// `@scratch_sprite` moves a `var` or a `list` out of the virtual memory system
+/// and into a real Scratch variable or list. Nothing else changes: the name, the
 /// type, and every statement that reads or writes it are the ones a cell would
 /// have lowered to.
 #[test]
@@ -2527,9 +2669,9 @@ fn a_scratch_decorator_stores_a_var_and_a_list_in_scratch() {
     let project = Project::new("scratch-deco").sprite(
         "A",
         r#"sprite "A" {
-            @scratch
+            @scratch_sprite
             var score: num = 7;
-            @scratch
+            @scratch_sprite
             var trail: list<num> = [1, 2];
 
             on flag_clicked {
@@ -2554,27 +2696,27 @@ fn a_scratch_decorator_stores_a_var_and_a_list_in_scratch() {
         "{asm}"
     );
     assert!(asm.contains(r#"data_itemoflist(1, "trail")"#), "{asm}");
-    // And no arena is declared: nothing in the target is a cell any more.
+    // And no arena is declared: nothing in the project is a cell any more.
     assert!(!asm.contains("_vms"), "no cell is left over: {asm}");
     let _ = project.build();
 }
 
-/// A `@scratch` name is a Scratch variable in `project.json`, not just in the
-/// raven-asm: the editor's variable pane is where the user goes to see it.
+/// A Scratch-storage name is a Scratch variable in `project.json`, not just in
+/// the raven-asm: the editor's variable pane is where the user goes to see it.
 #[test]
 fn a_scratch_decorator_declares_a_real_scratch_name() {
     let project = Project::new("scratch-declared")
         .stage(
-            r#"@scratch
+            r#"@scratch_global
             pub var best: num = 0;
             stage { }"#,
         )
         .sprite(
             "A",
             r#"sprite "A" {
-                @scratch
+                @scratch_sprite
                 var live: bool = false;
-                @scratch
+                @scratch_sprite
                 var trail: list<str> = [];
                 on flag_clicked { live = 1 > 0; trail.push("x"); }
             }"#,
@@ -2598,33 +2740,32 @@ fn a_scratch_decorator_declares_a_real_scratch_name() {
         match name {
             "Stage" => {
                 assert_eq!(names(target, "variables"), ["best"], "the global scalar");
-                assert!(names(target, "lists").is_empty(), "no list is global here");
+                // Only the one arena and the project-wide stacks are lists.
+                let lists = names(target, "lists");
+                assert!(
+                    lists.iter().all(|l| l == "_vms" || l.starts_with("_stack")),
+                    "{lists:?}"
+                );
             }
             "A" => {
                 assert_eq!(names(target, "variables"), ["live"], "the sprite scalar");
                 let lists = names(target, "lists");
-                assert!(lists.contains(&"trail".to_string()), "{lists:?}");
-                // Only the sprite's own stack joins it: no arena is declared.
-                assert!(
-                    lists
-                        .iter()
-                        .all(|l| l == "trail" || l.starts_with("_stack")),
-                    "{lists:?}"
-                );
+                assert_eq!(lists, ["trail"], "the sprite list, and no stack: {lists:?}");
             }
             other => panic!("unexpected target `{other}`"),
         }
     }
 }
 
-/// A boolean out of a `@scratch` variable is read back as a block, the same way
-/// one out of a cell is: Scratch stores a value, and a condition needs a block.
+/// A boolean out of a Scratch-storage variable is read back as a block, the same
+/// way one out of a cell is: Scratch stores a value, and a condition needs a
+/// block.
 #[test]
 fn a_scratch_boolean_is_read_back_as_a_comparison() {
     let project = Project::new("scratch-bool").sprite(
         "A",
         r#"sprite "A" {
-            @scratch
+            @scratch_sprite
             var live: bool = false;
             on flag_clicked { if live { looks::say("yes"); } }
         }"#,
@@ -2637,17 +2778,17 @@ fn a_scratch_boolean_is_read_back_as_a_comparison() {
     let _ = project.build();
 }
 
-/// `watch` is about the monitor and `@scratch` about the storage, so they
-/// compose: a watched `@scratch` name is declared visible, and nothing writes a
-/// mirror of the variable onto itself.
+/// `watch` is about the monitor and the decorator about the storage, so they
+/// compose: a watched Scratch-storage name is declared visible, and nothing
+/// writes a mirror of the variable onto itself.
 #[test]
 fn a_watch_on_a_scratch_variable_only_shows_its_monitor() {
     let project = Project::new("scratch-watch").sprite(
         "A",
         r#"sprite "A" {
-            @scratch
+            @scratch_sprite
             var score: num = 0;
-            @scratch
+            @scratch_sprite
             var trail: list<num> = [];
             watch score, trail;
             on flag_clicked { score += 1; trail.push(score); }
@@ -2664,7 +2805,7 @@ fn a_watch_on_a_scratch_variable_only_shows_its_monitor() {
 }
 
 #[test]
-fn a_decorator_that_is_not_scratch_is_an_error() {
+fn a_decorator_that_is_not_one_is_an_error() {
     let project = Project::new("deco-unknown").sprite(
         "A",
         r#"sprite "A" {
@@ -2678,22 +2819,22 @@ fn a_decorator_that_is_not_scratch_is_an_error() {
         rendered.contains("there is no decorator called `@cloud`"),
         "{rendered}"
     );
-    assert!(rendered.contains("`@scratch`"), "{rendered}");
+    assert!(rendered.contains("`@scratch_global`"), "{rendered}");
 }
 
 #[test]
 fn a_decorator_goes_on_a_var_declaration() {
     for (source, what) in [
         (
-            r#"sprite "A" { @scratch proc p() { } on flag_clicked { looks::hide(); } }"#,
+            r#"sprite "A" { @scratch_global proc p() { } on flag_clicked { looks::hide(); } }"#,
             "a procedure",
         ),
         (
-            r#"sprite "A" { @scratch struct P { x: num } on flag_clicked { looks::hide(); } }"#,
+            r#"sprite "A" { @scratch_global struct P { x: num } on flag_clicked { looks::hide(); } }"#,
             "a struct",
         ),
         (
-            r#"sprite "A" { @scratch costume "c" = "assets/blank.svg"; on flag_clicked { looks::hide(); } }"#,
+            r#"sprite "A" { @scratch_global costume "c" = "assets/blank.svg"; on flag_clicked { looks::hide(); } }"#,
             "a costume",
         ),
     ] {
@@ -2708,19 +2849,39 @@ fn scratch_decorator_diagnostics_are_specific() {
     let cases = [
         (
             "var with an argument",
-            r#"sprite "A" { @scratch(1) var score: num = 0; on flag_clicked { looks::hide(); } }"#,
-            "`@scratch` takes no arguments",
+            r#"sprite "A" { @scratch_sprite(1) var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "`@scratch_sprite` takes no arguments",
         ),
         (
             "written twice",
-            r#"sprite "A" { @scratch @scratch var score: num = 0; on flag_clicked { looks::hide(); } }"#,
-            "decorated with `@scratch` twice",
+            r#"sprite "A" { @scratch_sprite @scratch_sprite var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "decorated with `@scratch_sprite` twice",
         ),
         (
             "on a struct variable",
-            r#"sprite "A" { @scratch var p: P = P { x: 0 }; on flag_clicked { looks::hide(); } }
+            r#"sprite "A" { @scratch_sprite var p: P = P { x: 0 }; on flag_clicked { looks::hide(); } }
                struct P { x: num }"#,
             "cannot be a Scratch variable",
+        ),
+        (
+            "both storages at once",
+            r#"sprite "A" { @scratch_global @scratch_sprite var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "both `@scratch_global` and `@scratch_sprite`",
+        ),
+        (
+            "sprite-local storage on the stage",
+            r#"stage { @scratch_sprite var score: num = 0; }"#,
+            "the stage has no sprite-local storage",
+        ),
+        (
+            "a `pub` sprite-local",
+            r#"sprite "A" { @scratch_sprite pub var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "cannot be `pub`",
+        ),
+        (
+            "the old single decorator",
+            r#"sprite "A" { @scratch var score: num = 0; on flag_clicked { looks::hide(); } }"#,
+            "`@scratch` is now `@scratch_global` or `@scratch_sprite`",
         ),
     ];
     for (what, source, needle) in cases {
@@ -2754,8 +2915,8 @@ fn a_list_literal_becomes_one_item_per_value() {
         .as_array()
         .expect("targets")
         .iter()
-        .find(|t| t["name"] == "A")
-        .expect("the sprite")["lists"]
+        .find(|t| t["isStage"] == true)
+        .expect("the stage")["lists"]
         .as_object()
         .expect("lists")
         .clone();
@@ -2766,8 +2927,9 @@ fn a_list_literal_becomes_one_item_per_value() {
             .unwrap_or_else(|| panic!("no list called {name}"))[1]
             .clone()
     };
-    // Both lists are runs of `_vms`: a handle of `base, length, capacity`, then
-    // the items themselves. `xs` starts at cell 4 and `words` at cell 10.
+    // Both lists are runs of the one project arena, which the stage declares: a
+    // handle of `base, length, capacity`, then the items themselves. `xs` starts
+    // at cell 4 and `words` at cell 10.
     assert_eq!(
         items_of("_vms"),
         serde_json::json!([4, 3, 3, 1, 2, 3, 10, 2, 2, "a", "b"]),
@@ -3155,7 +3317,7 @@ fn unused_machinery_is_not_emitted() {
         r#"sprite "A" { on flag_clicked { looks::say("hi"); } }"#,
     );
     let asm = bare.expand();
-    for absent in ["_vms", "_gvm", "_stack", "_console", "__vms_reserve"] {
+    for absent in ["_vms", "_stack", "_console", "__vms_reserve"] {
         assert!(
             !asm.contains(absent),
             "{absent} is emitted but unused: {asm}"
@@ -3169,7 +3331,7 @@ fn unused_machinery_is_not_emitted() {
         r#"sprite "A" { on flag_clicked { let n = 1; looks::say(n); } }"#,
     );
     let asm = scoped.expand();
-    assert!(asm.contains("list _stack1 = [];"), "{asm}");
+    assert!(asm.contains("global list _stack1 = [];"), "{asm}");
     assert!(!asm.contains("_vms"), "no arena was needed: {asm}");
     assert!(!asm.contains("_console"), "{asm}");
 }
