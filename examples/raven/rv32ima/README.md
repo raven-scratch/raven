@@ -15,12 +15,15 @@ kernel at — and `tools/build.mjs` turns that image and its tree into a project
 | `images/mini_image` | 4,748,220 B | `dist/rv32mini.sb3` | a kernel boot log, a root shell, and whatever you type at it |
 
 It boots to a root shell the way an embedded Linux does and stops there: nothing
-in the image starts a program for you. What is installed is `screenfetch`,
-`duktape`, `coremark` and `ed` — one of cnlohr's prebuilt flat binaries, javascript
-and a benchmark out of the rootfs the kernel came with, and an editor from the
-Scratch project's own rootfs, because busybox' `vi` cannot run on this machine
-(the README says why) and a shell with no editor at all is not one you can use.
-`node tools/check.mjs --screen` prints the screen the check left behind.
+in the image starts a program for you. What is installed is `screenfetch` —
+upstream's fetch rewritten for POSIX sh, because this guest has busybox' ash and
+no `awk` — `clear`, which is the two escape sequences `images/mini-src/clear`
+holds, since the applet is not in this busybox and there is no terminfo to ask;
+`duktape`, one of cnlohr's prebuilt flat binaries; `coremark`, lifted out of the
+rootfs the kernel came with; and `ed`, from the Scratch project's own rootfs,
+because busybox' `vi` cannot run on this machine (the README says why) and a
+shell with no editor at all is not one you can use. `node tools/check.mjs
+--screen` prints the screen the check left behind.
 
 ```sh
 # the image and its device tree, then the tables, src/rv32/image.rav and the .sb3
@@ -40,10 +43,10 @@ reference for its kernel:
 git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
 ```
 
-It only reads the clone, so nothing has to build; to run the reference's own
-`cli` beside this — which is where the kernel's part of the output above comes
-from — its `Cargo.toml` wants an empty `[workspace]` table first, because `ref/`
-sits inside raven's workspace and cargo will otherwise refuse it.
+It only reads the clone, so nothing has to build. The boot log the guest prints
+is that kernel's own; to run the reference's `cli` beside this, its `Cargo.toml`
+wants an empty `[workspace]` table first, because `ref/` sits inside raven's
+workspace and cargo will otherwise refuse it.
 
 `tools/check.mjs` loads the built project into a real Scratch VM, presses the
 green flag, steps the runtime, and reads the terminal's own cell buffer — which
