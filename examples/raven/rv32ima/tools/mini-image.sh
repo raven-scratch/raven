@@ -67,10 +67,9 @@
 # this recipe lifts that file out and installs it under its own name next to the
 # others, which is why the image carries no symlink and no program of ours is
 # anywhere but `/usr/bin`. `ed` is a flat binary too, and the only one this
-# repository did not build: it is `usr/bin/ed` in the Scratch project's own
-# rootfs -- the 162 MB `.sb3` that `tools/build.mjs scratch` reads -- cut out of
-# its cpio the same way `coremark` is, and kept in `images/mini-src/` so that
-# this recipe needs neither that file nor a toolchain to run.
+# repository did not build: it came out of the Scratch project's own rootfs, cut
+# out of its cpio the same way `coremark` is, and kept in `images/mini-src/` so
+# that this recipe needs neither that 162 MB file nor a toolchain to run.
 #
 # ## Layout, in the guest's addresses
 #

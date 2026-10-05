@@ -185,13 +185,13 @@ is because neither has any — and one run installs both halves into a project:
 ```sh
 python lib/penfont/font2vm.py --project examples/raven/penfont \
   --charset chinese,japanese,korean,nf-dev \
-  --chars-file examples/raven/penfont/icons.txt   # the tables and the engine
+  --chars-file examples/raven/penfont/icons.txt --ligatures   # the tables and the engine
 python lib/penfont/font2vm.py --project examples/raven/penfont --list-charsets
 python lib/penfont/font2vm.py --project examples/raven/penfont --stats
 cargo run -p raven -- check -m examples/raven/penfont/raven.toml
 cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
 python lib/penfont/font2vm.py --project examples/raven/penfont \
-  --stage examples/raven/penfont/dist/page
+  --ligatures --stage examples/raven/penfont/dist/page
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/penfont/tools/check.mjs
 ```
 
@@ -200,7 +200,9 @@ sets, from `ascii` at 95 glyphs to `ideographs` at every CJK ideograph the font
 has, thirteen more for the Nerd Font icon families (`nf-md` at 6,880 down to
 `nf-iec` at 5), and bundles over them (`basic`, `latin`, `chinese`, `hanzi`,
 `cjk`, `icons`, `all`). The demo takes `chinese,japanese,korean,nf-dev` and its
-own `icons.txt`, which is 11,587 glyphs and 15 MB where `all` is 35,592 and 41 MB.
+own `icons.txt`, which is 12,373 glyphs and 16 MB where `all` is 35,592 and 41 MB;
+`--ligatures` also adds the font's own ligatures out of its GSUB table, keyed by
+the whole sequence, which the demo passes.
 `--stats` and `--stage` write nothing, so the install is the run without either
 of them. `engine.rav` is a binary search over the keys, the rows as pen lines cut
 at the box the pen may move inside, and the layout; Scratch compares two strings
@@ -209,7 +211,7 @@ way in the table, and the table is sorted in the order that comparison puts it
 in, which is what makes the search valid. A Scratch string is UTF-16 code units,
 so the one icon family above the basic plane arrives as two and `draw_text` and
 `glyph_of` join the pair before looking it up. The table is also an inventory: B
-turns to the sheet, every glyph twelve by eight to a page and 121 pages of them,
+turns to the sheet, every glyph twelve by eight to a page and 129 pages of them,
 drawn by index and not looked up at all, and a find sends one character through
 the same search and turns to its page. The order of the checks is the order that
 finds things: `--stage` renders the page twice, from the tables and through
@@ -247,17 +249,19 @@ node tools/validate-sb3.js examples/raven/case/dist/case.sb3 --steps 300
 be something outside it rather than something of its own: a port of the Scratch
 project that runs [mini-rv32ima](https://github.com/cnlohr/mini-rv32ima), the 32
 bit RISC-V hart with no MMU, with the terminal redrawn by `lib/penfont`. It runs
-three guests from two places — `baremetal.bin` and a Linux 6.1.14 image from
-[`bjoernQ/mini-rv32ima-rs`](https://github.com/bjoernQ/mini-rv32ima-rs), and the
-Linux image the Scratch project itself carries, cut out of its 162 MB
-`project.json` — one `.sb3` each, and `tools/check.mjs` boots all three in a real
-Scratch VM and reads the login prompt off the screen. [Read its
-README](examples/raven/rv32ima/README.md)
-for the four places it follows the Rust rather than the Scratch project, and for
-the two it does not.
+one guest, and it is this repository's own rather than a borrowed one:
+`tools/mini-image.sh` takes the reference's kernel and gives it a root shell with
+coremark, duktape and ed instead of the login its own rootfs stops at, and `node
+tools/build.mjs` turns that image and its device tree into one `.sb3`.
+`tools/check.mjs` boots it in a real Scratch VM, waits for the prompt, types
+`screenfetch`, duktape and coremark at it, and then drives the console by hand —
+the key hats, the palette, the cursor, the erase sequences and the alternate
+screen. [Read its README](examples/raven/rv32ima/README.md) for the four places
+it follows the Rust rather than the Scratch project, and for the two it does not.
 
 ```sh
 git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
+bash examples/raven/rv32ima/tools/mini-image.sh        # needs dtc, python3, curl
 node examples/raven/rv32ima/tools/build.mjs
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
   node examples/raven/rv32ima/tools/check.mjs

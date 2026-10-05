@@ -1,6 +1,6 @@
 // Draw the stage the way the pen drew it.
 //
-//     node tools/render.mjs [baremetal|linux|mini] [--frames N] [--frames N]
+//     node tools/render.mjs [--frames N] [--frames N]
 //
 // What `check.mjs` reads is the terminal's own cell buffer, which is what the
 // console *means*; this is what the pen *did*, which is a different question
@@ -15,7 +15,7 @@
 // screen shows it, and `--shot <tag>` writes `dist/<name>-<tag>.png` where it
 // stands. They are a session, and they are in the order they are written:
 //
-//     node tools/render.mjs mini --wait "/ #" \
+//     node tools/render.mjs --wait "# " \
 //       --type "screenfetch\r" --wait "Memory:" --shot logo
 //
 // An image whose programs are not started for you is only reached by typing at
@@ -70,7 +70,7 @@ for (let i = 0; i < args.length; i++) {
     else if (args[i] === '--wait') script.push({ kind: 'wait', text: args[++i] });
     else if (args[i] === '--shot') script.push({ kind: 'shot', tag: args[++i] });
 }
-const name = args.find((a) => !a.startsWith('--') && !/^\d+$/.test(a) && a !== '');
+const name = args.find((a) => !a.startsWith('--') && !/^\d+$/.test(a) && a !== '') ?? 'mini';
 const sb3 = path.join(root, 'dist', `rv32${name}.sb3`);
 if (!fs.existsSync(sb3)) {
     console.error(`${sb3} is not built: node tools/build.mjs ${name}`);

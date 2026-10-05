@@ -1,8 +1,8 @@
 // Where a frame's time goes: the guest's arithmetic or the pen.
 //
-//     node tools/profile.mjs [baremetal|linux|scratch] [--keys] [--budget S]
+//     node tools/profile.mjs [--keys] [--budget S]
 //
-// `check.mjs` says the guests run; this says what running costs, which is the
+// `check.mjs` says the guest runs; this says what running costs, which is the
 // question a report of "it stutters" asks. It boots the image in a real Scratch
 // VM and reports four things:
 //
@@ -52,7 +52,7 @@ const args = process.argv.slice(2);
 const keys = args.includes('--keys');
 const budgetIndex = args.indexOf('--budget');
 const budgetMs = (budgetIndex >= 0 ? Number(args[budgetIndex + 1]) : 5) * 1000;
-const name = args.find((a) => !a.startsWith('--') && !/^\d+$/.test(a)) ?? 'scratch';
+const name = args.find((a) => !a.startsWith('--') && !/^\d+$/.test(a)) ?? 'mini';
 
 function recordingRenderer() {
     let nextId = 1;
@@ -155,7 +155,7 @@ const rows = () => {
 const screen = () => rows().join('\n');
 
 vm.greenFlag();
-const prompt = name === 'baremetal' ? /Poweroff/ : (name === 'linux' ? /login:/ : /~ #/);
+const prompt = /[#$]\s*$/;
 const began = Date.now();
 const i0 = instructions();
 const l0 = renderer.lines;

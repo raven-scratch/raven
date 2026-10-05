@@ -1,4 +1,4 @@
-# rv32ima — a RISC-V machine in raven, running two guests
+# rv32ima — a RISC-V machine in raven, running a small Linux
 
 A raven port of the Scratch project that runs
 [mini-rv32ima](https://github.com/cnlohr/mini-rv32ima) — a 32 bit RISC-V hart
@@ -6,101 +6,73 @@ with no MMU — and boots Linux on it. The terminal is drawn by
 [`lib/penfont`](../../../lib/penfont) rather than by the Scratch project's own
 8 by 16 bitmap font.
 
-Three images, three `.sb3` files, one machine. One command builds all three:
+One image, one `.sb3`. `tools/mini-image.sh` builds the image — the reference's
+kernel with a second initramfs on the end of it, which the device tree points the
+kernel at — and `tools/build.mjs` turns that image and its tree into a project.
 
 | image | | built as | and it says |
 | --- | --- | --- | --- |
-| `baremetal.bin` | 442 B | `dist/rv32baremetal.sb3` | hello, an address, a speed, and goodbye |
-| `linux_image` | 2,945,224 B | `dist/rv32linux.sb3` | a Buildroot boot log, `Welcome to Buildroot`, and a login prompt |
-| the Scratch project's own | 4,263,001 B | `dist/rv32scratch.sb3` | the same kernel with the original rootfs, and a root shell |
+| `images/mini_image` | 4,748,220 B | `dist/rv32mini.sb3` | a kernel boot log, a root shell, and whatever you type at it |
 
-The first two are the images from
-[`bjoernQ/mini-rv32ima-rs`](https://github.com/bjoernQ/mini-rv32ima-rs), the Rust
-port this is checked against. The third is the one the Scratch project itself
-carries and exists nowhere else: it is a list inside that `.sb3`'s
-`project.json`, 4,263,001 bytes of Linux 6.1.14 with the original project's own
-rootfs, and it is the image this example was first built around.
-
-```
-Hello world from RV32 land.
-main is at:
-80000044
-Assembly code:
-I'm an assembly function.
-Processor effective speed:
-5 Mcyc/s
-Poweroff 2147483908
-```
-
-```
-[    8.373000] 10000000.uart: ttyS0 at MMIO 0x10000000 (irq = 0, base_baud = 1048576) is a XR16850
-[    8.373000] printk: console [ttyS0] enabled
-[    8.373000] printk: bootconsole [uart8250] disabled
-[    8.718000] Freeing unused kernel image (initmem) memory: 1104K
-[    8.791000] This architecture does not have kernel memory protection.
-[    8.791000] Run /init as init process
-mount: can't read '/proc/mounts': No such file or directory
-
-Welcome to Buildroot
-buildroot login:
-```
-
-```
-[   16.111000] This architecture does not have kernel memory protection.
-[   16.111000] Run /init as init process
-Welcome to Linux On Scratch!
-Jan  1 00:00:22 login[29]: root login on 'console'
-~ #
-```
+It boots to a root shell the way an embedded Linux does and stops there: nothing
+in the image starts a program for you. What is installed is `screenfetch`,
+`duktape`, `coremark` and `ed` — one of cnlohr's prebuilt flat binaries, javascript
+and a benchmark out of the rootfs the kernel came with, and an editor from the
+Scratch project's own rootfs, because busybox' `vi` cannot run on this machine
+(the README says why) and a shell with no editor at all is not one you can use.
+`node tools/check.mjs --screen` prints the screen the check left behind.
 
 ```sh
-# the images, the device tree and the ALU's tables, then all three projects
-node tools/build.mjs
+# the image and its device tree, then the tables, src/rv32/image.rav and the .sb3
+bash examples/raven/rv32ima/tools/mini-image.sh
+node examples/raven/rv32ima/tools/build.mjs
 
-cargo run -p raven -- check -m examples/raven/rv32ima/raven.toml
-cargo run -p raven -- build -m examples/raven/rv32ima/raven-baremetal.toml --debug
+cargo run -p raven -- check -m examples/raven/rv32ima/raven-mini.toml
 
-# the only check that is about the guests rather than about the compiler
-SCRATCH_VM_ROOT=path/to/scratch-vm node tools/check.mjs
+# the only check that is about the guest rather than about the compiler
+SCRATCH_VM_ROOT=path/to/scratch-vm node examples/raven/rv32ima/tools/check.mjs
 ```
 
-`tools/build.mjs` needs a checkout of the reference:
+`tools/mini-image.sh` needs `dtc`, `python3` and `curl`, and a checkout of the
+reference for its kernel:
 
 ```sh
 git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
 ```
 
 It only reads the clone, so nothing has to build; to run the reference's own
-`cli` beside this — which is where the first two outputs quoted above come from —
-its `Cargo.toml` wants an empty `[workspace]` table first, because `ref/` sits
-inside raven's workspace and cargo will otherwise refuse it.
+`cli` beside this — which is where the kernel's part of the output above comes
+from — its `Cargo.toml` wants an empty `[workspace]` table first, because `ref/`
+sits inside raven's workspace and cargo will otherwise refuse it.
 
-The third image comes out of
-`ref/Linux 6.1.14-rv32ima On Scratch.sb3` instead, and that file's `project.json`
-is 162 MB of which almost all is the project's own 64 MiB of *RAM* written out
-one byte to an item. Reading it as JSON costs a four gigabyte heap and buys
-nothing, so the tool finds the list's name in the text, walks the array after it
-to its closing bracket and reads the items — and the device tree beside it is not
-read at all, because it is byte for byte the one `examples/cli.rs` carries.
-
-`tools/check.mjs` loads all three built projects into a real Scratch VM, presses
-the green flag, steps the runtime, and reads the terminal's own cell buffer —
-which *is* the screen — for what each guest is supposed to have printed. For the
-two Linux images it also drives the keyboard, and for the bare metal image it
-counts the pen lines the cursor draws and drives the console's escape sequences
-by hand. On the machine this was written on:
+`tools/check.mjs` loads the built project into a real Scratch VM, presses the
+green flag, steps the runtime, and reads the terminal's own cell buffer — which
+*is* the screen — for what the guest is supposed to have printed. Nothing in this
+image starts a program, so most of the check is typing: it waits for the prompt,
+types a command, and waits for that command's own output. Then, while the guest
+is idle, it drives the console itself — the key hats both ways, the cursor and the
+pen it draws, the palette, the erase sequences and the alternate screen a
+full-screen program asks for. On the machine this was written on:
 
 ```
-=== baremetal  (dist/rv32baremetal.sb3)
-executed  7000062 instructions in 16 frames, 4 s
-RAM       67108672 bytes
-cursor    126 pen lines, x -223.5..-217.13, y -159.73..-143.98
-colours   green #00FF00, after 0 #FFFFFF, after bare m #FFFFFF, after 39 #FFFFFF
-ok   the greeting ran
-ok   the assembly function ran
-ok   main is where the image says
-ok   the processor measured itself
-ok   the machine powered off
+=== mini  (dist/rv32mini.sb3)
+executed  150808976 instructions in 5148 frames, 49 s
+RAM       67108711 bytes
+keyboard  hat sent [97], shift sent [65], poll sent [127]
+cursor    126 pen lines, x 112.5..118.87, y -159.73..-143.98
+ok   it booted to a root prompt with no login
+ok   screenfetch drew its labels
+ok   screenfetch drew the jgs Tux
+ok   the logo keeps its credit rows
+ok   the logo keeps its second credit row
+ok   duktape evaluated a program
+ok   duktape ran a script file
+ok   coremark measured the machine
+ok   a key hat reached the machine
+ok   shift and a key hat reached the machine as a capital
+ok   the polled key reached the machine
+ok   the poll asked for the key
+ok   no glyph was drawn with the paper's pen
 ok   the machine executed
 ok   RAM reaches the device tree
 ok   nothing threw
@@ -110,36 +82,24 @@ ok   SGR 32 is the palette green
 ok   SGR 0 returns to the default ink
 ok   SGR m returns to the default ink
 ok   SGR 39 returns to the default ink
-
-=== linux  (dist/rv32linux.sb3)
-executed  52283605 instructions in 246 frames, 31 s
-RAM       67108672 bytes
-keyboard  hat sent [97], poll sent [127]
-ok   the console came up
-ok   the kernel mounted a rootfs
-ok   the guest booted
-ok   a login is waiting
-ok   a key hat reached the machine
-ok   the polled key reached the machine
-ok   the poll asked for the key
-ok   the machine executed
-ok   RAM reaches the device tree
-ok   nothing threw
-
-=== scratch  (dist/rv32scratch.sb3)
-executed  50226951 instructions in 210 frames, 32 s
-RAM       67108672 bytes
-keyboard  hat sent [97], poll sent [127]
-ok   the console came up
-ok   the kernel mounted a rootfs
-ok   the guest booted
-ok   a shell is waiting
-ok   a key hat reached the machine
-ok   the polled key reached the machine
-ok   the poll asked for the key
-ok   the machine executed
-ok   RAM reaches the device tree
-ok   nothing threw
+ok   a bare ESC [ m and an ESC [ 0 m agree
+ok   a cell is drawn in the ink it was written with
+ok   SGR 34 reaches the cell
+ok   38;5;0 is the palette black
+ok   38;5;8 is the bright black
+ok   38;5;17 is the cube's first step off black
+ok   38;5;196 is the cube's red corner
+ok   38;5;232 is the first grey
+ok   38;5;255 is the last grey
+ok   38;2;18;52;86 is a colour of its own
+ok   48;5;n colours the cell's paper and leaves the ink alone
+ok   the cursor report is answered on the guest's input
+ok   the alternate screen saves the page and gives it back
+ok   the cursor can be put away and brought back
+ok   ESC [ J erases to the end and keeps what follows it
+ok   ESC [ 2 J clears the screen and keeps what follows it
+ok   erasing the page clears the pen and draws it again
+ok   ESC [ K erases the rest of its own row
 
 PASS
 ```
@@ -151,14 +111,15 @@ PASS
 | `src/sprites/input.rav` | the keyboard, as the bytes the guest's console reads |
 | `src/rv32/io.rav` | the two byte streams the machine and the terminal share |
 | `src/rv32/tables.rav` | generated, committed: the ALU's three 64 KiB tables and the byte-to-character table |
-| `src/rv32/image.rav` | generated, one image at a time: the guest and its device tree |
+| `src/rv32/image.rav` | generated: the guest and its device tree |
 | `src/penfont/` | the library and its table, installed by `font2vm.py` — do not edit them here |
-| `tools/build.mjs` | reads the reference and the Scratch project, writes the two data files, builds all three projects |
-| `tools/check.mjs` | runs all three built projects in a real VM and reads the screen |
+| `tools/mini-image.sh` | builds the image and its tree out of the reference kernel |
+| `tools/build.mjs` | writes the two data files and builds the project |
+| `tools/check.mjs` | runs the built project in a real VM, types at it and reads the screen |
 | `tools/render.mjs` | draws the stage the pen actually drew, as a PNG |
 | `tools/profile.mjs` | the frame, split by thread: the guest's arithmetic against the pen's |
 
-## The three references, and which one this is
+## The reference, and which one this is
 
 `mini-rv32ima` is the C. `mini-rv32ima-rs` is a Rust port of it. The Scratch
 project in `ref/` is a translation of the C into blocks, and this is that
@@ -175,14 +136,14 @@ out here.
 
 **`0x137` prints eight hexadecimal digits.** That is the reference's own
 extension — `csr_write(0x137) => print!("{:08x}", writeval)` — and it is how the
-bare metal image prints the address of its own `main`. The Scratch project
-folded `0x136` and `0x137` together and prints decimal, which is why its
+reference's own bare metal example prints the address of its `main`. The Scratch
+project folded `0x136` and `0x137` together and prints decimal, which is why its
 `80000044` would read `2147483908`.
 
 **A step that returns a value ends the frame.** `wfi` and a write to the system
 controller are the guest asking to stop; the Scratch project's frame loop clears
-the value and runs straight on, so its bare metal image never powers off. Ours
-carries it out to the check that turns it into `Poweroff`.
+the value and runs straight on, so the same guest never powers off there. This
+carries the value out to the frame loop, which is what a power off has to be.
 
 **A string has a case, and Scratch strings do not.** `byte_chars` is ordered by
 code, and Scratch compares two strings without their case, so a search for `h`
@@ -240,7 +201,7 @@ question to answer, and it is also less code: `blank_cell`, `repaint_cell` and
 the flag between them all go.
 
 It is not free, and this is the one place in the project where the cheaper thing
-was given up deliberately. `tools/profile.mjs` on the Buildroot boot, before and
+was given up deliberately. `tools/profile.mjs` on a boot of the image, before and
 after:
 
 | | partial erase | page drawn whole |
@@ -255,9 +216,9 @@ the page instead of one cell — and it costs 0.7 ms a frame, which is inside th
 frame the machine hands back either way. What it buys is that the picture is
 never a guess: it is the buffer, drawn in one piece, every time.
 
-`node tools/render.mjs linux --frames 900` is what shows this: it steps the
-built project in a real VM with a renderer that records every `penLine`, and
-rasterises those lines into `dist/linux-900.png` — the picture above the check,
+`node tools/render.mjs --frames 900` is what shows this: it steps the built
+project in a real VM with a renderer that records every `penLine`, and
+rasterises those lines into `dist/mini-900.png` — the picture above the check,
 where the check is the meaning.
 
 ## Colours
@@ -314,25 +275,24 @@ forms (`ESC[38;5;Nm` and `ESC[38;2;r;g;bm`), the alternate screen
 
 ## What it costs
 
-`src/rv32/image.rav` is 11 MB of source for the Buildroot image, 16 MB for the
-Scratch project's, and 0.03 MB for the bare metal one. The built project is
-130 MB of `project.json` and 28 MB of `.sb3` for Linux and about 2 MB for bare
-metal — most of it the image written one byte to a list item, which is how the
+`src/rv32/image.rav` is 16.7 MB of source for the image, and the built project is
+30 MB — most of it the image written one byte to a list item, which is how the
 machine reads it. RAM is not written out: a byte the guest has not touched is not
 in the list at all, and Scratch reads a missing item as zero, so the 64 MiB comes
 into being only up to where the guest has written.
 
 The machine runs at about two million instructions a second in Node with no
-renderer. Either Linux' boot is around 50 million of them.
+renderer, and this run of it — the boot and the four typed commands — is
+150,808,976 instructions in 5,148 frames.
 
 The pen is where the rest of it goes. A scroll moves the buffer by a row, and
 ink cannot be moved, so the page is cleared and drawn again — around thirteen
 thousand pen lines for a screen of text. The scroll therefore only *says* the
 page moved and the redraw happens once, at the end of the frame: a boot log or a
-shell echoing a burst redraws once instead of once a line. A frame of the bare
-metal image that scrolled five times used to clear the pen five times and is now
-one clear and one page, and erasing cells that are already blank — most of what
-`ESC [ J` covers — costs nothing at all.
+shell echoing a burst redraws once instead of once a line. A frame that used to
+clear the pen five times for five scrolls is now one clear and one page, and
+erasing cells that are already blank — most of what `ESC [ J` covers — costs
+nothing at all.
 
 **The frame is the machine's, and that is what a stutter is.** A Scratch frame is
 33 ms — `FrameLoop` steps the runtime at 30 frames a second — so a frame that
@@ -343,9 +303,9 @@ left over and everything on screen — the boot log, the cursor's blink, a
 keystroke's echo — arrives at the machine's pace rather than the page's.
 
 `tools/profile.mjs` is what says so, and it says it by thread:
-`node tools/profile.mjs scratch --keys` boots the image, reports the frame, the
-pen and the split between the machine's thread and the console's, then times a
-keystroke. What it measured, with the slice at the reference's 50/200 ms:
+`node tools/profile.mjs --keys` boots the image, reports the frame, the pen and
+the split between the machine's thread and the console's, then times a keystroke.
+What it measured, with the slice at the reference's 50/200 ms:
 
 | | machine's thread | console's thread | frame |
 | --- | --- | --- | --- |
@@ -367,7 +327,7 @@ and not only an emulation one.
 
 ## What is not right, and what the next person should know
 
-* **The mini image carries `ed`, and no `vi`.** busybox 1.35's `vi` run with no
+* **The image carries `ed`, and no `vi`.** busybox 1.35's `vi` run with no
   file name asks the kernel to open a NULL path -- `vi_main` does
   `argv += optind`, so with no argument the *file* it edits is `argv[0]`, which
   is NULL -- and this kernel answers that with an unhandled load access fault
@@ -381,7 +341,7 @@ and not only an emulation one.
   out of the kernel's own rootfs and installs a standalone `ed` at
   `/usr/bin/ed` -- a flat binary lifted out of the Scratch project's own rootfs,
   and the one program in the image this repository did not build.
-* **A character typed at the Linux login is read on the kernel's timer, not on
+* **A character typed at the shell is read on the kernel's timer, not on
   an interrupt.** The keyboard reaches the machine's console input at once —
   that is what the check measures — but the kernel's 8250 driver has no interrupt
   to read it on (the device tree gives the UART no `interrupts` and mini-rv32ima
@@ -396,9 +356,7 @@ and not only an emulation one.
   traps as an illegal instruction.
 * **`rdtime` reads zero.** `0xC00` (`cycle`) is the cycle counter and `0xC01`
   (`time`) is wired to nothing, exactly as in the C and the Rust, so a guest that
-  wants a clock reads `cycle`. The bare metal image's speed figure is therefore a
-  measurement of this machine and not of the reference's, which is why the two
-  numbers differ.
+  wants a clock reads `cycle`.
 * **The `ESC [ J` path was wrong twice over.** In the Scratch project a `stop this
   script` sits where a `return` was meant, and it exits the routine rather than
   clearing the rest of the screen; the listing has the `stop` inside the loop

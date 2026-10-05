@@ -1,29 +1,30 @@
-// Run the built projects in a real Scratch VM and see whether the guests run.
+// Run the built project in a real Scratch VM and see whether the guest runs.
 //
-//     node tools/check.mjs                 both images
-//     node tools/check.mjs baremetal       one of them
+//     node tools/check.mjs                 the image
 //     node tools/check.mjs --screen        print the console afterwards
-//     node tools/check.mjs --budget 300    seconds per image
+//     node tools/check.mjs --budget 300    seconds to give it
 //
-// `raven check` and `raven build` say the projects compile; nothing so far says
-// the guests run. This does. For each image it loads `dist/<name>.sb3` into the
-// Scratch VM the project is going to run in, presses the green flag, steps the
-// runtime as fast as it can, and then reads the terminal's own cell buffer --
-// which *is* the screen, so the check sees what the reader sees -- for what
-// that guest is supposed to have printed.
+// `raven check` and `raven build` say the project compiles; nothing so far says
+// the guest runs. This does. It loads `dist/rv32mini.sb3` into the Scratch VM
+// the project is going to run in, presses the green flag, steps the runtime as
+// fast as it can, and then reads the terminal's own cell buffer -- which *is*
+// the screen, so the check sees what the reader sees -- for what the guest is
+// supposed to have printed.
 //
-// For Linux it also drives the keyboard, because that is the half of the
-// machine that no boot log exercises: `a` goes through a `when key pressed`
-// hat, whose dropdown names it, and Backspace goes through the polled
-// `key pressed?` whose key name is built because the dropdown has no word for
-// it. The bare metal image never reads the console, so it has no such checks;
-// what it has instead is the console itself, held still enough to drive by hand.
+// Nothing in this image starts a program, so most of the check is typing: it
+// waits for the prompt, types a command, and waits for what that command prints.
+// Once the guest is idle it is also driven directly, because the console is the
+// half of the machine no typed command exercises whole: a key goes through a
+// `when key pressed` hat, whose dropdown names it, and Backspace through the
+// polled `key pressed?`, whose key name is built because the dropdown has no word
+// for it; then the cursor, the palette, the erase sequences and the alternate
+// screen, fed at the terminal rather than through the guest.
 //
 // It needs a checkout of the Scratch VM:
 //
 //     set SCRATCH_VM_ROOT=path/to/scratch-vm
 //
-// and takes about a minute, most of it Linux' own boot.
+// and takes several minutes, most of it the guest's own boot and coremark.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -118,43 +119,23 @@ function recordingRenderer() {
     };
 }
 
-/// What each image is supposed to say, and where it says it.
+/// What the image is supposed to say, and where it says it.
 const IMAGES = [
-    {
-        name: 'baremetal',
-        sb3: 'dist/rv32baremetal.sb3',
-        keyboard: false,
-        cursor: true,
-        colours: true,
-        erase: true,
-        expect: [
-            ['the greeting ran', (t) => /Hello world from RV32 land\./.test(t)],
-            ['the assembly function ran', (t) => /I'm an assembly function\./.test(t)],
-            ['main is where the image says', (t) => /main is at:/.test(t) && /80000044/.test(t)],
-            ['the processor measured itself', (t) => /Processor effective speed:/.test(t)],
-            ['the machine powered off', (t) => /Poweroff/.test(t)]
-        ]
-    },
-    {
-        name: 'linux',
-        sb3: 'dist/rv32linux.sb3',
-        keyboard: true,
-        expect: [
-            ['the console came up', (t) => /console \[ttyS0\] enabled/.test(t)],
-            ['the kernel mounted a rootfs', (t) => /Run \/init as init process/.test(t)],
-            ['the guest booted', (t) => /Welcome to Buildroot/.test(t)],
-            ['a login is waiting', (t) => /buildroot login:/.test(t)]
-        ]
-    },
     {
         // The reference's kernel with the reference rootfs's own login replaced
         // by a root shell, and three programs installed in it. Nothing in the
         // image starts a program for you, so the check does what a person does:
         // it waits for the prompt and then types. Every expectation is about
-        // what the typed command printed.
+        // what the typed command printed, and the rest of the check is the
+        // console itself, held still once the guest is idle enough to drive by
+        // hand: the cursor, the palette, the erase sequences and the screen a
+        // full-screen program asks for.
         name: 'mini',
         sb3: 'dist/rv32mini.sb3',
-        keyboard: false,
+        keyboard: true,
+        cursor: true,
+        colours: true,
+        erase: true,
         terminal: true,
         typing: [
             {
@@ -177,21 +158,6 @@ const IMAGES = [
             { send: 'coremark', expect: /Iterations\/Sec/, name: 'coremark measured the machine', seconds: 180 }
         ],
         expect: []
-    },
-    {
-        // The image the Scratch project itself carries, and the one this example
-        // was first built around. It is a different kernel and a different
-        // rootfs from `linux_image` -- 4,263,001 bytes against 2,945,224 -- and
-        // it signs on to a root shell rather than to a login.
-        name: 'scratch',
-        sb3: 'dist/rv32scratch.sb3',
-        keyboard: true,
-        expect: [
-            ['the console came up', (t) => /console \[ttyS0\] enabled/.test(t)],
-            ['the kernel mounted a rootfs', (t) => /Run \/init as init process/.test(t)],
-            ['the guest booted', (t) => /Welcome to Linux On Scratch!/.test(t)],
-            ['a shell is waiting', (t) => /~ #/.test(t)]
-        ]
     }
 ];
 
@@ -281,48 +247,8 @@ for (const image of chosen) {
     // frames of this machine's speed.
     const checks = image.expect.map(([name, f]) => [name, f(shown)]);
     let sent = '';
-    if (image.keyboard) {
-        const consoleInput = () => {
-            const heap = value(runtime.getTargetForStage(), '_gheap');
-            return heap.slice(heap[0] - 1, heap[0] - 1 + heap[1]);
-        };
-        const send = (key) => {
-            runtime.ioDevices.keyboard.postData({ key, isDown: true });
-            for (let i = 0; i < 3; i++) runtime._step();
-            runtime.ioDevices.keyboard.postData({ key, isDown: false });
-            for (let i = 0; i < 3; i++) runtime._step();
-        };
-        const hatFrom = consoleInput().length;
-        send('a');
-        const fromHat = consoleInput().slice(hatFrom).filter((v) => v === 97);
-        // Shift and a letter, which is the half of the keyboard a key hat cannot
-        // see on its own: the VM lowercases what a key event reports, so the hat
-        // fires for `a` either way, and the machine has to be handed 65 because
-        // the shift key was down when it did.
-        const shiftFrom = consoleInput().length;
-        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: true });
-        for (let i = 0; i < 3; i++) runtime._step();
-        send('a');
-        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: false });
-        for (let i = 0; i < 3; i++) runtime._step();
-        const fromShift = consoleInput().slice(shiftFrom).filter((v) => v === 65);
-        const pollFrom = consoleInput().length;
-        send('Backspace');
-        const fromPoll = consoleInput().slice(pollFrom).filter((v) => v === 127);
-        runtime.ioDevices.keyboard.postData({ key: 'Backspace', isDown: true });
-        for (let i = 0; i < 3; i++) runtime._step();
-        const polling = value(target('Input'), 'held')[0] === 1;
-        runtime.ioDevices.keyboard.postData({ key: 'Backspace', isDown: false });
-        for (let i = 0; i < 3; i++) runtime._step();
-        sent = `hat sent ${JSON.stringify(fromHat)}, shift sent ${JSON.stringify(fromShift)}, ` +
-            `poll sent ${JSON.stringify(fromPoll)}`;
-        checks.push(['a key hat reached the machine', fromHat.length === 1]);
-        checks.push(['shift and a key hat reached the machine as a capital', fromShift.length === 1]);
-        checks.push(['the polled key reached the machine', fromPoll.length === 1]);
-        checks.push(['the poll asked for the key', polling]);
-    }
 
-    // Typing, which is the only way anything runs in the `mini` image: nothing in
+    // Typing, which is the only way anything runs in this image: nothing in
     // it starts a program for you, so the check does what a person does. One key
     // at a time, the way the section above does it, and one command at a time --
     // each waits for the prompt, types what it was given, and then waits for the
@@ -377,6 +303,54 @@ for (const image of chosen) {
         }
     }
 
+    // The keyboard, both ways, and read off the machine's console *input* --
+    // run 1 of the stage's `_gheap`, a run being a handle of (base, length,
+    // capacity) followed by its items. Reading it is how the check sees the byte
+    // without waiting for the shell to echo it, which is thousands of frames of
+    // this machine's speed per character. It runs after the typed commands
+    // rather than before them, because these keys are read by the same shell and
+    // would otherwise be part of the next command's line.
+    if (image.keyboard) {
+        const consoleInput = () => {
+            const heap = value(runtime.getTargetForStage(), '_gheap');
+            return heap.slice(heap[0] - 1, heap[0] - 1 + heap[1]);
+        };
+        const send = (key) => {
+            runtime.ioDevices.keyboard.postData({ key, isDown: true });
+            for (let i = 0; i < 3; i++) runtime._step();
+            runtime.ioDevices.keyboard.postData({ key, isDown: false });
+            for (let i = 0; i < 3; i++) runtime._step();
+        };
+        const hatFrom = consoleInput().length;
+        send('a');
+        const fromHat = consoleInput().slice(hatFrom).filter((v) => v === 97);
+        // Shift and a letter, which is the half of the keyboard a key hat cannot
+        // see on its own: the VM lowercases what a key event reports, so the hat
+        // fires for `a` either way, and the machine has to be handed 65 because
+        // the shift key was down when it did.
+        const shiftFrom = consoleInput().length;
+        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: true });
+        for (let i = 0; i < 3; i++) runtime._step();
+        send('a');
+        runtime.ioDevices.keyboard.postData({ key: 'Shift', isDown: false });
+        for (let i = 0; i < 3; i++) runtime._step();
+        const fromShift = consoleInput().slice(shiftFrom).filter((v) => v === 65);
+        const pollFrom = consoleInput().length;
+        send('Backspace');
+        const fromPoll = consoleInput().slice(pollFrom).filter((v) => v === 127);
+        runtime.ioDevices.keyboard.postData({ key: 'Backspace', isDown: true });
+        for (let i = 0; i < 3; i++) runtime._step();
+        const polling = value(target('Input'), 'held')[0] === 1;
+        runtime.ioDevices.keyboard.postData({ key: 'Backspace', isDown: false });
+        for (let i = 0; i < 3; i++) runtime._step();
+        sent = `hat sent ${JSON.stringify(fromHat)}, shift sent ${JSON.stringify(fromShift)}, ` +
+            `poll sent ${JSON.stringify(fromPoll)}`;
+        checks.push(['a key hat reached the machine', fromHat.length === 1]);
+        checks.push(['shift and a key hat reached the machine as a capital', fromShift.length === 1]);
+        checks.push(['the polled key reached the machine', fromPoll.length === 1]);
+        checks.push(['the poll asked for the key', polling]);
+    }
+
     const riscv = target('RISCV');
     // The pen's *width* is invisible to everything that reads the cell buffer: a
     // glyph drawn with the paper's stroke is a page of blobs and every text check
@@ -390,13 +364,13 @@ for (const image of chosen) {
     checks.push(['RAM reaches the device tree', value(riscv, 'ram').length >= 67107136 + 1536]);
     checks.push(['nothing threw', errors.length === 0]);
 
-    // The cursor, which is the font's own U+2588 FULL BLOCK. The check runs
-    // after the bare metal image has powered off, so the machine is idle and
-    // the guest writes nothing: the screen is emptied, the blink is held off
-    // (which is the cursor held *on*), and whatever the pen draws next is the
-    // cursor and only the cursor. A block drawn as one fat pen line would be
-    // one line; a filled glyph is dozens, and it is a cell wide and most of a
-    // cell tall, which is the other thing a rectangle of pen lines got wrong.
+    // The cursor, which is the font's own U+2588 FULL BLOCK. The check runs once
+    // the guest is idle and writes nothing of its own, so the screen is emptied,
+    // the blink is held off (which is the cursor held *on*), and whatever the pen
+    // draws next is the cursor and only the cursor. A block drawn as one fat pen
+    // line would be one line; a filled glyph is dozens, and it is a cell wide and
+    // most of a cell tall, which is the other thing a rectangle of pen lines got
+    // wrong.
     let cursorLines = 0;
     let cursorBox = null;
     if (image.cursor) {
