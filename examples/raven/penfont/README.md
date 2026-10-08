@@ -74,7 +74,7 @@ that the VM produced.
 | --- | --- | --- |
 | B | | turn between the two |
 | click the stage, or Space | type a line; it is drawn as you enter it | **find**: type a character and it turns to its page and rings it |
-| Enter | cycle the stock lines: one per script, one of icons, one of ligatures | back to the first page |
+| Enter | cycle the stock lines: one per script, one of icons, one of ligatures, one of numbers | back to the first page |
 | Up / Down | larger, smaller | ten pages at a time |
 | Left / Right | wrap earlier, wrap later | the next, the previous page |
 | 1 – 6 | the ink | the ink |

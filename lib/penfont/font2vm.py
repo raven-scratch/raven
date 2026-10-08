@@ -79,11 +79,14 @@ Case: Scratch compares two strings case-insensitively, so `A` and `a` are one
 string to the only lookup there is and a table cannot be keyed on the character.
 A capital is keyed as the two characters `\\c` and the lowercase letter, and the
 text marks it the same way, as `\\cHello`. The keys are sorted by `sort_key`,
-which is the lowercased key as UTF-16 bytes -- the order Scratch's `<` compares
-in, which is why a character outside the basic plane sorts by its first code unit
-and not last by its code point -- so `engine.rav` binary-searches the list: a
-lookup by value (`index_of`) is a generated procedure that walks the list, far
-too slow to run for every character of every line.
+which is the lowercased key as UTF-16 bytes -- the code-unit order a
+case-insensitive string compare puts them in, which is why a character outside
+the basic plane sorts by its first code unit and not last by its code point -- so
+`engine.rav` binary-searches the list: a lookup by value (`index_of`) is a
+generated procedure that walks the list, far too slow to run for every character
+of every line. The search compares a sentinel-prefixed copy of both sides, because
+Scratch's own `<` and `=` read a key like `0` or the hex ligature `0x3` as a
+number and would search an order this sort is not in.
 
 Output, in the `--out` directory:
 

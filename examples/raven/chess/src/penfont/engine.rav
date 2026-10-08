@@ -41,9 +41,10 @@
 //     \\      a literal backslash
 //     \n      a line break, and a real newline in the string does the same
 //
-// `font_chars` is sorted by the lowercased key, which is the order Scratch's `<`
-// compares in, so `find_glyph` can binary-search it. It cannot use `index_of`:
-// that is a generated procedure that walks the list one item at a time.
+// `font_chars` is sorted by the lowercased key, so `find_glyph` can binary-search
+// it. It cannot use `index_of`: that is a generated procedure that walks the list
+// one item at a time. It also cannot compare a key with Scratch's own `<` and `=`,
+// which read a string that looks like a number as that number: see `PF_KEY`.
 //
 // A table built with `font2vm.py --ligatures` also carries the font's own
 // ligatures, keyed by the whole sequence -- `->`, `==`, `<=>` -- and `draw_text`
@@ -84,6 +85,15 @@ pub const PF_LEAD: num = 1.32;
 /// agree by construction; 1 is a table with no ligatures and searches for none.
 pub const PF_LIG_MAX: num = 16;
 
+/// The character every lookup in `font_chars` is spelled with, on both sides of
+/// the comparison. Scratch reads a string that looks like a number as that
+/// number, and the table holds keys that do -- `0`, and the hex ligatures
+/// `0x0`…`0xf` -- so a comparison on the raw keys would order and match them by
+/// value rather than by the string the table is sorted on. Any character no
+/// number survives will do; this one is printable, so a table dumped by mistake
+/// still reads. `find_glyph` has the whole story.
+pub const PF_KEY: str = "!";
+
 /// What a sheet page holds, and where. Twelve across and eight down at these
 /// pitches is 432 by 238 inside a box 450 wide, which leaves the top and the
 /// bottom for the two lines that say where in the inventory you are.
@@ -116,21 +126,34 @@ pub proc stroke_width(pf_em: num) -> num warp {
 }
 
 /// The index of a key in the font, or 0 for a character it does not carry.
+///
+/// The key is looked up as `PF_KEY` joined to it, and so is every row of the
+/// table. Scratch reads a string that looks like a number as that number, and a
+/// font draws both the digits `0`…`9` and its own ligatures for the hex prefix,
+/// `0x0`…`0xf`: under Scratch's own `<` the row `0x3` sorts *after* `1`, and
+/// under its own `=` the rows `0` and `0x0` are the same key. The table is
+/// sorted by the lowercased key instead, so a search on the raw keys walks a
+/// list that is not in the order it believes in and lands on the wrong row --
+/// `0x3231` drew `0x30x20x30x1`. A sentinel in front makes both sides a string
+/// no number survives, which leaves Scratch's comparison the case-insensitive
+/// string one the sort is in. The sentinel is the same on both sides, so it
+/// moves no key.
 pub proc find_glyph(pf_key: str) -> num warp {
+    let want: str = operators::join(PF_KEY, pf_key);
     let lo: num = 1;
     let hi: num = font_chars.len();
     let hit: num = 0;
     repeat_until lo > hi || hit > 0 {
         let mid: num = floor((lo + hi) / 2);
-        let probe: str = font_chars[mid];
-        if probe == pf_key {
+        let probe: str = operators::join(PF_KEY, font_chars[mid]);
+        if probe == want {
             hit = mid;
         } else {
             // `<` is typed for numbers, so the two keys go through `num()`,
             // which is a retype and no block: the block Scratch gets still
             // compares the two strings -- lowercased, which is the order the
             // table is sorted in.
-            if num(probe) < num(pf_key) {
+            if num(probe) < num(want) {
                 lo = mid + 1;
             } else {
                 hi = mid - 1;

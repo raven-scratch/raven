@@ -50,6 +50,7 @@ sprite "Text" {
         "󰒓 󰉋 󰈙 󰊤 󰌠 󰓎 󰄬 󰑣    ",
         "\\cLigatures: -> <- --> <-- ==> <=> <==> != === !== => <= >= <> && || :: ... ??? /* */ <!--",
         "\\cLabels: [TRACE] [DEBUG] [INFO] [WARN] [ERROR] [FATAL] [TODO] [FIXME] [NOTE] [HACK] [MARK]",
+        "\\cNumbers: 0 1 2 3 0x0 0x1 0x3231 0xdeadbeef 3x2 42 1000 1e3",
         "\\cA capital starts with \\c\\c, a backslash is \\\\, and \\n breaks the line."
     ];
 

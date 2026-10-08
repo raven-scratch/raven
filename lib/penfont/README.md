@@ -96,6 +96,15 @@ be keyed on the character. A capital is marked in the text instead:
 A character the font does not carry advances half an em and draws nothing, so a
 missing glyph leaves a gap rather than a hole in the line.
 
+The table is keyed on the lowercased string, and the lookup spells the key with a
+sentinel character in front. Scratch's own comparison reads a string that looks
+like a number as that number, and the font carries the digits `0`…`9` beside its
+hex ligatures `0x0`…`0xf`: to Scratch, `0` and `0x0` are one key and `0x3` sorts
+after `1`, which is not the order the table is sorted in, so a lookup on the raw
+keys finds the wrong row — `0x3231` came out `0x30x20x30x1`. The sentinel is on
+both sides, so it changes neither the order nor the match; `find_glyph` in
+`engine.rav` has the whole story.
+
 The text language stops there: `draw_text` draws the first face and nothing else.
 A second face or a different typography is a `find_glyph` and an `ink_glyph` of
 your own, which is what chess does — see **A second face** below.
@@ -357,6 +366,6 @@ into your project too.
 row, so drawing at size S scales every span by S/48. A run is three numbers — its
 row, the first column of its ink, and the column past the last one — and
 `font_at`, `font_runs` and `font_adv` are a glyph each. `font_chars` is the key
-of every glyph, sorted the way Scratch's `<` compares two strings, which is what
-makes the binary search over it correct and what makes the sheet's pages the
-inventory order.
+of every glyph, sorted by the lowercased key, which is the order `find_glyph`'s
+sentinel-prefixed comparison puts it in and what makes the binary search over it
+correct and the sheet's pages the inventory order.

@@ -14,13 +14,17 @@
  * `penLine` instead of drawing it -- with the renderer's own rule for a sprite
  * that is asked to move past the edge of the stage, which is the rule that turns
  * a page into a smear -- drives the project the way a reader does (a Space key,
- * then the answer), and then does two things with what came out.
+ * then the answer), and compares what came out with the tables and with a page.
  *
  * It compares the recorded lines one by one with the same lines taken
  * independently out of `src/sprites/font.rav` and the layout rules in
  * `src/sprites/text.rav`, which is the diagnosis. And it rasterises every stroke
  * the pen actually made and holds the stage against `dist/page.gray`, the page
  * `font2vm.py --stage` drew from those same tables, which is the verdict.
+ *
+ * A second answer goes in the same way: a line of digits and hex, which is where
+ * a lookup is easiest to get wrong, and which the page's own line does not
+ * contain at all. It is held against the tables and against no picture.
  *
  * It also fails if the sprite stamped, which is the one thing the engine is not
  * allowed to do.
@@ -605,12 +609,21 @@ const ownPage = argOf("--text", null) === null;
 // turned.
 const FIND = argOf("--find", "中");
 
+// A second line, asked for through the same key. The first page says where the
+// layout puts the text; this one says which glyph each character lands on, in
+// the place a lookup is easiest to get wrong: Scratch reads a string that looks
+// like a number as that number, and the table carries both the digits `0`…`9`
+// and the hex ligatures `0x0`…`0xf`, so a search with Scratch's own comparison
+// finds the ligature's row for the digit -- `0x3231` drew `0x30x20x30x1`.
+const NUMBERS = "0 1 2 3 0x0 0x1 0x3231 0xdeadbeef 3x2 42 1000 1e3";
+
 const vm = new VirtualMachine();
 vm.attachRenderer(renderer);
 const buffer = readFileSync(join(root, "dist", "penfont.sb3"));
 await vm.loadProject(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
 
-// What the question gets answered with, which changes for the find.
+// What the question gets answered with, which changes for the find and again for
+// the line of numbers.
 let answer = TEXT;
 vm.runtime.on("QUESTION", (q) => {
   if (q === null) return;
@@ -647,9 +660,16 @@ const sheet = snapshot();
 answer = FIND;
 await tap(" ", 4000);
 const found = snapshot();
+
+// B back to the page, and Space asks again, answered with the numbers.
+answer = NUMBERS;
+await tap("b", 4000);
+await tap(" ", 4000);
+const digits = snapshot();
 vm.stopAll();
 
 const want = expected(TEXT);
+const digitsWant = expected(NUMBERS);
 const failures = [];
 
 if (stamps !== 0) failures.push(`the sprite stamped ${stamps} time(s); the engine draws with the pen only`);
@@ -660,21 +680,33 @@ if (page.ink.length !== want.lines.length) {
 if (Math.abs(page.penSize - want.pen) > 1e-9) failures.push(`pen size ${page.penSize}, expected ${want.pen}`);
 
 const close = (a, b) => Math.abs(a - b) < 1e-6;
-let mismatched = 0;
-for (let i = 0; i < Math.min(page.ink.length, want.lines.length); i += 1) {
-  const got = page.ink[i];
-  const exp = want.lines[i];
-  if (!close(got.from, exp.from) || !close(got.to, exp.to) || !close(got.y, exp.y)) {
-    if (mismatched < 3) {
-      failures.push(
-        `line ${i}: drew (${got.from}, ${got.y})..(${got.to}, ${got.y}), ` +
-          `the tables say (${exp.from}, ${exp.y})..(${exp.to}, ${exp.y})`,
-      );
+
+/** The lines the VM drew against the lines the tables say, one by one. */
+function linesDrawn(got, lines, what) {
+  let mismatched = 0;
+  for (let i = 0; i < Math.min(got.length, lines.length); i += 1) {
+    const a = got[i];
+    const b = lines[i];
+    if (!close(a.from, b.from) || !close(a.to, b.to) || !close(a.y, b.y)) {
+      if (mismatched < 3) {
+        failures.push(
+          `${what} line ${i}: drew (${a.from}, ${a.y})..(${a.to}, ${a.y}), ` +
+            `the tables say (${b.from}, ${b.y})..(${b.to}, ${b.y})`,
+        );
+      }
+      mismatched += 1;
     }
-    mismatched += 1;
   }
+  if (mismatched > 3) failures.push(`${what}: ... and ${mismatched - 3} more lines out of place`);
 }
-if (mismatched > 3) failures.push(`... and ${mismatched - 3} more lines out of place`);
+
+linesDrawn(page.ink, want.lines, "the page");
+// The second line is the glyph of every character, and it is where a lookup by
+// Scratch's own comparison lands on the wrong row: it has to be all of them.
+if (digits.ink.length !== digitsWant.lines.length) {
+  failures.push(`the numbers drew ${digits.ink.length} lines, the tables say ${digitsWant.lines.length}`);
+}
+linesDrawn(digits.ink, digitsWant.lines, "the numbers");
 
 // The ink has to be the colour asked for, and it has to be somewhere on the page.
 if (!page.penColour) failures.push("the pen never drew, so it never had a colour");
@@ -798,6 +830,7 @@ console.log(`text        ${JSON.stringify(TEXT)}`);
 console.log(`glyphs      ${total} in the table, ${font.run.length} runs, ${sheetPage(total)} sheet pages`);
 console.log(`drawn       ${page.ink.length} lines at pen size ${page.penSize}, ${stamps} stamps`);
 console.log(`expected    ${want.lines.length} lines, scale ${want.scale}`);
+console.log(`numbers     ${digits.ink.length} lines, the tables say ${digitsWant.lines.length}`);
 console.log(`stage       ${box ? `x ${box.l - 240}..${box.r - 240}, y ${180 - box.b}..${180 - box.t}` : "empty"}, ` +
   `page overlap ${pageIou === null ? "n/a" : pageIou.toFixed(3)}`);
 console.log(`sheet       ${cells} cells, ${sheet.strokes.length} strokes, ` +
