@@ -512,7 +512,7 @@ fn the_key_boolean_takes_a_string_reporter() {
         "A",
         r#"sprite "A" {
             on flag_clicked {
-                if sensing::key_pressed("backspace") { looks::say("erase"); }
+                if sensing::key_pressed("F5") { looks::say("erase"); }
                 if sensing::key_pressed("") { looks::say("none"); }
                 if sensing::key_pressed("space") { looks::say("space"); }
             }
@@ -520,7 +520,7 @@ fn the_key_boolean_takes_a_string_reporter() {
     );
     let asm = project.expand();
     assert!(
-        asm.contains("sensing_keypressed(operator_join(\"backspace\", \"\"))"),
+        asm.contains("sensing_keypressed(operator_join(\"F5\", \"\"))"),
         "a custom key is a reporter: {asm}"
     );
     assert!(
@@ -530,6 +530,33 @@ fn the_key_boolean_takes_a_string_reporter() {
     assert!(
         asm.contains("sensing_keypressed(\"space\")"),
         "a known key stays the dropdown: {asm}"
+    );
+}
+
+/// The five keys only the extended runtimes name are menu values like any
+/// other, so a literal that is one of them is a fixed value rather than a
+/// reporter. What they *mean* is the runtime's business: on vanilla the
+/// question is cut to the letter the name starts with, which is why the desktop
+/// example's keyboard reaches them through a hat.
+#[test]
+fn the_extended_key_names_are_fixed_values() {
+    let project = Project::new("key-extended").sprite(
+        "A",
+        r#"sprite "A" {
+            on flag_clicked {
+                if sensing::key_pressed("backspace") { looks::say("erase"); }
+                if sensing::key_pressed(Key::Escape) { looks::say("out"); }
+            }
+        }"#,
+    );
+    let asm = project.expand();
+    assert!(
+        asm.contains("sensing_keypressed(\"backspace\")"),
+        "a key the extended runtimes name is a fixed value: {asm}"
+    );
+    assert!(
+        asm.contains("sensing_keypressed(\"escape\")"),
+        "and so is its variant: {asm}"
     );
 }
 

@@ -200,6 +200,9 @@ pub fn variant(value: &str) -> String {
         "DAYOFWEEK" => return "DayOfWeek".to_string(),
         _ => {}
     }
+    if let Some(name) = key_symbol(value) {
+        return name.to_string();
+    }
     let name = pascal(value);
     if name.is_empty() {
         "_".to_string()
@@ -208,6 +211,54 @@ pub fn variant(value: &str) -> String {
     } else {
         name
     }
+}
+
+/// The raven name of a printable ASCII key.
+///
+/// `pascal` cannot name one: it keeps only alphanumerics, so every punctuation
+/// character pascal-cases to the empty string and would collide on `_`. The key
+/// menu is the only menu with such values, and these are their names.
+///
+/// The key menu carries the printable symbols because a key *hat* matches on its
+/// own `KEY_OPTION` field, which the runtime compares against whatever key went
+/// down — the editor's dropdown is the shorter list, and a hat is the only block
+/// that can deliver a symbol whose tap begins and ends between two frames.
+fn key_symbol(value: &str) -> Option<&'static str> {
+    Some(match value {
+        "!" => "Exclamation",
+        "\"" => "Quote",
+        "#" => "Hash",
+        "$" => "Dollar",
+        "%" => "Percent",
+        "&" => "Ampersand",
+        "'" => "Apostrophe",
+        "(" => "LeftParen",
+        ")" => "RightParen",
+        "*" => "Star",
+        "+" => "Plus",
+        "," => "Comma",
+        "-" => "Minus",
+        "." => "Period",
+        "/" => "Slash",
+        ":" => "Colon",
+        ";" => "Semicolon",
+        "<" => "LessThan",
+        "=" => "Equals",
+        ">" => "GreaterThan",
+        "?" => "Question",
+        "@" => "At",
+        "[" => "LeftBracket",
+        "\\" => "Backslash",
+        "]" => "RightBracket",
+        "^" => "Caret",
+        "_" => "Underscore",
+        "`" => "Backtick",
+        "{" => "LeftBrace",
+        "|" => "Pipe",
+        "}" => "RightBrace",
+        "~" => "Tilde",
+        _ => return None,
+    })
 }
 
 /// PascalCase a Scratch string: split on anything that is not alphanumeric.
@@ -302,6 +353,26 @@ mod tests {
         assert_eq!(variant("10 ^"), "Ten");
         assert_eq!(variant("don't rotate"), "DontRotate");
         assert_eq!(variant("other scripts in sprite"), "OtherScriptsInSprite");
+    }
+
+    #[test]
+    fn a_printable_key_is_named_rather_than_emptied() {
+        // `pascal` keeps alphanumerics only, so every punctuation character
+        // pascal-cases to nothing and the whole set would collide on `_`.
+        for (value, name) in [
+            (".", "Period"),
+            (",", "Comma"),
+            ("-", "Minus"),
+            ("/", "Slash"),
+            ("\"", "Quote"),
+            ("'", "Apostrophe"),
+            ("\\", "Backslash"),
+            ("`", "Backtick"),
+            ("|", "Pipe"),
+            ("~", "Tilde"),
+        ] {
+            assert_eq!(variant(value), name, "`{value}`");
+        }
     }
 
     #[test]

@@ -55,6 +55,16 @@ A literal that is not one of the menu's own values is emitted as a one-block
 block; a value the program computed is already one. The **hat** is the
 difference to remember: `on key_pressed(Key::Space)` is a *field* baked into the
 block, with no slot for a reporter, so it takes a `Key` variant and nothing else.
+`Key` is the one menu wider than Scratch's editor, because the runtime matches
+that field against whatever key went down: the thirty-two printable ASCII keys
+are `Key::Exclamation` through `Key::Tilde`, and a hat that names one fires on
+that key even though the editor's dropdown has no item for it. That is how a
+project sees `.` or `/` at all — `key pressed?` is a question about the state,
+and a tap that begins and ends between two frames is over before it is asked.
+Five more are the extended runtimes' own — `Key::Backspace`, `Key::Delete`,
+`Key::Escape`, `Key::Shift` and `Key::Control` — and a vanilla runtime drops all
+five before any block sees them: there, a hat that names one never fires, and
+`key pressed?` with one asks about the letter the name starts with.
 The hat also fires on a mouse-wheel scroll, which Scratch reports as an up or
 down arrow; the boolean never sees one.
 

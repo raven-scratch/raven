@@ -404,7 +404,12 @@ fn menus() -> String {
         "\n## menus\n\
          # A dropdown is an enum type. `<MenuType>::<Variant>` is the only spelling for a\n\
          # closed menu; a typo is a compile error. `acceptReporters` menus also take an\n\
-         # expression of the same type.\n",
+         # expression of the same type.\n\
+         # The key menu is the one wider than Scratch's editor: the runtime matches a key\n\
+         # hat on its own field whatever that field holds, so it carries the thirty-two\n\
+         # printable ASCII keys the dropdown has no item for, Key::Exclamation..Key::Tilde,\n\
+         # and then the extended runtimes' own backspace, delete, escape, shift and control,\n\
+         # which vanilla drops before any block sees them.\n",
     );
     for id in menu::menu_ids() {
         let name = menu::type_name(id);

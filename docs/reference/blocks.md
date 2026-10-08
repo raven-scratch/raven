@@ -4058,8 +4058,7 @@ music_getTempo()
 
 ## Dropdown values
 
-Dropdowns are checked while compiling. Values are matched case-insensitively and written in the canonical spelling listed here.
-
+Dropdowns are checked while compiling. Values are matched case-insensitively and written in the canonical spelling listed here. The key menu is the one wider than the editor's dropdown. Its `backspace`, `delete`, `escape`, `shift`, `control` are wider again: they are the extended runtimes' own names, so a hat that names one fires there and nowhere else, and `key pressed?` with one asks about the letter it starts with on a vanilla runtime. 
 - `motion_goto`: every sprite name, plus `_random_`, `_mouse_`
 - `motion_glideto`: every sprite name, plus `_random_`, `_mouse_`
 - `motion_pointtowards`: every sprite name, plus `_mouse_`, `_random_`
@@ -4072,7 +4071,7 @@ Dropdowns are checked while compiling. Values are matched case-insensitively and
 - `number_name`: `number`, `name`
 - `sound_sounds`: the sounds declared by this target
 - `sound_effect`: `PITCH`, `PAN`
-- `sensing_keyoptions`: `any`, `space`, `up arrow`, `down arrow`, `right arrow`, `left arrow`, `enter`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h`, `i`, `j`, `k`, `l`, `m`, `n`, `o`, `p`, `q`, `r`, `s`, `t`, `u`, `v`, `w`, `x`, `y`, `z`, `0`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`
+- `sensing_keyoptions`: `any`, `space`, `up arrow`, `down arrow`, `right arrow`, `left arrow`, `enter`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h`, `i`, `j`, `k`, `l`, `m`, `n`, `o`, `p`, `q`, `r`, `s`, `t`, `u`, `v`, `w`, `x`, `y`, `z`, `0`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `!`, `"`, `#`, `$`, `%`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `-`, `.`, `/`, `:`, `;`, `<`, `=`, `>`, `?`, `@`, `[`, `\`, `]`, `^`, `_`, `` ` ``, `{`, `|`, `}`, `~`, `backspace`, `delete`, `escape`, `shift`, `control`
 - `greater_than`: `loudness`, `timer`
 - `stop_option`: `all`, `this script`, `other scripts in sprite`, `other scripts in stage`
 - `control_create_clone_of`: every sprite name, plus `_myself_`

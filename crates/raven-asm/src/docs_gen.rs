@@ -180,8 +180,21 @@ pub fn markdown() -> String {
     out.push_str("## Dropdown values\n\n");
     out.push_str(
         "Dropdowns are checked while compiling. Values are matched case-insensitively \
-         and written in the canonical spelling listed here.\n\n",
+         and written in the canonical spelling listed here. The key menu is the one \
+         wider than the editor's dropdown. ",
     );
+    // The key menu carries values one runtime knows and another does not, and a
+    // reference that did not say so would be describing a different Scratch.
+    let extended = catalog::KEYS_EXTENDED;
+    if !extended.is_empty() {
+        out.push_str(&format!(
+            "Its `{}` are wider again: they are the extended runtimes' own names, so a \
+             hat that names one fires there and nowhere else, and `key pressed?` with one \
+             asks about the letter it starts with on a vanilla runtime. ",
+            extended.join("`, `")
+        ));
+    }
+    out.push('\n');
     let mut printed: BTreeSet<&str> = BTreeSet::new();
     for block in catalog::BLOCKS {
         for arg in block.args {
@@ -228,7 +241,16 @@ pub fn markdown() -> String {
 fn code_list(values: &[&str]) -> String {
     values
         .iter()
-        .map(|v| format!("`{v}`"))
+        // A value that *is* a backtick — the key menu carries one — would close
+        // the code span it is written in, so it takes the two-backtick form,
+        // with the spaces CommonMark strips.
+        .map(|v| {
+            if v.contains('`') {
+                format!("`` {v} ``")
+            } else {
+                format!("`{v}`")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

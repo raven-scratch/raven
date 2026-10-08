@@ -341,7 +341,18 @@ pub fn menu(id: &str) -> Option<&'static MenuSpec> {
     MENUS.iter().find(|m| m.id == id)
 }
 
-/// Keyboard values accepted by Scratch's key dropdowns.
+/// Keyboard values Scratch's key blocks accept.
+///
+/// The first forty-three are the editor's key dropdown, in the order Scratch
+/// writes them. The thirty-two printable ASCII symbols after them have no item
+/// in that dropdown, and the runtime accepts them anyway: `postData` upper-cases
+/// a one-character key and `startHats` matches a key hat by the value of its own
+/// `KEY_OPTION` field, so a hat whose field is `.` fires on the `.` key. That is
+/// the only way a project can see a symbol — `key pressed?` is a question about
+/// the state, and a tap that begins and ends between two frames is over before
+/// any block runs — which is why they are here rather than absent.
+///
+/// The last five are `KEYS_EXTENDED`: the extended runtimes are wider again.
 pub static KEYS: &[&str] = &[
     "any",
     "space",
@@ -386,7 +397,58 @@ pub static KEYS: &[&str] = &[
     "7",
     "8",
     "9",
+    // The printable ASCII symbols, in order. See the note above.
+    "!",
+    "\"",
+    "#",
+    "$",
+    "%",
+    "&",
+    "'",
+    "(",
+    ")",
+    "*",
+    "+",
+    ",",
+    "-",
+    ".",
+    "/",
+    ":",
+    ";",
+    "<",
+    "=",
+    ">",
+    "?",
+    "@",
+    "[",
+    "\\",
+    "]",
+    "^",
+    "_",
+    "`",
+    "{",
+    "|",
+    "}",
+    "~",
+    // The extended runtimes' own named keys, last. See `KEYS_EXTENDED`.
+    "backspace",
+    "delete",
+    "escape",
+    "shift",
+    "control",
 ];
+
+/// The key names only the extended runtimes accept.
+///
+/// Vanilla's `postData` returns before it emits or records anything for a name
+/// longer than one character that is not one of its own six
+/// (`src/io/keyboard.js:47-67`, `:115-118`), so a hat that names one of these
+/// never fires there, and `key pressed?` with one is a question about the letter
+/// it starts with: `key pressed? "shift"` asks about `S`. TurboWarp records all
+/// of them and answers both. A *hat* is therefore the way to reach them — it is
+/// inert where it cannot work rather than wrong — and a question about one must
+/// be asked only from a place a vanilla runtime never reaches.
+pub static KEYS_EXTENDED: &[&str] = &["backspace", "delete", "escape", "shift", "control"];
 
 pub static EFFECTS: &[&str] = &[
     "COLOR",
