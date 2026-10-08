@@ -248,23 +248,70 @@ node tools/validate-sb3.js examples/raven/case/dist/case.sb3 --steps 300
 `examples/raven/rv32ima` is the fourth, and the one to read when a program has to
 be something outside it rather than something of its own: a port of the Scratch
 project that runs [mini-rv32ima](https://github.com/cnlohr/mini-rv32ima), the 32
-bit RISC-V hart with no MMU, with the terminal redrawn by `lib/penfont`. It runs
-one guest, and it is this repository's own rather than a borrowed one:
-`tools/mini-image.sh` takes the reference's kernel and gives it a root shell with
-coremark, duktape and ed instead of the login its own rootfs stops at, and `node
-tools/build.mjs` turns that image and its device tree into one `.sb3`.
-`tools/check.mjs` boots it in a real Scratch VM, waits for the prompt, types
-`screenfetch`, duktape and coremark at it, and then drives the console by hand —
-the key hats, the palette, the cursor, the erase sequences and the alternate
-screen. [Read its README](examples/raven/rv32ima/README.md) for the four places
-it follows the Rust rather than the Scratch project, and for the two it does not.
+bit RISC-V hart with no MMU, with the terminal redrawn by `lib/penfont`. It
+carries two guests, one per build, and `mini` is the default. That one is this
+repository's own rather than a borrowed one: `tools/mini-image.sh` takes the
+reference's kernel and gives it a root shell with coremark, duktape and ed
+instead of the login its own rootfs stops at, and `node tools/build.mjs` turns
+that image and its device tree into one `.sb3`. `tools/check.mjs` boots it in a
+real Scratch VM, waits for the prompt, types `screenfetch`, duktape and coremark
+at it, and then drives the console by hand — the key hats, the palette, the
+cursor, the erase sequences and the alternate screen. The other guest is
+embeddedDOOM, taken as cnlohr prebuilt it and logged into by hand, and its check
+is the one to read for what a *picture* on this Stage is: Doom's video driver
+writes a frame to the console as escape sequences, so the display is the paper
+the terminal paints, and the check has to say which of its assertions proves the
+picture and which proves it was Doom that drew it. [Read its
+README](examples/raven/rv32ima/README.md) for the four places it follows the Rust
+rather than the Scratch project, and for the two it does not.
 
 ```sh
 git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
 bash examples/raven/rv32ima/tools/mini-image.sh        # needs dtc, python3, curl
-node examples/raven/rv32ima/tools/build.mjs
+node examples/raven/rv32ima/tools/build.mjs            # the mini guest
 SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
   node examples/raven/rv32ima/tools/check.mjs
+node examples/raven/rv32ima/tools/build.mjs emdoom     # the Doom guest
+SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
+  node examples/raven/rv32ima/tools/check.mjs emdoom
+```
+
+`examples/raven/desktop` is the fifth, and the one to read when the emulated
+thing is a *computer* rather than a processor: an ARM926EJ-S and an ARM
+Versatile PB built out of replaceable modules — a CPU, the memory, the
+interrupt controller, two timers, four serial ports, the LCD controller and a
+flash chip — with the panel at the end of the ribbon cable as a monitor sprite.
+It is also the one to read for how a guest is produced: a Linux kernel, a
+BusyBox initramfs and a device tree are built from source, laid into the
+machine's flash chip by a boot ROM assembled from real ARM assembly, and handed
+over the way the ARM boot protocol says. The display is the point — the PL110's
+framebuffer is drawn on the Stage from the controller's own scanout, not from
+reading memory and interpreting it. `boards/versatile-pb.mjs` *is* the machine:
+which parts the board is built with, where each answers, what clock drives it,
+and where the guest images live in the flash, so a different board is a
+different file, and the device tree is built from the same numbers so the two
+cannot disagree. Be warned about its speed: an instruction costs about four
+hundred Scratch blocks, so the vanilla VM's interpreter retires about three
+thousand a second and the guest's own boot would be hours. `tools/check.mjs`
+therefore runs TurboWarp's VM, which compiles the same blocks to JavaScript and
+is what makes a boot checkable at all — the compiled machine retires a million
+instructions a second in the firmware and tens of thousands in the kernel, where
+the interpreter manages three thousand. The vanilla VM is still the reference
+for what the blocks *say*; `SCRATCH_VM_ROOT` picks which one runs, and
+`tools/ref/` boots the identical memory image on QEMU's Versatile PB to answer
+"is the guest good, or is the machine?" in a second.
+
+```sh
+bash examples/raven/desktop/tools/wsl/00-setup.sh       # toolchain, kernel, busybox
+bash examples/raven/desktop/tools/wsl/02-build-tools.sh # m4, bison, flex (no root)
+bash examples/raven/desktop/tools/wsl/10-kernel.sh
+bash examples/raven/desktop/tools/wsl/20-guest.sh       # busybox, /init, the tree
+bash examples/raven/desktop/tools/wsl/30-rom.sh
+node examples/raven/desktop/tools/build.mjs
+cargo run -p raven -- check -m examples/raven/desktop/raven.toml
+git clone --depth 1 https://github.com/TurboWarp/scratch-vm ref/turbowarp-vm
+(cd ref/turbowarp-vm && npm install)
+node examples/raven/desktop/tools/check.mjs --budget 900
 ```
 
 `examples/raven-asm/zhcn` is not written by hand: it is `raven-re`'s reversal of a
