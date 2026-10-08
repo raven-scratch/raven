@@ -1,0 +1,54 @@
+// The console: an 8250/16550 in eight bytes of register file.
+//
+// The kernel's `console=ttyS0` is this device, and its device tree node says
+// `ns16850`, so the driver that binds to it is the ordinary 8250 one. It does
+// not need a whole 16550 to work, and the reference gives it exactly two
+// registers:
+//
+//     +0  R   the data register: the oldest byte the keyboard typed, and
+//             reading it takes that byte away. Zero when nothing waits.
+//     +0  W   the data register: one byte out of the guest.
+//     +5  R   the line status register: 0x60, or 0x61 when a byte waits.
+//
+// The line status is the whole trick. `0x60` is `THRE | TEMT` -- the transmit
+// holding register and the transmitter are both empty -- which is what tells a
+// polled driver it may write the next byte immediately. Bit 0 is `DR`, "data
+// ready", and setting it is how the same register says a key is waiting. A
+// driver that reads the status before every byte therefore sees a port that is
+// always ready to transmit and sometimes ready to receive, which is all a
+// console is.
+//
+// Everything else in the register file answers zero. That is not a stub: a
+// real 16550's interrupt identification register answers zero when no
+// interrupt is pending, which is true here because this port never raises one,
+// and its divisor latches and modem registers are never read by a console that
+// is polled.
+
+use rvio::io;
+
+/// The data register's byte offset within the device window.
+pub const UART_DATA: num = 0;
+/// The line status register's byte offset.
+pub const UART_LSR: num = 5;
+/// `THRE | TEMT`: ready to transmit.
+pub const UART_LSR_READY: num = 96;
+/// `DR`: a byte is waiting.
+pub const UART_LSR_DATA_READY: num = 1;
+
+pub proc uart_read(p_off: num, p_width: num) -> num warp {
+    if p_off == UART_LSR {
+        if io_has_input() > 0 { return UART_LSR_READY + UART_LSR_DATA_READY; }
+        return UART_LSR_READY;
+    }
+    if p_off == UART_DATA { return io_take_input(); }
+    return 0;
+}
+
+pub proc uart_write(p_off: num, p_width: num, p_value: num) warp {
+    if p_off != UART_DATA { return; }
+    io_emit(p_value);
+}
+
+pub proc uart_reset() warp {
+    io_reset();
+}

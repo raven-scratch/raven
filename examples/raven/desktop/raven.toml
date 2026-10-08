@@ -1,0 +1,16 @@
+# The ARM Versatile-PB board running the Linux guest, which is the project
+# `tools/build.mjs` builds with no arguments. The project's name is the
+# artifact's: `dist/desktop-arm-virt-linux.sb3`. See the README's "Building it"
+# for the naming rule and the other three boards.
+[project]
+name = "desktop-arm-virt-linux"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/stage.rav"
+sprites = [
+    "src/sprites/machine.rav",
+    "src/sprites/input.rav",
+    "src/sprites/monitor.rav",
+]

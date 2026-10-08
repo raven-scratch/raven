@@ -1,0 +1,36 @@
+// The paper, and the order a power-on happens in.
+//
+// This is the RISC-V board's stage, and the shape is the ARM board's: one
+// sprite holds the processor and everything it can reach, one holds the
+// display, and the stage's only job is to start them in the right order and
+// get out of the way.
+//
+// There is one drawing sprite and one picture. The **Monitor** draws the
+// graphics card's scanout, and the card's scanout is everything this machine
+// puts on the Stage: the Linux console is pixels the kernel's `fbcon` wrote
+// through `simplefb` into the card's own memory, and Doom's picture is pixels
+// its video driver wrote there directly. Nothing in this project draws text
+// out of a font table -- there is no font table in it to draw from.
+//
+// The order is the ARM stage's and it is a real power-on order:
+//
+//   1. The machine resets the bus and the hart and lays the guest into RAM.
+//   2. The monitor starts drawing, before the hart runs, so a guest that
+//      paints its first frame early is not painting into a monitor that has
+//      not started.
+//   3. Only then does the hart run, and the script that runs it does not
+//      return until the guest stops.
+
+stage {
+    costume "paper" = "assets/backdrop.svg";
+
+    broadcast "Machine.powerOn";
+    broadcast "Machine.run";
+    broadcast "Monitor.run";
+
+    on flag_clicked {
+        events::broadcast_and_wait("Machine.powerOn");
+        events::broadcast("Monitor.run");
+        events::broadcast("Machine.run");
+    }
+}

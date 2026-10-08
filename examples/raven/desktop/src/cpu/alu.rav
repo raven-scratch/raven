@@ -1,0 +1,306 @@
+// The arithmetic logic unit: the barrel shifter, the flag rules, and the
+// three lookup tables that stand in for the bitwise operators Scratch does not
+// have.
+//
+// Scratch has no `and`, no `or` and no `xor`, and raven does not add one, so a
+// 32-bit logical operation is four lookups into a table indexed by the two
+// bytes of a 16-bit pair -- the same shape `rv32ima` uses, and the same three
+// tables. Everything else here is arithmetic, which Scratch does have, and the
+// reason so much of it is written out is that Scratch's `mod` is not C's and
+// its `floor` rounds towards minus infinity, so a sign that leaks into a shift
+// or a remainder is a wrong answer rather than a negative one.
+//
+// The barrel shifter leaves its carry in `alu_shift_carry` rather than in a
+// second return value, because a raven `proc` has one result and the carry is
+// read by the flag rules immediately afterwards.
+
+use cpu::state;
+use cpu::luts;
+
+/// The carry out of the last shift. ARM calls it C, and a logical operation
+/// with `S` set takes its C from here rather than from an adder.
+@scratch_global
+pub var alu_shift_carry: num = 0;
+
+/// `1` for a value with bit 31 set, `0` otherwise -- the sign, not the
+/// magnitude. Two's complement's sign bit is the whole of the sign, which is
+/// why so many of the routines below need nothing else.
+///
+/// Every one of the small predicates here is an `fn` and not a `proc`, and that
+/// is not a style choice: a `proc` is a Scratch custom block and costs a call,
+/// a `fn` is an expression and is inlined into its caller and costs nothing.
+/// The interpreter's inner loop is measured in calls per instruction, so a
+/// predicate that is a `proc` is a predicate that halves the machine's speed.
+pub fn alu_sign(p_value: num) -> num {
+    floor(p_value % 4294967296 / 2147483648)
+}
+
+/// Bit 31 of a value already known to be in `[0, 2^32)`, as `0` or `1`.
+pub fn alu_bit31(p_value: num) -> num {
+    floor(p_value / 2147483648)
+}
+
+/// `1` when the value is zero and `0` otherwise, for a value in `[0, 2^32)`.
+/// The ceiling is zero only at zero, which is the whole of the test.
+pub fn alu_iszero(p_value: num) -> num {
+    1 - ceil(p_value / 4294967296)
+}
+
+/// The four condition flags packed the way the condition table is indexed:
+/// `N * 8 + Z * 4 + C * 2 + V`, each of the four being `0` or `1`.
+pub fn alu_field(p_n: num, p_z: num, p_c: num, p_v: num) -> num {
+    p_n * 8 + p_z * 4 + p_c * 2 + p_v
+}
+
+/// The flag field a status register word carries -- its top four bits.
+pub fn alu_cpsr_field(p_cpsr: num) -> num {
+    floor(p_cpsr / 268435456) % 16
+}
+
+/// A status register word with its flag field replaced, and its mode,
+/// interrupt and control bits left exactly as they were.
+pub fn alu_cpsr_with(p_cpsr: num, p_field: num) -> num {
+    p_cpsr % 268435456 + p_field * 268435456
+}
+
+/// The signed reading of an unsigned 32-bit value: `0xFFFF_FFFF` is `-1`.
+/// The sign bit subtracted back out is the same thing as the branch this used
+/// to be, and costs no call.
+pub fn alu_signed(p_value: num) -> num {
+    p_value % 4294967296 - floor(p_value % 4294967296 / 2147483648) * 4294967296
+}
+
+/// One byte of a value, selected by power of two rather than by a shift.
+/// An `fn` and not a `proc`, so that the four calls an AND makes are four
+/// expressions rather than four Scratch custom blocks.
+pub fn alu_byte(p_value: num, p_which: num) -> num {
+    floor(p_value / cpu_pow2[p_which * 8 + 1]) % 256
+}
+
+// ---------------------------------------------------------------------------
+// The bitwise operations
+// ---------------------------------------------------------------------------
+
+pub fn alu_and(p_a: num, p_b: num) -> num {
+    alu_and_lut[alu_byte(p_a, 3) * 256 + alu_byte(p_b, 3) + 1] * 16777216 +
+        alu_and_lut[alu_byte(p_a, 2) * 256 + alu_byte(p_b, 2) + 1] * 65536 +
+        alu_and_lut[alu_byte(p_a, 1) * 256 + alu_byte(p_b, 1) + 1] * 256 +
+        alu_and_lut[alu_byte(p_a, 0) * 256 + alu_byte(p_b, 0) + 1]
+}
+
+pub fn alu_or(p_a: num, p_b: num) -> num {
+    alu_or_lut[alu_byte(p_a, 3) * 256 + alu_byte(p_b, 3) + 1] * 16777216 +
+        alu_or_lut[alu_byte(p_a, 2) * 256 + alu_byte(p_b, 2) + 1] * 65536 +
+        alu_or_lut[alu_byte(p_a, 1) * 256 + alu_byte(p_b, 1) + 1] * 256 +
+        alu_or_lut[alu_byte(p_a, 0) * 256 + alu_byte(p_b, 0) + 1]
+}
+
+pub fn alu_xor(p_a: num, p_b: num) -> num {
+    alu_xor_lut[alu_byte(p_a, 3) * 256 + alu_byte(p_b, 3) + 1] * 16777216 +
+        alu_xor_lut[alu_byte(p_a, 2) * 256 + alu_byte(p_b, 2) + 1] * 65536 +
+        alu_xor_lut[alu_byte(p_a, 1) * 256 + alu_byte(p_b, 1) + 1] * 256 +
+        alu_xor_lut[alu_byte(p_a, 0) * 256 + alu_byte(p_b, 0) + 1]
+}
+
+pub fn alu_not(p_a: num) -> num {
+    4294967295 - p_a % 4294967296
+}
+
+// ---------------------------------------------------------------------------
+// The barrel shifter
+// ---------------------------------------------------------------------------
+//
+// Five operators, and every one of them has an amount of zero that means
+// something other than "no shift": LSR and ASR shift by 32, and ROR rotates
+// right extended, taking the carry in as the new top bit. That is the ARM
+// encoding, not an accident, and it is why each of these tests zero first.
+
+pub proc alu_lsl(p_value: num, p_amount: num, p_carry: num) -> num warp {
+    let value: num = p_value % 4294967296;
+    if p_amount == 0 { alu_shift_carry = p_carry; return value; }
+    if p_amount < 32 {
+        alu_shift_carry = floor(value / cpu_pow2[32 - p_amount + 1]) % 2;
+        return value * cpu_pow2[p_amount + 1] % 4294967296;
+    }
+    if p_amount == 32 {
+        alu_shift_carry = value % 2;
+        return 0;
+    }
+    alu_shift_carry = 0;
+    return 0;
+}
+
+pub proc alu_lsr(p_value: num, p_amount: num, p_carry: num) -> num warp {
+    let value: num = p_value % 4294967296;
+    if p_amount == 0 { alu_shift_carry = p_carry; return value; }
+    if p_amount < 32 {
+        alu_shift_carry = floor(value / cpu_pow2[p_amount - 1 + 1]) % 2;
+        return floor(value / cpu_pow2[p_amount + 1]);
+    }
+    if p_amount == 32 {
+        alu_shift_carry = floor(value / 2147483648) % 2;
+        return 0;
+    }
+    alu_shift_carry = 0;
+    return 0;
+}
+
+/// Arithmetic shift right. `floor` of a negative divided by a power of two
+/// rounds towards minus infinity, which is exactly what an arithmetic shift
+/// does, so the signed reading multiplied down and taken back to unsigned is
+/// the whole of it.
+pub proc alu_asr(p_value: num, p_amount: num, p_carry: num) -> num warp {
+    let signed: num = alu_signed(p_value);
+    if p_amount == 0 { alu_shift_carry = p_carry; return p_value % 4294967296; }
+    if p_amount < 32 {
+        alu_shift_carry = floor(signed / cpu_pow2[p_amount - 1 + 1]) % 2;
+        return floor(signed / cpu_pow2[p_amount + 1]) % 4294967296;
+    }
+    alu_shift_carry = alu_sign(p_value);
+    if alu_shift_carry > 0 { return 4294967295; }
+    return 0;
+}
+
+pub proc alu_ror(p_value: num, p_amount: num, p_carry: num) -> num warp {
+    let value: num = p_value % 4294967296;
+    let amount: num = p_amount % 32;
+    if amount == 0 { alu_shift_carry = p_carry; return value; }
+    alu_shift_carry = floor(value / cpu_pow2[amount - 1 + 1]) % 2;
+    return floor(value / cpu_pow2[amount + 1]) +
+        value % cpu_pow2[amount + 1] * cpu_pow2[32 - amount + 1];
+}
+
+/// Rotate right extended: a 33-bit rotate whose thirty-third bit is the carry.
+/// It is what `ROR #0` means, and it is how a multiword shift is built.
+pub proc alu_rrx(p_value: num, p_carry: num) -> num warp {
+    let value: num = p_value % 4294967296;
+    alu_shift_carry = value % 2;
+    return floor(value / 2) + p_carry * 2147483648;
+}
+
+// ---------------------------------------------------------------------------
+// The flags
+// ---------------------------------------------------------------------------
+
+/// Set N and Z from a result and leave C and V exactly as they were. This is
+/// what a multiply with `S` set does: it reports its sign and its zero and says
+/// nothing about a carry or an overflow.
+pub proc alu_flags_nz(p_result: num) warp {
+    let result: num = p_result % 4294967296;
+    let field: num = alu_cpsr_field(cpu_cpsr);
+    cpu_cpsr = alu_cpsr_with(cpu_cpsr,
+        alu_field(alu_bit31(result), alu_iszero(result), floor(field / 2) % 2, field % 2));
+}
+
+/// The flags a logical operation leaves: N and Z from the result, C from the
+/// shifter, and V alone.
+///
+/// The assignment is written out rather than hidden behind a `proc`, because a
+/// call to make one assignment is a Scratch custom block that buys nothing:
+/// `CPSR_C` is bit 29 and `CPSR_V` is bit 28, so `alu_field`'s `c` is worth two
+/// of the field and its `v` one, which is the same numbering read backwards.
+pub proc alu_logical_flags(p_result: num) warp {
+    let result: num = p_result % 4294967296;
+    cpu_cpsr = alu_cpsr_with(cpu_cpsr, alu_field(
+        alu_bit31(result), alu_iszero(result), alu_shift_carry,
+        alu_cpsr_field(cpu_cpsr) % 2));
+}
+
+/// The condition flags the last addition or subtraction produced, waiting to be
+/// put into the status register.
+///
+/// An arithmetic operation leaves its flags here rather than in the status
+/// register because `S` decides whether the instruction may write them at all,
+/// and only the caller knows. A `proc` returns one value, so four flags have
+/// nowhere else to wait.
+///
+/// This is not a nicety. An `add` with `S` clear used to write the flags inside
+/// `alu_add`, so *every* arithmetic instruction set them whether it asked to or
+/// not -- and `cmp r1, #0` followed by `add fp, sp, #20` is a comparison whose
+/// result is thrown away by the instruction after it. Linux does that
+/// constantly, and the first place it showed was a `blt` taken on a value that
+/// was not negative.
+@scratch_global
+pub var alu_flags_field: num = 0;
+
+/// Put the waiting flags into the status register.
+pub proc alu_commit_flags() warp {
+    cpu_cpsr = alu_cpsr_with(cpu_cpsr, alu_flags_field);
+}
+
+/// Add and work out all four flags. `p_carry` is the carry in.
+///
+/// Overflow is not "the result is too big": it is the two operands agreeing on
+/// a sign that the result disagrees with, which is why this compares the sign
+/// bits of three values and never looks at a magnitude. The two differences are
+/// zero or one and are squared to make them so again, which is `!=` spelled
+/// without a branch.
+pub proc alu_add(p_a: num, p_b: num, p_carry: num) -> num warp {
+    let a: num = p_a % 4294967296;
+    let b: num = p_b % 4294967296;
+    let total: num = a + b + p_carry;
+    let result: num = total % 4294967296;
+    let sa: num = alu_bit31(a);
+    let sb: num = alu_bit31(b);
+    let sr: num = alu_bit31(result);
+    alu_flags_field = alu_field(sr, alu_iszero(result),
+        floor(total / 4294967296),
+        (1 - (sa - sb) * (sa - sb)) * (sr - sa) * (sr - sa));
+    return result;
+}
+
+/// Subtract and set all four flags. `p_borrow` is the extra one SBC takes:
+/// `a - b - borrow`.
+///
+/// C is the *inverse* borrow -- it is set when nothing was borrowed -- which is
+/// what makes `sbc` chain and what every comparison relies on. `exact` is in
+/// `(-2^32, 2^32)`, so dividing it down and adding one back is its own sign
+/// test: minus one becomes zero, and everything else becomes one.
+///
+/// Both operands are the raw thirty-two bits and *not* their signed readings,
+/// because the two flags want opposite things: the carry is a property of the
+/// unsigned difference, and only the overflow flag is a property of the signed
+/// one. Reading them signed makes the carry wrong whenever the operands are on
+/// opposite sides of 2^31 -- `cmp r7, r2` with `r7` of `0xff3fffff` against a
+/// small `r2` produced a borrow that never happened -- and `memblock`'s own
+/// `min(size, ~base)` is `cmp` of exactly that pair, so the kernel's memory
+/// came out empty and it faulted clearing the page tables it was running from.
+pub proc alu_sub(p_a: num, p_b: num, p_borrow: num) -> num warp {
+    let a: num = p_a % 4294967296;
+    let b: num = p_b % 4294967296;
+    let exact: num = a - b - p_borrow;
+    let result: num = exact % 4294967296;
+    let sa: num = alu_bit31(a);
+    let sb: num = alu_bit31(b);
+    let sr: num = alu_bit31(result);
+    alu_flags_field = alu_field(sr, alu_iszero(result),
+        floor(exact / 4294967296) + 1,
+        (sa - sb) * (sa - sb) * (sr - sa) * (sr - sa));
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Condition codes
+// ---------------------------------------------------------------------------
+
+/// Whether an instruction with this condition should execute. Every ARM
+/// instruction carries four bits of condition, so this is asked once per
+/// instruction and it is a table read: the flags' own four bits -- N, Z, C and
+/// V, the top bits of the CPSR in that order -- and the instruction's four are
+/// a byte of index, and the answer is one entry.
+pub fn alu_cond(p_cond: num) -> num {
+    alu_cond_lut[alu_cpsr_field(cpu_cpsr) * 16 + p_cond + 1]
+}
+
+/// The number of leading zeroes, which is ARMv5's `clz` and nothing else.
+pub proc alu_clz(p_value: num) -> num warp {
+    let value: num = p_value % 4294967296;
+    if value == 0 { return 32; }
+    let count: num = 0;
+    let bit: num = 31;
+    repeat_until bit < 0 || floor(value / cpu_pow2[bit + 1]) % 2 > 0 {
+        count += 1;
+        bit -= 1;
+    }
+    return count;
+}

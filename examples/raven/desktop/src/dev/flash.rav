@@ -1,0 +1,60 @@
+// The flash chip: the whole of this machine's storage.
+//
+// On the board it is a sixty-four megabyte NOR part in the socket the static
+// memory controller drives, and its first thirty-two kilobytes are aliased to
+// address zero while the board's remap bit is clear -- which is where an
+// ARM926 comes out of reset and therefore where the firmware has to be. That is
+// not a convenience of the emulator: it is what the board does, and it is why
+// the boot ROM can be running at address zero and be readable at `0x3400_0000`
+// at the same time. The launch routine uses exactly that, because it has to
+// keep running after it takes the alias away.
+//
+// A NOR chip is not writable the way memory is. Writing to it is a command
+// sequence -- unlock, command, address, data -- and this machine never programs
+// it, so a write is dropped rather than remembered. Making writes land would
+// mean modelling the command sequence, and a machine that let a program scribble
+// on its own firmware through a wild pointer would be a machine that hides bugs
+// real hardware would not.
+//
+// The contents come from `images/`, laid out by `tools/build.mjs`:
+//
+//   offset 0x000000  the boot ROM
+//   offset 0x010000  the kernel
+//   offset 0x400000  the initramfs
+//   offset 0x600000  the device tree
+//
+// and the boot ROM's copy loop is what turns those offsets into memory.
+
+use board::decode;
+use dev::flash_image;
+use mem::ram;
+
+pub proc flash_read32(p_off: num) -> num warp {
+    let index: num = floor(p_off / 4);
+    if index >= FLASH_IMAGE_WORDS { return 0; }
+    return flash[index + 1];
+}
+
+/// A byte of the chip. The kernel is read a word at a time by the copy loop in
+/// the boot ROM, but the device tree and the initramfs are read the same way
+/// and a byte of either goes through here.
+pub fn flash_read8(p_off: num) -> num {
+    floor(flash[floor(p_off / 4) + 1] / ram_byte_shift[(p_off % 4) + 1]) % 256
+}
+
+pub proc flash_reset() warp {
+    // A flash chip holds what it holds. There is no reset state to go back to,
+    // which is what makes it the right place for firmware.
+}
+
+pub proc flash_write(p_off: num, p_value: num) warp {
+    // See the note at the top: programming a NOR part is a command sequence and
+    // this machine does not run one.
+}
+
+pub proc flash_tick(p_cycles: num) warp {
+}
+
+pub proc flash_irq() -> num warp {
+    return 0;
+}

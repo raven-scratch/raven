@@ -1,0 +1,92 @@
+// The bus: one read and one write, and the address decoder between them.
+//
+// This is the RISC-V board's version of `board::bus`, and it is the same idea:
+// the decoder is generated from the board file into `rvboard::decode`, so this
+// file does not know what is plugged into the machine -- it knows how to look
+// an address up in the page table and hand the access to whichever module the
+// table names.
+//
+// It is a *smaller* bus than the ARM board's, and the difference is the point
+// of having a board file at all. The ARM board's bus answers SDRAM, a boot ROM
+// alias, a sixteen megabyte flash window and a two megabyte peripheral window,
+// and it collects interrupt lines from every device into two controllers.
+// This board has RAM at one address, one MMIO window, and no interrupt
+// controller at all: RISC-V's timer interrupt is a comparison inside the CLINT
+// and a CSR in the hart, so there is no line to wire and nothing to collect.
+// The bus below is four address tests and a dispatch.
+//
+// The hart does *not* come through here for RAM. `rvcpu::hart` reads and
+// writes its own memory list directly, because that is the access almost every
+// instruction makes and a procedure call and two range tests per load is a
+// large fraction of what an instruction costs. The bus is only reached for an
+// address that is not RAM, which on this machine means MMIO.
+
+use rvboard::decode;
+use rvdev::uart8250;
+use rvdev::clint;
+use rvdev::syscon;
+use rvdev::efb;
+
+/// Set when the guest touched an address that is neither RAM nor one of the
+/// board's devices. mini-rv32ima faults a load or a store outside
+/// `0x1000_0000..0x1200_0000`, and this is how the hart finds out: the access
+/// answers zero and this flag says why.
+@scratch_global
+pub var rv_bus_fault: num = 0;
+
+/// Whether an address is inside the MMIO window the board answers.
+pub proc bus_in_mmio(p_addr: num) -> num warp {
+    if p_addr < RV_PERIPH_BASE { return 0; }
+    if p_addr >= RV_PERIPH_BASE + RV_PERIPH_SIZE { return 0; }
+    return 1;
+}
+
+/// The page an address lands in names the device. A page with nothing on it
+/// reads back as zero, which is what an unassigned address reads back as, so a
+/// hole in the memory map needs no special case.
+pub proc bus_device_at(p_addr: num) -> num warp {
+    let page: num = floor((p_addr - RV_PERIPH_BASE) / RV_PAGE_SIZE);
+    if page < 0 { return DEV_NONE; }
+    if page >= RV_PERIPH_PAGES { return DEV_NONE; }
+    return rv_page_dev[page + 1];
+}
+
+/// One access, by the width the instruction asked for. `p_width` is one, two
+/// or four bytes.
+///
+/// A width is passed rather than a word because the console is a byte device:
+/// an eight-bit read of the data register *consumes* the byte, so answering a
+/// byte access by reading a word and taking a lane would take four bytes off
+/// the keyboard for every one the guest asked for.
+pub proc bus_read(p_addr: num, p_width: num) -> num warp {
+    rv_bus_fault = 0;
+    if bus_in_mmio(p_addr) == 0 { rv_bus_fault = 1; return 0; }
+    let id: num = bus_device_at(p_addr);
+    if id == DEV_NONE { return 0; }
+    let off: num = p_addr - rv_dev_base[id + 1];
+    if id == DEV_UART0 { return uart_read(off, p_width); }
+    if id == DEV_CLINT { return clint_read(off); }
+    if id == DEV_SYSCON { return syscon_read(off); }
+    if id == DEV_EFB { return efb_read(off, p_width); }
+    return 0;
+}
+
+pub proc bus_write(p_addr: num, p_width: num, p_value: num) warp {
+    rv_bus_fault = 0;
+    if bus_in_mmio(p_addr) == 0 { rv_bus_fault = 1; return; }
+    let id: num = bus_device_at(p_addr);
+    if id == DEV_NONE { return; }
+    let off: num = p_addr - rv_dev_base[id + 1];
+    if id == DEV_UART0 { uart_write(off, p_width, p_value); return; }
+    if id == DEV_CLINT { clint_write(off, p_value); return; }
+    if id == DEV_SYSCON { syscon_write(off, p_value); return; }
+    if id == DEV_EFB { efb_write(off, p_width, p_value); return; }
+}
+
+pub proc bus_reset() warp {
+    rv_bus_fault = 0;
+    uart_reset();
+    clint_reset();
+    syscon_reset();
+    efb_reset();
+}

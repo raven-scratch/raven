@@ -1,0 +1,382 @@
+// The graphics card: one window, two panels, and a scanout of its own.
+//
+// This is the device embeddedDOOM's bare metal video driver looks for, and it
+// is deliberately not a display controller. There are no timings, no
+// scanlines and no pixel clock here: the guest writes pixels into the window
+// whenever it likes, and the board scans out of it. The monitor draws what the
+// board scans. A frame the guest is halfway through writing therefore cannot
+// reach the Stage on the indexed panel, which is the whole reason that panel's
+// contract has a commit in it.
+//
+// ## Two panels
+//
+// The card has two modes, and which one it is wearing is a *board* decision:
+// `boards/mini-rv32.mjs` gives the card a `format`, and a guest that wants the
+// other one overrides it in its own entry. `tools/build.mjs` compiles the
+// choice into `RV_EFB_FORMAT` and `RV_EFB_INDEXED`, and everything below reads
+// those rather than a runtime register, because a panel is soldered to a card.
+//
+//   INDEX8   320x200, one byte a pixel, a palette of 256 entries, commit.
+//            This is the bare metal guest's driver, and it is unchanged.
+//   RGB565   480x360, two bytes a pixel, no palette, no commit. This is what
+//            the Linux guest's `simple-framebuffer` node names, and it is what
+//            Linux's `fbcon` writes the console into.
+//
+// ## The indexed contract, and where each part of it is used
+//
+//     0x000 R ID            0x31424645 "EFB1"    who the driver is talking to
+//     0x004 R VERSION       who the driver is talking to
+//     0x008 R WIDTH         pixels a row
+//     0x00c R HEIGHT        rows
+//     0x010 R FORMAT        which panel, from the board file
+//     0x014 R PAL_ENTRIES   256 indexed, 0 direct colour
+//     0x018 R PITCH         bytes a row
+//     0x01c R PIXELS_OFF    where the pixels start in the window
+//     0x020 R PAL_OFF       where the palette starts
+//     0x024 R/W FRAME_SEQ   the guest writes ++seq once a frame
+//     0x028 R FRAME_ACK     the last frame the board latched
+//     0x02c R STATUS        bit0 HOST_PRESENT, bit1 READY, bit2 BUSY
+//     0x030 W CTRL          bit0 COMMIT, bit1 RESET
+//     0x034 R KBD_STATUS    bit0 KEY_PENDING
+//     0x038 R KBD_DATA      the oldest key, and reading it consumes it
+//
+// `HOST_PRESENT` is set because there is a host: the monitor is one, and the
+// guest's driver only waits for `FRAME_ACK` when it is set. `FRAME_ACK` is
+// answered with the sequence the board has actually latched, so that wait is
+// short rather than a twenty millisecond timeout on every frame.
+//
+// ## How each panel stores its pixels
+//
+// Indexed pixels are one list item to the byte because a pixel *is* a byte
+// there -- it is a palette index, not a colour -- and the palette is one item
+// to the entry because the guest reaches it with thirty-two bit stores.
+//
+// Direct colour pixels are one list item to the *32 bit word*, two pixels to
+// an item, little endian: the low half is the even column and the high half
+// the odd one. That is not a detail of the host's arithmetic, it is what keeps
+// the list inside the two hundred thousand items Scratch will grow a list to.
+// 480 by 360 is 172800 pixels and 86400 words, and a byte an item would have
+// been 345600 -- which Scratch refuses, by `add to list` and by `replace item`
+// alike, leaving the framebuffer silently short of its last two thirds.
+//
+// Both are sparse: a byte the guest never wrote is not stored, and Scratch
+// reads a missing item as zero, which is what a fresh framebuffer holds.
+
+use rvboard::decode;
+use rvio::io;
+
+/// What the guest wrote to the indexed panel. Sparse, one item to the palette
+/// index at `PIXELS_OFF + y * PITCH + x`.
+@scratch_global
+pub var efb_pixels: list<num> = [];
+
+/// What the guest wrote to the direct colour panel. Sparse, one item to the
+/// 32 bit word at `PIXELS_OFF + y * PITCH + x * 2`, rounded down.
+@scratch_global
+pub var efb_words: list<num> = [];
+
+/// What the guest wrote, one item to the 32 bit `0x00RRGGBB` entry at
+/// `PAL_OFF + i * 4`. The indexed panel only; a direct colour card has none.
+@scratch_global
+pub var efb_palette: list<num> = [];
+
+/// The scanout of the *indexed* panel: the frame the board latched, which is
+/// what the monitor draws. Separate from the guest's buffer because that is
+/// the point of committing.
+///
+/// The direct colour panel has no separate scanout and no latch: it holds the
+/// colour of every pixel, so there is nothing to copy and nothing to commit --
+/// the monitor reads the memory the guest is writing, which is what a real
+/// card's scanout is. That is why there is one list above and not two.
+@scratch_global
+pub var efb_scan_pixels: list<num> = [];
+@scratch_global
+pub var efb_scan_palette: list<num> = [];
+
+/// The guest's frame counter and the board's acknowledgement of it, which are
+/// also the guest's own handshake: `FRAME_SEQ` moves once a frame and
+/// `FRAME_ACK` answers with what the board has latched, so a driver that waits
+/// for the acknowledgement waits a frame rather than a timeout. The indexed
+/// panel only.
+@scratch_global
+pub var efb_seq: num = 0;
+@scratch_global
+pub var efb_ack: num = 0;
+
+/// Frames latched, for the report: it says whether the card produced a picture.
+@scratch_global
+pub var efb_frames: num = 0;
+
+/// A commit the guest asked for that the board has not acted on yet.
+@scratch_global
+pub var efb_commit: num = 0;
+
+/// Pixel stores the guest has made to the direct colour panel, for the report:
+/// it is what says the guest's framebuffer console wrote its picture into the
+/// card rather than somewhere else.
+@scratch_global
+pub var efb_writes: num = 0;
+
+// ---------------------------------------------------------------------------
+// The window's layout
+// ---------------------------------------------------------------------------
+
+pub const EFB_REG_PIXELS: num = 28;
+pub const EFB_REG_PAL: num = 32;
+pub const EFB_REG_SEQ: num = 36;
+pub const EFB_REG_ACK: num = 40;
+pub const EFB_REG_STATUS: num = 44;
+pub const EFB_REG_CTRL: num = 48;
+pub const EFB_REG_KBD_STATUS: num = 52;
+pub const EFB_REG_KBD_DATA: num = 56;
+pub const EFB_REG_WINDOW: num = 4096;
+
+// ---------------------------------------------------------------------------
+// The latches
+// ---------------------------------------------------------------------------
+
+/// Copy what the guest committed into the scanout, and acknowledge it.
+///
+/// The copy is by index into lists that the first latch grows to size, so it
+/// is a replace per byte rather than a push. A push would be a list that grows
+/// by sixty-four thousand items every frame, which is both slower and a thing
+/// Scratch refuses past two hundred thousand.
+pub proc efb_latch() warp {
+    let i: num = 1;
+    repeat RV_EFB_WIDTH * RV_EFB_HEIGHT {
+        efb_scan_pixels[i] = efb_pixels[i];
+        i += 1;
+    }
+    i = 1;
+    repeat RV_EFB_PAL_ENTRIES {
+        efb_scan_palette[i] = efb_palette[i];
+        i += 1;
+    }
+    efb_ack = efb_seq;
+    efb_frames += 1;
+}
+
+/// The board's side of the contract: watch `FRAME_SEQ` and latch when it
+/// moves. Called by the machine every slice, so a guest that publishes a frame
+/// and never writes `CTRL` is still seen -- which is what "the board polls
+/// FRAME_SEQ" means, and why neither half of the handshake is optional.
+///
+/// The direct colour panel has neither a sequence nor a latch, so this is the
+/// indexed panel's alone.
+pub proc efb_poll() warp {
+    if RV_EFB_INDEXED == 0 { return; }
+    if efb_commit > 0 {
+        efb_commit = 0;
+        efb_latch();
+        return;
+    }
+    if efb_seq != efb_ack { efb_latch(); }
+}
+
+// ---------------------------------------------------------------------------
+// The registers
+// ---------------------------------------------------------------------------
+
+/// A width 1, 2 or 4 read out of a 32 bit register whose low byte is at
+/// `p_off`, which is how a byte access to a word-wide register is answered.
+pub proc efb_lane(p_word: num, p_off: num, p_width: num) -> num warp {
+    if p_width == 4 { return p_word % 4294967296; }
+    if p_width == 2 {
+        if p_off % 4 == 2 { return floor(p_word / 65536) % 65536; }
+        return p_word % 65536;
+    }
+    return floor(p_word / efb_shift[(p_off % 4) + 1]) % 256;
+}
+
+/// The same for a write: replace the bytes `p_width` of the register starting
+/// at `p_off` with `p_value`, and leave the others alone.
+pub proc efb_merge(p_word: num, p_off: num, p_width: num, p_value: num) -> num warp {
+    let shift: num = efb_shift[(p_off % 4) + 1];
+    if p_width == 4 { return p_value % 4294967296; }
+    if p_width == 2 {
+        return p_word - floor(p_word / 65536) % 65536 * 65536 + (p_value % 65536) * 65536;
+    }
+    return p_word - floor(p_word / shift) % 256 * shift + (p_value % 256) * shift;
+}
+
+/// The place value of each byte of a 32 bit word, which is how this file gets
+/// at a byte without an operator Scratch does not have.
+@scratch_global
+pub var efb_shift: list<num> = [1, 256, 65536, 16777216];
+
+pub const EFB_STATUS_HOST_PRESENT: num = 1;
+pub const EFB_STATUS_READY: num = 2;
+pub const EFB_STATUS_BUSY: num = 4;
+
+pub proc efb_register(p_off: num) -> num warp {
+    if p_off == 0 { return RV_EFB_ID; }
+    if p_off == 4 { return RV_EFB_VERSION; }
+    if p_off == 8 { return RV_EFB_WIDTH; }
+    if p_off == 12 { return RV_EFB_HEIGHT; }
+    if p_off == 16 { return RV_EFB_FORMAT; }
+    if p_off == 20 { return RV_EFB_PAL_ENTRIES; }
+    if p_off == 24 { return RV_EFB_PITCH; }
+    if p_off == EFB_REG_PIXELS { return RV_EFB_PIXELS_OFF; }
+    if p_off == EFB_REG_PAL { return RV_EFB_PAL_OFF; }
+    if p_off == EFB_REG_SEQ { return efb_seq; }
+    if p_off == EFB_REG_ACK { return efb_ack; }
+    if p_off == EFB_REG_STATUS {
+        // The host is present and idle, and it is ready for the frame the
+        // guest last published exactly when it has acknowledged it.
+        if efb_ack == efb_seq {
+            return EFB_STATUS_HOST_PRESENT + EFB_STATUS_READY;
+        }
+        return EFB_STATUS_HOST_PRESENT;
+    }
+    if p_off == EFB_REG_KBD_STATUS {
+        if io_has_input() > 0 { return 1; }
+        return 0;
+    }
+    if p_off == EFB_REG_KBD_DATA { return io_take_input(); }
+    return 0;
+}
+
+pub proc efb_register_write(p_off: num, p_value: num) warp {
+    if p_off == EFB_REG_SEQ {
+        // The sequence counter is the guest's own. The board latches on the
+        // move, which is what the reference board does and what makes the
+        // commit bit a hint rather than the only signal.
+        efb_seq = p_value % 4294967296;
+        return;
+    }
+    if p_off != EFB_REG_CTRL { return; }
+    let ctrl: num = p_value % 4;
+    if ctrl % 2 > 0 { efb_commit = 1; }
+    if floor(ctrl / 2) % 2 > 0 { efb_reset(); }
+}
+
+// ---------------------------------------------------------------------------
+// The direct colour panel's memory
+// ---------------------------------------------------------------------------
+//
+// Four procedures and not one, because the width an access asks for is not
+// decoration on this panel: a framebuffer console writes a glyph a word at a
+// time, and taking a 32 bit store apart into four byte writes would be four
+// times the work for the access that is almost all of them.
+
+/// One byte of the framebuffer, by its offset from `PIXELS_OFF`.
+pub proc efb_read_byte(p_at: num) -> num warp {
+    let word: num = efb_words[floor(p_at / 4) + 1];
+    return floor(word / efb_shift[(p_at % 4) + 1]) % 256;
+}
+
+/// Two bytes of the framebuffer that land in one word, which is every even
+/// halfword of a row whose pitch is a multiple of four.
+pub proc efb_write_half(p_at: num, p_value: num) warp {
+    let i: num = floor(p_at / 4) + 1;
+    let word: num = efb_words[i];
+    let half: num = p_value % 65536;
+    if p_at % 4 == 0 {
+        efb_words[i] = word - word % 65536 + half;
+        return;
+    }
+    efb_words[i] = word - floor(word / 65536) % 65536 * 65536 + half * 65536;
+}
+
+/// One byte, read out, changed and written back. Only an unaligned access
+/// needs this, and nothing in a framebuffer console makes one.
+pub proc efb_write_byte(p_at: num, p_value: num) warp {
+    let i: num = floor(p_at / 4) + 1;
+    let shift: num = efb_shift[(p_at % 4) + 1];
+    let word: num = efb_words[i];
+    efb_words[i] = word - floor(word / shift) % 256 * shift + (p_value % 256) * shift;
+}
+
+/// One access to the panel, in the width the instruction asked for. A word
+/// aligned on four bytes is one list replace and nothing else.
+pub proc efb_write_direct(p_at: num, p_width: num, p_value: num) warp {
+    efb_writes += 1;
+    if p_width == 4 && p_at % 4 == 0 {
+        efb_words[floor(p_at / 4) + 1] = p_value % 4294967296;
+        return;
+    }
+    if p_width == 2 && p_at % 2 == 0 {
+        efb_write_half(p_at, p_value);
+        return;
+    }
+    if p_width == 2 {
+        efb_write_byte(p_at, p_value % 256);
+        efb_write_byte(p_at + 1, floor(p_value / 256) % 256);
+        return;
+    }
+    efb_write_byte(p_at, p_value % 256);
+}
+
+// ---------------------------------------------------------------------------
+// The bus face
+// ---------------------------------------------------------------------------
+
+pub proc efb_read(p_off: num, p_width: num) -> num warp {
+    if p_off >= RV_EFB_PIXELS_OFF {
+        if RV_EFB_INDEXED == 1 {
+            return efb_pixels[p_off - RV_EFB_PIXELS_OFF + 1] % 256;
+        }
+        return efb_read_byte(p_off - RV_EFB_PIXELS_OFF);
+    }
+    if RV_EFB_INDEXED == 1 {
+        if p_off >= RV_EFB_PAL_OFF && p_off < RV_EFB_PAL_OFF + 1024 {
+            let slot: num = floor((p_off - RV_EFB_PAL_OFF) / 4);
+            return efb_lane(efb_scan_palette[slot + 1], p_off - RV_EFB_PAL_OFF, p_width);
+        }
+    }
+    return efb_lane(efb_register(floor(p_off / 4) * 4), p_off, p_width);
+}
+
+pub proc efb_write(p_off: num, p_width: num, p_value: num) warp {
+    if p_off >= RV_EFB_PIXELS_OFF {
+        if RV_EFB_INDEXED == 1 {
+            efb_write_indexed(p_off - RV_EFB_PIXELS_OFF + 1, p_width, p_value);
+            return;
+        }
+        efb_write_direct(p_off - RV_EFB_PIXELS_OFF, p_width, p_value);
+        return;
+    }
+    if RV_EFB_INDEXED == 1 {
+        if p_off >= RV_EFB_PAL_OFF && p_off < RV_EFB_PAL_OFF + 1024 {
+            let within: num = p_off - RV_EFB_PAL_OFF;
+            let index: num = floor(within / 4);
+            let word: num = efb_palette[index + 1];
+            // A palette entry is `0x00RRGGBB` and only the low twenty-four bits
+            // mean anything, which is also what a Scratch pen colour is.
+            efb_palette[index + 1] = efb_merge(word, within, p_width, p_value);
+            return;
+        }
+    }
+    efb_register_write(floor(p_off / 4) * 4, efb_merge(efb_register(floor(p_off / 4) * 4), p_off, p_width, p_value));
+}
+
+/// One access to the indexed panel's bytes, in the width the instruction asked
+/// for. `p_slot` is already the list index of its first byte.
+pub proc efb_write_indexed(p_slot: num, p_width: num, p_value: num) warp {
+    if p_width == 4 {
+        efb_pixels[p_slot] = p_value % 256;
+        efb_pixels[p_slot + 1] = floor(p_value / 256) % 256;
+        efb_pixels[p_slot + 2] = floor(p_value / 65536) % 256;
+        efb_pixels[p_slot + 3] = floor(p_value / 16777216) % 256;
+        return;
+    }
+    if p_width == 2 {
+        efb_pixels[p_slot] = p_value % 256;
+        efb_pixels[p_slot + 1] = floor(p_value / 256) % 256;
+        return;
+    }
+    efb_pixels[p_slot] = p_value % 256;
+}
+
+pub proc efb_reset() warp {
+    efb_pixels.clear();
+    efb_words.clear();
+    efb_palette.clear();
+    efb_scan_pixels.clear();
+    efb_scan_palette.clear();
+    efb_seq = 0;
+    efb_ack = 0;
+    efb_frames = 0;
+    efb_commit = 0;
+    efb_writes = 0;
+}

@@ -1,0 +1,98 @@
+// The guest's two byte streams.
+//
+// A serial console is two byte streams and a wire between them, and this
+// module is the wire: the board's 8250 pushes what the guest transmitted and
+// pops what the keyboard typed, and the keyboard sprite fills one end. They
+// are `@scratch_global` rather than plain module globals because a check reads
+// them by name -- a plain `pub var` list is an arena run inside `_heap`, and a
+// check that has to know the compiler's run layout to read the console is a
+// check about the compiler rather than about the machine.
+//
+// There is only one stream now. The guest's *output* used to be drawn on the
+// Stage by a terminal sprite, which drained a window of what the 8250 had
+// transmitted and turned it into glyphs; the Stage is the graphics card's
+// scanout and nothing else, so what is left is the record below. Nothing draws
+// it, and nothing needs to: it is what a serial terminal on the board's
+// connector would have shown, and a check is the reader that wants it.
+
+/// What the keyboard has typed and the guest has not read. One queue, because
+/// a board has one keyboard: the 8250's data register takes the oldest byte off
+/// the front, and so does the graphics card's `KBD_DATA`. The line status
+/// register only says whether there is one, and so does `KBD_STATUS`.
+///
+/// The queue is *bounded* and the keyboard pushes into it through `io_push`,
+/// which refuses when it is full. A guest that never reads its keyboard -- a
+/// Linux with no driver for the card, say -- therefore costs a fixed number of
+/// items rather than a list that grows until Scratch refuses to add to it. It
+/// also back-pressures the card's held keys: see `io_input_free` below.
+@scratch_global
+pub var input_buffer: list<num> = [];
+
+/// How many bytes may wait. It is small because a queue that fills up is a
+/// queue whose bytes are already stale: the guest is not reading as fast as the
+/// keyboard is typing, and dropping the newest report is better than delivering
+/// a key a second after it was released.
+pub const INPUT_LIMIT: num = 32;
+
+/// Everything the guest has ever transmitted, which is what a serial terminal
+/// on the board's connector would have shown from power-on. It is also the
+/// only way a check can read the guest's own output, because the *picture* is
+/// pixels and there is no text in it to grep.
+///
+/// It is bounded because Scratch refuses to `add to list` at or past two
+/// hundred thousand items. A guest that prints more than this is a guest in a
+/// loop, and losing the tail of a runaway log is better than throwing
+/// somewhere the machine cannot catch it. The bound is high rather than low
+/// because a full-screen guest paints its screen with escape sequences: one
+/// 320 by 200 frame is a hundred kilobytes of them, so a console that stopped
+/// recording after the boot log would stop exactly when the picture starts.
+@scratch_global
+pub var console_trace: list<num> = [];
+
+pub const TRACE_LIMIT: num = 190000;
+
+/// One byte out of the guest, into the record and nowhere else.
+pub proc io_emit(p_code: num) warp {
+    if console_trace.len() < TRACE_LIMIT { console_trace.push(p_code % 256); }
+}
+
+/// Whether the keyboard has a byte waiting.
+pub proc io_has_input() -> num warp {
+    if input_buffer.len() > 0 { return 1; }
+    return 0;
+}
+
+/// Whether the guest has read everything the keyboard has typed, which is the
+/// gate a *held* key is reported through. The card's keyboard reports an edge,
+/// not a press and a release -- the guest's driver holds the key down for a few
+/// tics of its own after one report -- so a key held on the Stage has to be
+/// reported again and again for as long as it is held. This is what says when:
+/// not on a timer, but as soon as the guest has taken the last one, so the
+/// guest sees a key that stays down and the queue never holds a backlog of
+/// reports for a key that was released a second ago.
+pub proc io_input_free() -> num warp {
+    if input_buffer.len() > 0 { return 0; }
+    return 1;
+}
+
+/// One byte the keyboard typed, into the queue. Refused when the queue is
+/// full, which is the whole of the bound: the guest is behind, and the newest
+/// report is the one to drop.
+pub proc io_push(p_code: num) warp {
+    if input_buffer.len() >= INPUT_LIMIT { return; }
+    input_buffer.push(p_code % 256);
+}
+
+/// The oldest byte the keyboard typed, and it is consumed. Zero when nothing
+/// waits, which is what the reference answers with.
+pub proc io_take_input() -> num warp {
+    if input_buffer.len() == 0 { return 0; }
+    let byte: num = input_buffer[1];
+    input_buffer.remove(1);
+    return byte;
+}
+
+pub proc io_reset() warp {
+    input_buffer.clear();
+    console_trace.clear();
+}

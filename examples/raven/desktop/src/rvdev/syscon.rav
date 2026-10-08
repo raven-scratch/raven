@@ -1,0 +1,35 @@
+// The system controller: two magic writes and nothing else.
+//
+// It is the smallest device on the board and the only one the guest talks to
+// in order to stop talking: the kernel's `syscon-poweroff` and `syscon-reboot`
+// nodes in the device tree both point at this register, and the machine's
+// frame loop reads the flag below and stops.
+//
+// The values are the guest's, not decoration. `0x5555` is what
+// `syscon-poweroff`'s `value` property says and `0x7777` is what
+// `syscon-reboot`'s says, in the tree `tools/build.mjs` generates from the
+// board file -- so the tree and the register cannot disagree about which
+// number means which, because both come out of `boards/mini-rv32.mjs`.
+
+use rvboard::decode;
+
+/// Zero while the guest is running, one when it asked to power off, two when
+/// it asked to reboot. The frame loop turns either into a stop.
+@scratch_global
+pub var syscon_action: num = 0;
+
+pub proc syscon_write(p_off: num, p_value: num) warp {
+    if p_off != 0 { return; }
+    if p_value % 4294967296 == 21845 { syscon_action = 1; return; }
+    if p_value % 4294967296 == 30583 { syscon_action = 2; return; }
+}
+
+/// The controller is write-only. A read of it answers zero, which is what an
+/// unassigned address answers, and the reference does the same.
+pub proc syscon_read(p_off: num) -> num warp {
+    return 0;
+}
+
+pub proc syscon_reset() warp {
+    syscon_action = 0;
+}

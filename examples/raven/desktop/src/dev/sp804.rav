@@ -1,0 +1,193 @@
+// SP804 dual timer: the board's tick, at `0x101E_2000` and `0x101E_3000`.
+//
+// Two independent down-counters in one block, each with its own load, control,
+// raw and masked interrupt status, and each able to run at the block's clock or
+// at that clock divided by sixteen or by two hundred and fifty-six. The counter
+// is what makes this device worth writing carefully: it *counts down*, the
+// interrupts are latched in `RIS` and cleared by a write to a register that
+// reads back as zero, and a periodic timer reloads from `Load` while a
+// free-running one wraps at the top of its width without ever looking at
+// `Load` again.
+//
+// The kernel uses exactly one of these blocks, and it uses both of its timers
+// for different jobs. Timer one is the *clock event*: periodic, interrupt
+// enabled, wired to the interrupt controller, and it is what makes the
+// scheduler tick. Timer two is the *clock source*: free running, no interrupt
+// at all, read as a pair of samples to measure elapsed time. The first block is
+// the only one the kernel takes -- its own driver gives up on every later one --
+// so the second block sits at its reset value and nothing ever asks it anything.
+//
+// A count is advanced by a number of the timer's own clock cycles and not by
+// the microsecond the host thinks has passed. See `board::bus` for what the
+// machine's clock is and why it is a declared rate.
+
+use board::decode;
+use cpu::alu;
+
+/// Four timers: two in each of the board's two blocks, at index
+/// `p_inst * 2 + p_timer`.
+@scratch_global
+pub var sp804_load: list<num> = [0, 0, 0, 0];
+@scratch_global
+pub var sp804_value: list<num> = [0, 0, 0, 0];
+@scratch_global
+pub var sp804_ctrl: list<num> = [0, 0, 0, 0];
+@scratch_global
+pub var sp804_ris: list<num> = [0, 0, 0, 0];
+@scratch_global
+pub var sp804_bgload: list<num> = [0, 0, 0, 0];
+/// What is left of a cycle that the prescaler has not turned into a count yet.
+@scratch_global
+pub var sp804_frac: list<num> = [0, 0, 0, 0];
+
+// The control register's bits, from `timer-sp.h`.
+pub const SP_CTRL_ONESHOT: num = 1;
+pub const SP_CTRL_32BIT: num = 2;
+pub const SP_CTRL_IE: num = 32;
+pub const SP_CTRL_PERIODIC: num = 64;
+pub const SP_CTRL_ENABLE: num = 128;
+
+// PrimeCell identification. The part number is 0x104 and the designer is ARM;
+// the timer's own driver is matched by its device tree node and never reads
+// these, but the AMBA bus reads them for every `arm,primecell` node before it
+// decides whether there is a device there at all.
+pub const SP_PERIPH0: num = 4;
+pub const SP_PERIPH1: num = 17;
+pub const SP_PERIPH2: num = 4;
+pub const SP_PERIPH3: num = 0;
+pub const SP_CELL0: num = 13;
+pub const SP_CELL1: num = 240;
+pub const SP_CELL2: num = 5;
+pub const SP_CELL3: num = 177;
+
+/// The whole of the timer's width. A 16-bit timer wraps here rather than at
+/// two to the thirty-second.
+pub proc sp804_period(p_ctrl: num, p_load: num) -> num warp {
+    if floor(p_ctrl / 64) % 2 == 0 {
+        // Free running: the counter walks the whole width, and Load is only
+        // where the counter is read from at reset.
+        if floor(p_ctrl / 2) % 2 > 0 { return 4294967296; }
+        return 65536;
+    }
+    if p_load == 0 { return 4294967296; }
+    return p_load;
+}
+
+pub proc sp804_reset() warp {
+    let i: num = 0;
+    repeat_until i >= 4 {
+        sp804_load[i + 1] = 0;
+        sp804_value[i + 1] = 0;
+        sp804_ctrl[i + 1] = 0;
+        sp804_ris[i + 1] = 0;
+        sp804_bgload[i + 1] = 0;
+        sp804_frac[i + 1] = 0;
+        i += 1;
+    }
+}
+
+/// The masked interrupt status of one timer: `RIS` and the interrupt enable.
+pub proc sp804_mis(p_index: num) -> num warp {
+    if sp804_ris[p_index + 1] == 0 { return 0; }
+    if floor(sp804_ctrl[p_index + 1] / 32) % 2 > 0 { return 1; }
+    return 0;
+}
+
+/// The line the block drives: either of its two timers asking.
+pub proc sp804_irq(p_inst: num) -> num warp {
+    if sp804_mis(p_inst * 2) > 0 { return 1; }
+    if sp804_mis(p_inst * 2 + 1) > 0 { return 1; }
+    return 0;
+}
+
+/// Advance one timer by a number of its own clock cycles.
+pub proc sp804_advance(p_index: num, p_cycles: num) warp {
+    let ctrl: num = sp804_ctrl[p_index + 1];
+    if floor(ctrl / 128) % 2 == 0 { return; }
+    let prescale: num = 1;
+    let select: num = floor(ctrl / 4) % 4;
+    if select == 1 { prescale = 16; }
+    if select == 2 { prescale = 256; }
+    let total: num = sp804_frac[p_index + 1] + p_cycles;
+    let ticks: num = floor(total / prescale);
+    sp804_frac[p_index + 1] = total % prescale;
+    if ticks == 0 { return; }
+    let period: num = sp804_period(ctrl, sp804_load[p_index + 1]);
+    let next: num = sp804_value[p_index + 1] - ticks;
+    if next < 0 {
+        // It reached zero, which is the one thing a timer is for. The interrupt
+        // is latched whether or not it is enabled -- `RIS` is raw -- and the
+        // mask is applied when the line is read.
+        sp804_ris[p_index + 1] = 1;
+        next = next % period;
+        if floor(ctrl / 1) % 2 > 0 {
+            // One shot: it stops where it reached zero and waits to be loaded.
+            next = 0;
+            sp804_ctrl[p_index + 1] = ctrl - 128;
+        }
+    }
+    sp804_value[p_index + 1] = next;
+}
+
+pub proc sp804_tick(p_inst: num, p_cycles: num) warp {
+    sp804_advance(p_inst * 2, p_cycles);
+    sp804_advance(p_inst * 2 + 1, p_cycles);
+}
+
+pub proc sp804_read(p_inst: num, p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word >= 1016 && word <= 1023 { return sp804_id_register(word); }
+    let timer: num = 0;
+    let reg: num = word;
+    if word >= 8 { timer = 1; reg = word - 8; }
+    let index: num = p_inst * 2 + timer;
+    if reg == 0 { return sp804_load[index + 1]; }
+    if reg == 1 { return sp804_value[index + 1]; }
+    if reg == 2 { return sp804_ctrl[index + 1]; }
+    // The clear register is write-only and reads as zero.
+    if reg == 3 { return 0; }
+    if reg == 4 { return sp804_ris[index + 1]; }
+    if reg == 5 { return sp804_mis(index); }
+    if reg == 6 { return sp804_bgload[index + 1]; }
+    return 0;
+}
+
+pub proc sp804_write(p_inst: num, p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    if word >= 1016 && word <= 1023 { return; }
+    let timer: num = 0;
+    let reg: num = word;
+    if word >= 8 { timer = 1; reg = word - 8; }
+    let index: num = p_inst * 2 + timer;
+    let value: num = p_value % 4294967296;
+    if reg == 0 {
+        // Writing the load register loads the counter with it, which is how a
+        // timer is armed: the kernel writes the period and then starts it.
+        sp804_load[index + 1] = value;
+        sp804_value[index + 1] = value;
+        return;
+    }
+    if reg == 2 {
+        let was: num = sp804_ctrl[index + 1];
+        sp804_ctrl[index + 1] = value;
+        if floor(value / 128) % 2 > 0 && floor(was / 128) % 2 == 0 {
+            sp804_value[index + 1] = sp804_load[index + 1];
+        }
+        if floor(value / 128) % 2 == 0 { sp804_ctrl[index + 1] = value; }
+        return;
+    }
+    if reg == 3 { sp804_ris[index + 1] = 0; return; }
+    if reg == 6 { sp804_bgload[index + 1] = value; return; }
+}
+
+pub proc sp804_id_register(p_word: num) -> num warp {
+    if p_word == 1016 { return SP_PERIPH0; }
+    if p_word == 1017 { return SP_PERIPH1; }
+    if p_word == 1018 { return SP_PERIPH2; }
+    if p_word == 1019 { return SP_PERIPH3; }
+    if p_word == 1020 { return SP_CELL0; }
+    if p_word == 1021 { return SP_CELL1; }
+    if p_word == 1022 { return SP_CELL2; }
+    if p_word == 1023 { return SP_CELL3; }
+    return 0;
+}

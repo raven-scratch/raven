@@ -1,0 +1,354 @@
+// PL110 LCD controller: the display, at `0x1012_0000`.
+//
+// This is the device the whole project exists to put on the Stage. It is not a
+// text output and it is not a framebuffer we read and interpret: it is a
+// controller that owns a region of SDRAM, walks it a scanline at a time at a
+// programmed resolution and refresh, and emits a stream of pixels. What the
+// monitor draws is what this device scanned out. A console that appears on the
+// Stage is the kernel's framebuffer console writing glyph pixels into memory
+// that this device is reading, and nothing in between knows what a character
+// is.
+//
+// The registers are the kernel's own, from `include/linux/amba/clcd-regs.h` and
+// the control bits from `pl111_drm.h`. One of them is worth calling out because
+// it is the opposite of what the part's name suggests: the Versatile's PL110
+// has the control register at `0x18` and the interrupt enable at `0x1C`, which
+// is the *PL111* layout. `pl111_versatile_init` says so in as many words --
+// "a variant halfway between PL110 and PL111 where these two registers have
+// already been swapped" -- and a machine that used the PL110 layout would have
+// Linux writing its control word into a register nothing reads.
+//
+// The pixel clock is not modelled as a clock. The controller has one because it
+// has to decide when a frame has gone by, and the frame's length is the one
+// thing a driver waits for: `drm_crtc_wait_one_vblank`. So the scan position is
+// advanced by every cycle the controller is given and the next-base-update
+// interrupt is raised once a frame, which is what a real one does and what
+// keeps a driver that waits for a frame from waiting its timeout out.
+
+use board::decode;
+use mem::ram;
+use dev::versatile_sys;
+
+/// The controller's registers, at the byte offsets the kernel uses.
+@scratch_global
+pub var clcd_tim0: num = 0;
+@scratch_global
+pub var clcd_tim1: num = 0;
+@scratch_global
+pub var clcd_tim2: num = 0;
+@scratch_global
+pub var clcd_tim3: num = 0;
+@scratch_global
+pub var clcd_ubas: num = 0;
+@scratch_global
+pub var clcd_lbas: num = 0;
+@scratch_global
+pub var clcd_cntl: num = 0;
+@scratch_global
+pub var clcd_ienb: num = 0;
+@scratch_global
+pub var clcd_ris: num = 0;
+/// The palette, one word per entry, `0x00RRGGBB`. It is what a pixel means
+/// below sixteen bits per pixel, and it is why a four-bit display can be any
+/// sixteen colours rather than sixteen fixed ones.
+@scratch_global
+pub var clcd_palette: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+
+/// How much of a frame has been scanned, in cycles. A frame is one whole
+/// period of the timings, and the controller raises its vertical-compare
+/// interrupt when the count wraps it.
+@scratch_global
+pub var clcd_scan: num = 0;
+
+// The control register's bits, from `pl111_drm.h`.
+pub const CLCD_LCDEN: num = 1;
+pub const CLCD_LCDTFT: num = 32;
+pub const CLCD_LCDBW: num = 16;
+pub const CLCD_LCDMONO8: num = 64;
+pub const CLCD_BGR: num = 256;
+pub const CLCD_LCDPWR: num = 2048;
+
+/// The one interrupt this controller raises: the base address has moved to the
+/// start of the next frame. Linux's PL111 driver names it
+/// `CLCD_IRQ_NEXTBASE_UPDATE` and reads it out of the masked status register,
+/// and it is bit 2 -- not bit 0, which is the bus error, and not bit 1, which
+/// is the vertical compare the driver never asks for. `pl111_display_enable_vblank`
+/// writes exactly this bit into the interrupt enable register, so a controller
+/// that raises a different one raises nothing the driver is waiting for:
+/// `drm_atomic_helper_wait_for_vblanks` never sees the count move and every
+/// commit that waits for a frame waits out its whole timeout instead.
+pub const CLCD_INT_NEXTBASE: num = 4;
+
+// PrimeCell identification: `0x00041110`, which is what `pl111_id_table`
+// matches with a mask that ignores the revision. A machine whose identification
+// registers read back as something else has no display at all, because the AMBA
+// bus does not create a device it cannot identify.
+pub const CLCD_PERIPH0: num = 16;
+pub const CLCD_PERIPH1: num = 17;
+pub const CLCD_PERIPH2: num = 4;
+pub const CLCD_PERIPH3: num = 0;
+pub const CLCD_CELL0: num = 13;
+pub const CLCD_CELL1: num = 240;
+pub const CLCD_CELL2: num = 5;
+pub const CLCD_CELL3: num = 177;
+
+pub proc clcd_reset() warp {
+    clcd_tim0 = 0;
+    clcd_tim1 = 0;
+    clcd_tim2 = 0;
+    clcd_tim3 = 0;
+    clcd_ubas = 0;
+    clcd_lbas = 0;
+    clcd_cntl = 0;
+    clcd_ienb = 0;
+    clcd_ris = 0;
+    clcd_scan = 0;
+    let i: num = 0;
+    repeat_until i >= 256 {
+        clcd_palette[i + 1] = 0;
+        i += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the controller is scanning
+// ---------------------------------------------------------------------------
+
+/// Whether the controller is on. Both the enable and the power bit have to be
+/// set: a controller that is enabled but not powered is driving nothing, which
+/// is what a driver does between a mode set and the first frame.
+pub proc clcd_on() -> num warp {
+    if floor(clcd_cntl / 1) % 2 == 0 { return 0; }
+    if floor(clcd_cntl / 2048) % 2 == 0 { return 0; }
+    return 1;
+}
+
+/// The width in pixels, from `LCDTiming0`. The field is pixels per line divided
+/// by sixteen less one, which is why a mode whose width is not a multiple of
+/// sixteen cannot be expressed and every panel on this board is a multiple of
+/// sixteen.
+pub proc clcd_width() -> num warp {
+    return (floor(clcd_tim0 / 4) % 64 + 1) * 16;
+}
+
+/// The height in lines, from `LCDTiming1`. This one is a plain count less one.
+pub proc clcd_height() -> num warp {
+    return clcd_tim1 % 1024 + 1;
+}
+
+/// Bits per pixel, from the three-bit field in the control register. The four
+/// values above eight are all sixteen-bit ones with different channel
+/// arrangements, and one of them is a twenty-four bit mode the Versatile's
+/// panel never asks for.
+pub proc clcd_bits() -> num warp {
+    let bpp: num = floor(clcd_cntl / 2) % 8;
+    if bpp == 0 { return 1; }
+    if bpp == 1 { return 2; }
+    if bpp == 2 { return 4; }
+    if bpp == 3 { return 8; }
+    if bpp == 5 { return 24; }
+    return 16;
+}
+
+/// The number of bytes a scanline occupies, which is what turns a framebuffer
+/// address into a line number and what the controller walks by.
+pub proc clcd_stride() -> num warp {
+    return clcd_width() * clcd_bits() / 8;
+}
+
+pub proc clcd_colour(p_index: num) -> num warp {
+    return clcd_palette[(p_index % 256) + 1] % 16777216;
+}
+
+// ---------------------------------------------------------------------------
+// Scanout
+// ---------------------------------------------------------------------------
+
+/// One pixel, as `0xRRGGBB`. This is the controller reading its own
+/// framebuffer, which is what an LCD controller is: a bus master that walks a
+/// region of memory and turns it into a signal.
+pub proc clcd_pixel(p_x: num, p_y: num) -> num warp {
+    let bits: num = clcd_bits();
+    let address: num = clcd_ubas + p_y * clcd_stride() + floor(p_x * bits / 8);
+    if bits == 16 { return clcd_rgb565(ram_read16(address)); }
+    if bits == 24 { return clcd_rgb888(address); }
+    if bits == 8 { return clcd_colour(ram_read8(address)); }
+    if bits == 4 {
+        let byte: num = ram_read8(address - address % 2);
+        if address % 2 == 0 { return clcd_colour(floor(byte / 16)); }
+        return clcd_colour(byte % 16);
+    }
+    if bits == 2 {
+        let byte: num = ram_read8(address - address % 4);
+        return clcd_colour(floor(byte / cpu_pow2[(address % 4) * 2 + 1]) % 4);
+    }
+    let byte: num = ram_read8(address - address % 8);
+    return clcd_colour(floor(byte / cpu_pow2[address % 8 + 1]) % 2);
+}
+
+/// A sixteen-bit pixel. Which channel is where is decided by the *PLD* the
+/// board routes the controller's output through, and the PLD is programmed by
+/// the two mode bits of `SYS_CLCD` -- which is why this device has to ask the
+/// board's own registers what the board is doing with its pins. That is a
+/// property of this board and not of the controller: a board without the PLD
+/// would put the two arrangements in the control register instead.
+///
+/// The two modes are the kernel's and not this file's. `pl111_versatile.c`
+/// names them `SYS_CLCD_MODE_565_R_LSB` (bit 1, value two) and
+/// `SYS_CLCD_MODE_565_B_LSB` (bits 1:0, value three), and
+/// `pl111_versatile_enable` chooses between them by the *framebuffer's* format:
+/// `DRM_FORMAT_RGB565` gets `B_LSB` -- blue in the low five bits, which is the
+/// ordinary arrangement and the one the default path below already produces --
+/// and `DRM_FORMAT_BGR565` gets `R_LSB`, the one that is turned over. The
+/// kernel clears `CNTL_BGR` on this board and leaves the routing here instead.
+pub proc clcd_rgb565(p_word: num) -> num warp {
+    let mode: num = sys_clcd_mode();
+    let red: num = floor(p_word / 2048) % 32;
+    let green: num = floor(p_word / 32) % 64;
+    let blue: num = p_word % 32;
+    if mode == 2 {
+        // Red in the low bits: the framebuffer's own arrangement is the other
+        // way round and the PLD turns the word over before the panel sees it.
+        red = p_word % 32;
+        blue = floor(p_word / 2048) % 32;
+    }
+    if mode == 1 {
+        // Five bits of each primary with the top bit spare, so the green is
+        // five bits too and everything shifts down by one.
+        red = floor(p_word / 1024) % 32;
+        green = floor(p_word / 32) % 32;
+        blue = p_word % 32;
+    }
+    if floor(clcd_cntl / 256) % 2 > 0 {
+        let swap: num = red;
+        red = blue;
+        blue = swap;
+    }
+    return red * 8 * 65536 + green * 4 * 256 + blue * 8;
+}
+
+pub proc clcd_rgb888(p_address: num) -> num warp {
+    let b: num = ram_read8(p_address);
+    let g: num = ram_read8(p_address + 1);
+    let r: num = ram_read8(p_address + 2);
+    if floor(clcd_cntl / 256) % 2 > 0 { return b * 65536 + g * 256 + r; }
+    return r * 65536 + g * 256 + b;
+}
+
+// ---------------------------------------------------------------------------
+// Register access
+// ---------------------------------------------------------------------------
+
+pub proc clcd_read(p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word == 0 { return clcd_tim0; }
+    if word == 1 { return clcd_tim1; }
+    if word == 2 { return clcd_tim2; }
+    if word == 3 { return clcd_tim3; }
+    if word == 4 { return clcd_ubas; }
+    if word == 5 { return clcd_lbas; }
+    // The control register is at 0x18 and the interrupt enable at 0x1C, which
+    // is the PL111's arrangement. See the note at the top.
+    if word == 6 { return clcd_cntl; }
+    if word == 7 { return clcd_ienb; }
+    if word == 8 { return clcd_ris; }
+    if word == 9 { return clcd_ienb * 0 + clcd_masked(); }
+    if word == 10 { return 0; }
+    if word == 11 { return clcd_ubas; }
+    if word == 12 { return clcd_lbas; }
+    if p_off >= 512 && p_off < 1536 {
+        return clcd_palette[(floor(p_off / 4) - 128) % 256 + 1];
+    }
+    if word >= 1016 && word <= 1023 { return clcd_id_register(word); }
+    return 0;
+}
+
+/// The masked status the driver reads: the raw status bit above, and only when
+/// the matching enable bit is set. Zero is what the interrupt handler returns
+/// `IRQ_NONE` for, so a mask applied to the wrong bit is an interrupt that never
+/// arrives.
+pub proc clcd_masked() -> num warp {
+    if floor(clcd_ris / CLCD_INT_NEXTBASE) % 2 == 0 { return 0; }
+    if floor(clcd_ienb / CLCD_INT_NEXTBASE) % 2 == 0 { return 0; }
+    return CLCD_INT_NEXTBASE;
+}
+
+pub proc clcd_write(p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    let value: num = p_value % 4294967296;
+    if word == 0 { clcd_tim0 = value; return; }
+    if word == 1 { clcd_tim1 = value; return; }
+    if word == 2 { clcd_tim2 = value; return; }
+    if word == 3 { clcd_tim3 = value; return; }
+    if word == 4 { clcd_ubas = value - value % 8; return; }
+    if word == 5 { clcd_lbas = value - value % 8; return; }
+    if word == 6 { clcd_cntl = value; return; }
+    if word == 7 { clcd_ienb = value; return; }
+    if word == 10 { clcd_ris = 0; return; }
+    if p_off >= 512 && p_off < 1536 {
+        clcd_palette[(floor(p_off / 4) - 128) % 256 + 1] = value % 16777216;
+        return;
+    }
+}
+
+pub proc clcd_id_register(p_word: num) -> num warp {
+    if p_word == 1016 { return CLCD_PERIPH0; }
+    if p_word == 1017 { return CLCD_PERIPH1; }
+    if p_word == 1018 { return CLCD_PERIPH2; }
+    if p_word == 1019 { return CLCD_PERIPH3; }
+    if p_word == 1020 { return CLCD_CELL0; }
+    if p_word == 1021 { return CLCD_CELL1; }
+    if p_word == 1022 { return CLCD_CELL2; }
+    if p_word == 1023 { return CLCD_CELL3; }
+    return 0;
+}
+
+/// The line the controller drives. The kernel waits for a frame boundary with
+/// this, so a controller that never raises it is a kernel whose every commit
+/// waits out its timeout instead of returning.
+pub proc clcd_irq() -> num warp {
+    if clcd_masked() > 0 { return 1; }
+    return 0;
+}
+
+pub proc clcd_tick(p_cycles: num) warp {
+    if clcd_on() == 0 { return; }
+    clcd_scan += p_cycles;
+    if clcd_scan >= clcd_frame_cycles() {
+        clcd_scan = clcd_scan % clcd_frame_cycles();
+        // One frame has gone by and the controller has moved on to the next
+        // one, which is the interrupt a driver that waits for a frame is
+        // watching for.
+        clcd_ris = clcd_ris - clcd_ris % 8 + CLCD_INT_NEXTBASE;
+    }
+}
+
+/// How many cycles one whole frame takes: the total of the horizontal and
+/// vertical timings, multiplied out. A frame is what a driver waits for, so
+/// this is the number that decides whether a modeset completes.
+pub proc clcd_frame_cycles() -> num warp {
+    let htotal: num = (floor(clcd_tim0 / 4) % 64 + 1) * 16 +
+        floor(clcd_tim0 / 256) % 64 + 1 + floor(clcd_tim0 / 65536) % 64 + 1 +
+        floor(clcd_tim0 / 16777216) % 64 + 1;
+    let vtotal: num = clcd_tim1 % 1024 + 1 + floor(clcd_tim1 / 1024) % 64 + 1 +
+        floor(clcd_tim1 / 65536) % 64 + floor(clcd_tim1 / 16777216) % 64;
+    if htotal * vtotal < 1 { return 1; }
+    return htotal * vtotal;
+}

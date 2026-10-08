@@ -1,0 +1,93 @@
+// The secondary interrupt controller: the board's FPGA, at `0x1000_3000`.
+//
+// It is not a PrimeCell and it is not a VIC. It has one status register, one
+// mask, and no priority at all: the kernel reads the status word and takes the
+// set bits from the bottom up, which is why nothing here has vector registers.
+//
+// It is a *separate* controller rather than more lines on the VIC because the
+// board has more interrupt sources than the VIC has lines. Its own output goes
+// to VIC line 31, so an interrupt from anything wired here arrives at the
+// processor through two controllers, and the kernel's handler for line 31 is
+// what reads this status register and dispatches again.
+//
+// Two of its registers are read and write at the same offset. `0x20` reads as
+// the FIQ status and is *written* with the pass-through enables -- the bits that
+// make certain lines reach the primary controller directly rather than through
+// this one. The board file's `valid-mask` is what the kernel programs it with.
+
+use board::decode;
+use cpu::alu;
+
+/// The device lines, as the board last saw them.
+@scratch_global
+pub var sic_raw: num = 0;
+@scratch_global
+pub var sic_enable: num = 0;
+@scratch_global
+pub var sic_fiq_enable: num = 0;
+@scratch_global
+pub var sic_soft: num = 0;
+/// The write-only pass-through enables at offset `0x20`, kept so that a read
+/// after a write is not a lie. Nothing on this machine acts on them: the lines
+/// they forward are forwarded by the board's own wiring, which is what the
+/// board file says.
+@scratch_global
+pub var sic_passthrough: num = 0;
+
+pub proc sic_reset() warp {
+    sic_raw = 0;
+    sic_enable = 0;
+    sic_fiq_enable = 0;
+    sic_soft = 0;
+    sic_passthrough = 0;
+}
+
+/// The board hands the controller the device lines it last saw. This is the
+/// only thing that writes sic_raw, and it is what makes the line a level.
+pub proc sic_set_raw(p_mask: num) warp {
+    sic_raw = p_mask % 4294967296;
+}
+
+pub proc sic_pending() -> num warp {
+    return alu_or(sic_raw, sic_soft);
+}
+
+pub proc sic_irq_status() -> num warp {
+    return alu_and(sic_pending(), sic_enable);
+}
+
+/// The line that goes to VIC 31.
+pub proc sic_irq() -> num warp {
+    if sic_irq_status() > 0 { return 1; }
+    return 0;
+}
+
+pub proc sic_read(p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word == 0 { return sic_irq_status(); }
+    if word == 1 { return sic_pending(); }
+    if word == 2 { return sic_enable; }
+    if word == 3 { return sic_enable; }
+    if word == 4 { return sic_soft; }
+    if word == 5 { return sic_soft; }
+    if word == 8 { return alu_and(sic_pending(), sic_fiq_enable); }
+    if word == 9 { return sic_pending(); }
+    if word == 10 { return sic_fiq_enable; }
+    if word == 11 { return sic_fiq_enable; }
+    return 0;
+}
+
+pub proc sic_write(p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    let value: num = p_value % 4294967296;
+    if word == 2 { sic_enable = alu_or(sic_enable, value); return; }
+    if word == 3 { sic_enable = alu_and(sic_enable, alu_not(value)); return; }
+    if word == 4 { sic_soft = alu_or(sic_soft, value); return; }
+    if word == 5 { sic_soft = alu_and(sic_soft, alu_not(value)); return; }
+    if word == 8 { sic_passthrough = value; return; }
+    if word == 10 { sic_fiq_enable = alu_or(sic_fiq_enable, value); return; }
+    if word == 11 { sic_fiq_enable = alu_and(sic_fiq_enable, alu_not(value)); return; }
+}
+
+pub proc sic_tick(p_cycles: num) warp {
+}

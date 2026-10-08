@@ -1,0 +1,27 @@
+#!/bin/sh
+# The guest's shell, with its output on the graphics card.
+#
+# The board has one terminal the reader types at and one the reader looks at.
+# `/dev/ttyS0` is the 8250 -- the port the machine has always had, the one the
+# check types into, and the one whose bytes are recorded -- and `/dev/tty0` is
+# the framebuffer console `simplefb` puts on the graphics card, which is what
+# the monitor scans out onto the Stage.
+#
+# A process has one standard output, so the shell is given the card and the
+# serial port is given the keyboard: stdin stays `/dev/ttyS0`, which is the tty
+# the line discipline echoes what is typed back to, and stdout and stderr go to
+# `/dev/tty0`, which is a tty, so the shell is interactive and prints a prompt.
+#
+# The two obvious alternatives do not work, and they were tried:
+#
+#   * `sh -l >/dev/ttyS0 2>&1` puts the console back on the serial port and
+#     the card shows nothing but the kernel's own boot log.
+#   * `sh -l 2>&1 | tee /dev/ttyS0 /dev/tty0` gives the shell a *pipe* rather
+#     than a tty, and busybox's ash stops being interactive: it prints no
+#     prompt at all and the card stays blank. `tee` is also line buffered, so
+#     a prompt with no newline in it would sit in the buffer regardless.
+#
+# So the output is the card's and the input is the serial port's, and what the
+# check reads back is the card: the kernel's own font, matched against the
+# pixels the monitor scanned out.
+exec /bin/sh -l </dev/ttyS0 >/dev/tty0 2>&1

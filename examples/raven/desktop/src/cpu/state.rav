@@ -1,0 +1,224 @@
+// The CPU's registers, and the banked ones.
+//
+// An ARM926 has sixteen registers and thirty-one that are not in the program's
+// view: every exception mode has its own `r13` and `r14`, FIQ has its own
+// `r8` to `r12` as well, and each mode has a saved program status register.
+// Those are not copies. A mode switch does not save and restore anything --
+// the register *is* a different cell while the mode is different -- which is
+// why the bank is a table indexed by mode and not a save/restore pair.
+//
+// The sixteen are a Scratch list because most instructions name their operands
+// by a field of the instruction word, and a computed index is what a list is
+// for. The bank is a list too, laid out as three cells per bank -- `r13`,
+// `r14`, `spsr` -- with FIQ's `r8` to `r12` after them.
+//
+// `cpu_pc` always holds the address of the instruction being executed, not the
+// address of the next one. Reading `r15` adds eight, which is the ARM pipeline
+// offset and the reason `add r0, pc, #4` is not `add r0, pc, #0`; writing
+// `r15` sets this cell and marks that the instruction was a branch, so the
+// step does not then add four to it.
+
+use board::decode;
+
+// ---------------------------------------------------------------------------
+// The program status register
+// ---------------------------------------------------------------------------
+
+pub const CPSR_N: num = 2147483648;
+pub const CPSR_Z: num = 1073741824;
+pub const CPSR_C: num = 536870912;
+pub const CPSR_V: num = 268435456;
+pub const CPSR_Q: num = 134217728;
+pub const CPSR_I: num = 128;
+pub const CPSR_F: num = 64;
+pub const CPSR_T: num = 32;
+
+/// The mode field, five bits. The eight modes are not consecutive numbers --
+/// `0x10` user, `0x11` FIQ, `0x12` IRQ, `0x13` supervisor, `0x17` abort,
+/// `0x1B` undefined, `0x1F` system -- which is why the bank index is a table
+/// and not arithmetic.
+pub const MODE_USER: num = 16;
+pub const MODE_FIQ: num = 17;
+pub const MODE_IRQ: num = 18;
+pub const MODE_SVC: num = 19;
+pub const MODE_ABORT: num = 23;
+pub const MODE_UNDEF: num = 27;
+pub const MODE_SYSTEM: num = 31;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+/// `r0` to `r15`, one cell each at index `n + 1`. `r15` is a slot like any
+/// other and is not the program counter: the counter is `cpu_pc`, and the two
+/// are reconciled by `cpu_get_reg` and `cpu_set_reg`.
+@scratch_global
+pub var cpu_regs: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+
+/// Six banks of `r13`, `r14`, `spsr` -- user and system share one, and each
+/// other mode has its own -- followed by FIQ's `r8` to `r12`. The
+/// arrangement is `mode_bank`'s, below.
+@scratch_global
+pub var cpu_bank: list<num> = [
+    0, 0, 0,   0, 0, 0,   0, 0, 0,   0, 0, 0,   0, 0, 0,   0, 0, 0,
+    0, 0, 0, 0, 0
+];
+
+/// Which bank a mode uses. Sixteen zeroes pad it to the mode field's own
+/// numbering, so a mode number is the index and no arithmetic is needed.
+@scratch_global
+pub var cpu_mode_bank: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 2, 3, 0, 0, 0, 4,
+    0, 0, 0, 5, 0, 0, 0, 0
+];
+
+/// 2^n, so that a shift is a lookup rather than a loop. Sixty-five of them:
+/// a shift amount is a byte and `32 - n` has to be in range too.
+@scratch_global
+pub var cpu_pow2: list<num> = [
+    1, 2, 4, 8, 16, 32, 64, 128,
+    256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+    65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608,
+    16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824,
+    2147483648, 4294967296, 8589934592, 17179869184, 34359738368, 68719476736,
+    137438953472, 274877906944, 549755813888, 1099511627776, 2199023255552,
+    4398046511104, 8796093022208, 17592186044416, 35184372088832,
+    70368744177664, 140737488355328, 281474976710656, 562949953421312,
+    1125899906842624, 2251799813685248, 4503599627370496, 9007199254740992,
+    18014398509481984, 36028797018963968, 72057594037927936,
+    144115188075855872, 288230376151711744, 576460752303423488,
+    1152921504606846976, 2305843009213693952, 4611686018427387904,
+    9223372036854775808, 18446744073709551616
+];
+
+@scratch_global
+pub var cpu_pc: num = 0;
+
+/// Set by any instruction that writes `r15` other than the step's own advance.
+@scratch_global
+pub var cpu_branched: num = 0;
+
+@scratch_global
+pub var cpu_cpsr: num = 211;
+
+/// Zero while the machine runs; 1 when the guest has halted, which on this
+/// machine is a write to the board's own reset register.
+@scratch_global
+pub var cpu_halted: num = 0;
+
+/// Instructions retired, counted for the report and for nothing else.
+@scratch_global
+pub var cpu_instructions: num = 0;
+
+/// Set while the processor is in FIQ mode, because `r8` to `r12` are banked
+/// only there and every access to them has to ask. Kept as its own cell rather
+/// than a test of the mode field because it is read several times per
+/// instruction and the mode field is not.
+@scratch_global
+pub var cpu_is_fiq: num = 0;
+
+/// The current mode's bank offset, kept in a cell rather than computed.
+/// `cpu_get_reg` and `cpu_set_reg` ask for it once for every register an
+/// instruction names, and a procedure call plus two list reads per operand is a
+/// large fraction of what an instruction costs. It moves in exactly one place,
+/// `cpu_set_mode`, which every path that changes the mode goes through, so
+/// it cannot drift from the mode field it is derived from.
+@scratch_global
+pub var cpu_bank_off: num = 0;
+
+// ---------------------------------------------------------------------------
+// Modes and banks
+// ---------------------------------------------------------------------------
+
+pub fn cpu_mode() -> num {
+    cpu_cpsr % 32
+}
+
+/// Switch mode. Nothing is copied: the banked registers are the bank's, and
+/// the mode field is what selects which bank is being looked at. Everything
+/// derived from the mode is recomputed here and nowhere else.
+pub proc cpu_set_mode(p_mode: num) warp {
+    cpu_cpsr = cpu_cpsr - cpu_cpsr % 32 + p_mode;
+    cpu_bank_off = cpu_mode_bank[p_mode + 1] * 3;
+    if p_mode == MODE_FIQ { cpu_is_fiq = 1; } else { cpu_is_fiq = 0; }
+}
+
+pub proc cpu_spsr() -> num warp {
+    return cpu_bank[cpu_bank_off + 3];
+}
+
+pub proc cpu_set_spsr(p_value: num) warp {
+    cpu_bank[cpu_bank_off + 3] = p_value % 4294967296;
+}
+
+// ---------------------------------------------------------------------------
+// The register file, as the program sees it
+// ---------------------------------------------------------------------------
+
+/// Read a register by number. `r15` is the pipeline: the address of the
+/// instruction being executed plus eight.
+pub proc cpu_get_reg(p_reg: num) -> num warp {
+    if p_reg == 15 { return cpu_pc + 8; }
+    if p_reg < 8 { return cpu_regs[p_reg + 1]; }
+    if p_reg < 13 {
+        if cpu_is_fiq > 0 { return cpu_bank[p_reg + 11]; }
+        return cpu_regs[p_reg + 1];
+    }
+    return cpu_bank[cpu_bank_off + p_reg - 12];
+}
+
+/// Write a register by number. A write to `r15` is a branch: it moves the
+/// program counter and says so, and the caller must not also advance it.
+///
+/// A write that lands on the same value as before is still a branch -- ARM has
+/// no notion of "the same value" for a register write, and `mov pc, lr` back
+/// to the following instruction is a different thing from falling through.
+pub proc cpu_set_reg(p_reg: num, p_value: num) warp {
+    if p_reg == 15 {
+        cpu_pc = p_value % 4294967296;
+        cpu_branched = 1;
+        return;
+    }
+    let value: num = p_value % 4294967296;
+    if p_reg < 8 { cpu_regs[p_reg + 1] = value; return; }
+    if p_reg < 13 {
+        if cpu_is_fiq > 0 { cpu_bank[p_reg + 11] = value; return; }
+        cpu_regs[p_reg + 1] = value;
+        return;
+    }
+    cpu_bank[cpu_bank_off + p_reg - 12] = value;
+}
+
+pub proc cpu_clear_branch() warp {
+    cpu_branched = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Reset
+// ---------------------------------------------------------------------------
+
+/// Power-on. An ARM926 comes out of reset in supervisor mode at address zero
+/// with both interrupts masked, which is where the board's boot ROM is aliased.
+pub proc cpu_reset() warp {
+    let i: num = 0;
+    repeat_until i >= 16 {
+        cpu_regs[i + 1] = 0;
+        i += 1;
+    }
+    i = 0;
+    repeat_until i >= 23 {
+        cpu_bank[i + 1] = 0;
+        i += 1;
+    }
+    cpu_is_fiq = 0;
+    cpu_cpsr = MODE_SVC + CPSR_I + CPSR_F;
+    cpu_bank_off = cpu_mode_bank[MODE_SVC + 1] * 3;
+    cpu_pc = 0;
+    cpu_branched = 0;
+    cpu_halted = 0;
+    cpu_instructions = 0;
+}

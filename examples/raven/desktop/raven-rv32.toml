@@ -1,0 +1,20 @@
+# The RISC-V board. The ARM machine is `raven.toml`; this is the same project
+# directory built with a different board.
+#
+#     node tools/build.mjs --board boards/mini-rv32.mjs
+#
+# which writes `src/rvboard/decode.rav`, `src/rvcpu/tables.rav`,
+# `src/rvboard/image.rav` and `src/rvscreen.rav` from the board file and then
+# builds `dist/desktop-rv32-linux.sb3`.
+[project]
+name = "desktop-rv32-linux"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/rvstage.rav"
+sprites = [
+    "src/sprites/rvmachine.rav",
+    "src/sprites/rvinput.rav",
+    "src/sprites/rvmonitor.rav",
+]

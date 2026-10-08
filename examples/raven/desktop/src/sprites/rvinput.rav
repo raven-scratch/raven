@@ -1,0 +1,417 @@
+// The keyboard: what the reader types, as the bytes the guest's keyboard reads.
+//
+// The machine has two keyboards and this sprite is both of them, because the
+// two want different bytes for the same key:
+//
+//   * the 8250 at `0x1000_0000` is the console. Its data register is a *byte
+//     stream* of a terminal, so `a` is 0x61, Enter is 0x0D -- the carriage
+//     return a terminal's Enter key sends, which the kernel's line discipline
+//     maps to a newline -- and the arrows are the four escape sequences
+//     `ESC [ A` to `ESC [ D`.
+//   * the graphics card's `KBD_STATUS`/`KBD_DATA` at `0x1040_0034` is the bare
+//     metal Doom's keyboard. Its driver polls one register and reads one code,
+//     and the codes are `0x80..0x83` for up, down, left and right -- there is
+//     no escape sequence, because there is no terminal to interpret one.
+//
+// `RV_INPUT_CARD` says which of the two this build's guest reads; it comes from
+// the guest's `input` in the board file, and the build refuses a name that is
+// neither. So a build makes the bytes *one* guest can use, and the other
+// keyboard is left alone: the Linux console is not handed card codes it would
+// print as garbage, and the card is not handed `ESC [ A` it would read as the
+// escape key followed by two letters.
+//
+// ## The keyboard is the reader's own keyboard, and this is what it can reach
+//
+// There is no palette of keys drawn on the Stage and there will not be one: a
+// machine with a picture of a keyboard on its screen is not an emulated
+// computer. Every byte below comes from a key a hand presses, and a hat is the
+// whole of the mechanism.
+//
+// A key hat is an *event*: `Keyboard.postData` upper-cases a one-character key
+// (`ref/scratch-vm/node_modules/scratch-vm/src/io/keyboard.js:47-67`, `:108`),
+// emits `KEY_PRESSED` (`:121`) with it, and `Runtime.startHats` matches hats by
+// comparing the event's key against each hat's own `KEY_OPTION` *field*
+// (`ref/scratch-vm/node_modules/scratch-vm/src/engine/runtime.js:2020-2028`, and
+// the field is upper-cased for the comparison by
+// `src/engine/blocks-runtime-cache.js:54-57`). The identity therefore travels
+// in the hat, and the hat's body makes its byte whatever the frame rate is: a
+// tap that begins and ends between two frames still delivers, which matters
+// here because a frame of this machine is long. The direct colour panel is
+// rescanned whole on every frame -- about 2.9 million block executions a pass,
+// measured by `tools/probe-blocks.mjs --profile` -- so in the vanilla
+// interpreter a frame is about half a second, and no keystroke lasts that long.
+//
+// ## The key menu is the dropdown plus the rest of the keyboard
+//
+// A hat's key is a field, and the *editor's* dropdown offers forty-three of
+// them: `a`-`z`, `0`-`9`, `space`, `enter`, the four arrows and `any`. The
+// runtime is wider than the editor: it matches the field against whatever key
+// went down, so a hat whose field is `.` fires on the `.` key, and the other
+// thirty-one printable ASCII keys are the same. They are `Key::Exclamation` to
+// `Key::Tilde` -- `crates/raven-scratch/src/catalog.rs`'s `KEYS` -- and this
+// sprite has one hat each.
+//
+// A hat is also the *only* block that can deliver them. The other door is
+// `key pressed?`, whose argument is a value, so it can be asked about any
+// character; but it is a question about the *current state* and nothing else
+// (`keyboard.js:137-143`), so it answers only while the key is still down when
+// the block runs. Asking it from the `when any key pressed` hat -- which fires
+// on the key-down but whose body runs at the next frame boundary -- was the
+// earlier design here, and it is what this fixes: with a frame longer than a
+// keystroke, the key is up again before the question is asked, the byte is
+// never made, and the console's `.` and `/` and `-` are simply gone. `ed` is
+// where that is fatal, because the `.` that ends an append never arrives and the
+// editor cannot be left.
+//
+// ## The five keys only the extended runtimes have
+//
+// `KEYS_EXTENDED` is the rest of it: `backspace`, `delete`, `escape`, `shift`
+// and `control`. Vanilla's `postData` returns before it emits or records
+// anything for a name longer than one character that is not one of its own six,
+// so on a vanilla runtime no hat for one of them ever fires, and `key pressed?`
+// with one is a question about the letter it starts with -- `key pressed? "shift"`
+// asks about `S`. TurboWarp (`ref/turbowarp-vm/src/io/keyboard.js:14-27`, `:81-93`)
+// has a name for all five and answers both ways. So they are hats here, and a
+// hat is the honest shape: it is inert where it cannot work instead of wrong.
+//
+// `shift` and `control` are modifiers, so their hats carry no byte on a console;
+// they arm a gate that the letter hats consult, and the gate is asked only after
+// one of those hats has fired. That is what keeps the question off a vanilla
+// runtime, where the same block means the letter `S` or `C` -- which is the trap
+// the whole five are arranged around.
+//
+// Between them, a real keyboard reaches exactly this much of itself:
+//
+//   letters, digits, space, enter, the four arrows, and the thirty-two
+//   printable ASCII symbols
+//       a hat each. A vanilla runtime upper-cases the character on both sides of
+//       every comparison (`keyboard.js:66`, `:108`), so `A` and `a` are the
+//       *same key* to Scratch: shift is invisible to a hat and the capitals come
+//       from the gate below, which only the extended runtimes can arm.
+//   backspace, delete, escape, and the modifiers
+//       a hat each, and therefore the extended runtimes only. The console is
+//       handed 127, `ESC [ 3 ~` and `ESC`; the card is handed the codes its own
+//       contract gives them -- 0x7f backspace, 0x87 the menu, 0x85 run and
+//       0x84 fire -- which is what makes Doom playable with both hands where the
+//       runtime can see the keys at all.
+//   tab, insert, home, end, page up, page down, alt, the function keys
+//       **nothing.** TurboWarp names the first six and this sprite does not ask
+//       for them; `alt` and the function keys are longer than one character in
+//       both runtimes and are dropped before any block sees them, and `tab` is
+//       one TurboWarp does not name either.
+//   caps lock, scroll lock
+//       the same nothing: a lock is a toggle and not a key, and nothing polls it.
+//
+// The keyboard is polled for nothing a hat already reports. What `poll_card`
+// below polls is the card's *held* keys, which is a different question -- a game
+// wants a key that stays down -- and it polls the reader's real keyboard state
+// through `key pressed?` for the four arrows and `w`, `a`, `s`, `d`. Those are
+// names both runtimes know; a name only one of them knows is never polled,
+// because a poll is a question about the state and asking it is what misfires.
+
+use rvio::io;
+use rvboard::decode;
+
+sprite "Input" {
+    costume "blank" = "assets/blank.svg";
+
+    // ------------------------------------------------------------------
+    // The card's codes
+    // ------------------------------------------------------------------
+    //
+    // The guest's driver translates these to Doom's own key numbers; the
+    // contract is `ref/emdoom-bare/bare/README.md` and the translation is
+    // `fb_key_to_doom` in that directory's `i_video_fb.c`. The decimal is the
+    // hexadecimal the contract is written in: 128 is 0x80.
+
+    /// 0x80..0x83: up, down, left, right. Doom's arrows, and the only way to
+    /// walk or turn.
+    const CARD_UP: num = 128;
+    const CARD_DOWN: num = 129;
+    const CARD_LEFT: num = 130;
+    const CARD_RIGHT: num = 131;
+
+    /// The card's codes for the three keys a hat can now deliver and a poll
+    /// cannot: `0x84` fire and `0x85` run are control and shift, and `0x87` is
+    /// escape, which is Doom's menu. `0x7f` is backspace, which is the same
+    /// number as the console's, so it is not named here.
+    const CARD_FIRE: num = 132;
+    const CARD_RUN: num = 133;
+    const CARD_MENU: num = 135;
+
+    /// `ESC` is the byte a console's escape sequence starts with.
+    const ESC: num = 27;
+
+    /// What a *held* key reports to the card, row for row: the arrow keys and
+    /// the four letters a player expects to move with. `w`, `a`, `s` and `d`
+    /// are aliases for the arrows rather than letters because this guest's Doom
+    /// has no binding for a letter -- its own defaults are the arrows and
+    /// nothing else -- so a WASD player can only be given the arrows.
+    ///
+    /// The codes are spelled out rather than named because a list literal takes
+    /// literals: `[CARD_UP, ...]` is `expected a literal, found CARD_UP`. So the
+    /// numbers below are 128 up, 129 down, 130 left and 131 right, and the
+    /// second row is `w` up, `a` left, `s` down, `d` right.
+    var move_keys: list<str> = ["up arrow", "down arrow", "left arrow", "right arrow", "w", "a", "s", "d"];
+    var move_codes: list<num> = [128, 129, 130, 131, 128, 130, 129, 131];
+
+    /// Whether a modifier is held, as far as this keyboard can tell.
+    ///
+    /// Both are armed by the modifier's own hat and disarmed by asking whether
+    /// it is still down, which is the only way a hat can see a *release*: there
+    /// is no key-up event at all. The question is asked from `letter_key` and
+    /// only when the gate is armed, and that is what makes it safe on a vanilla
+    /// runtime -- there the hats never fire, the gates are never armed, and the
+    /// question would otherwise be about the letter `S` or `C`.
+    var shift_armed: num = 0;
+    var control_armed: num = 0;
+
+    // ------------------------------------------------------------------
+    // What a key makes
+    // ------------------------------------------------------------------
+
+    /// The arrow code a letter stands for, or zero if it is an ordinary letter.
+    /// This guest's Doom has no binding for a letter -- its own defaults are the
+    /// arrows and nothing else -- so `w`, `a`, `s` and `d` are aliases for the
+    /// arrows or they reach nothing at all.
+    proc card_move_code(p_code: num) -> num warp {
+        if p_code == 119 { return CARD_UP; }
+        if p_code == 115 { return CARD_DOWN; }
+        if p_code == 97 { return CARD_LEFT; }
+        if p_code == 100 { return CARD_RIGHT; }
+        return 0;
+    }
+
+    /// One key, as the byte its guest's keyboard wants. A letter, a digit and a
+    /// symbol are their own byte on the console. On the card the *held* keys are
+    /// `poll_card`'s -- it reports them from the keyboard's state on every
+    /// frame the guest has caught up on, which is what walking is -- so a key
+    /// that is a movement key pushes nothing here: the hat and the poll would
+    /// otherwise put two reports in for one tap, and Doom's menu moves one entry
+    /// per report.
+    proc key_event(p_code: num) warp {
+        if RV_INPUT_CARD == 1 {
+            if card_move_code(p_code) > 0 { return; }
+            io_push(p_code);
+            return;
+        }
+        io_push(p_code);
+    }
+
+    /// A letter, with the modifiers a hat cannot see applied: shift makes it a
+    /// capital, control makes it the control character a terminal sends.
+    ///
+    /// Both gates are read here and nowhere else, and only while one is armed,
+    /// so a vanilla runtime -- where pressing either key fires nothing and the
+    /// hats below never start -- never asks the question at all. The card is
+    /// handed the plain letter: shift and control are its run and fire keys
+    /// there, not modifiers.
+    proc letter_key(p_code: num) warp {
+        if RV_INPUT_CARD == 1 { key_event(p_code); return; }
+        if shift_armed == 1 {
+            if sensing::key_pressed(Key::Shift) {
+                io_push(p_code - 32);
+                return;
+            }
+            shift_armed = 0;
+        }
+        if control_armed == 1 {
+            if sensing::key_pressed(Key::Control) {
+                io_push(p_code - 96);
+                return;
+            }
+            control_armed = 0;
+        }
+        io_push(p_code);
+    }
+
+    /// Backspace: 127 on both keyboards, which is the console's DEL and the
+    /// card's own `0x7f`.
+    proc backspace_key() warp {
+        io_push(127);
+    }
+
+    /// Delete, as a terminal sends it: `ESC [ 3 ~`. The card's contract has no
+    /// code for it, so that build reports nothing.
+    proc delete_key() warp {
+        if RV_INPUT_CARD == 1 { return; }
+        io_push(ESC);
+        io_push(91);
+        io_push(51);
+        io_push(126);
+    }
+
+    /// Escape: the console's own `ESC`, and the card's `0x87`, which is Doom's
+    /// menu.
+    proc escape_key() warp {
+        if RV_INPUT_CARD == 1 { io_push(CARD_MENU); return; }
+        io_push(ESC);
+    }
+
+    /// Shift: no byte on a console, where it is the capital in `letter_key`; the
+    /// card's `0x85`, which is Doom's run.
+    proc shift_key() warp {
+        if RV_INPUT_CARD == 1 { io_push(CARD_RUN); return; }
+        shift_armed = 1;
+    }
+
+    /// Control: the same, with `0x84` for fire. A console's control character
+    /// needs the letter as well, which is where `letter_key` reads the gate.
+    proc control_key() warp {
+        if RV_INPUT_CARD == 1 { io_push(CARD_FIRE); return; }
+        control_armed = 1;
+    }
+
+    /// An arrow, as a console wants it: `ESC [ A`. The card's arrows are the
+    /// poll's, for the same reason its `w`, `a`, `s` and `d` are, so this
+    /// pushes nothing on that build -- an `ESC [ A` handed to the card's own
+    /// driver would be its escape key followed by two letters.
+    proc arrow_key(p_ansi: num) warp {
+        if RV_INPUT_CARD == 1 { return; }
+        io_push(ESC);
+        io_push(91);
+        io_push(p_ansi);
+    }
+
+    proc enter_key() warp {
+        if RV_INPUT_CARD == 1 { io_push(136); return; }
+        io_push(13);
+    }
+
+    /// The card's own keyboard: the keys a game is played with, reported for as
+    /// long as they are held. Nothing here runs on a console guest.
+    ///
+    /// The whole round is gated on the guest having read everything, rather
+    /// than each report being gated on its own, because a player walks *and*
+    /// turns: with a gate per report the first key that found the queue empty
+    /// would fill it and the second would be starved for as long as it was
+    /// held, so the machine would take a corner as two separate actions. A
+    /// round therefore puts in one report for every key that is down and
+    /// nothing at all when the guest has not caught up, which leaves the queue
+    /// holding at most as many bytes as there are keys a player can hold.
+    ///
+    /// This reads the reader's keyboard *state*, which is the question a game
+    /// asks: one report per frame while the key is down, and none when it is
+    /// up. Doom's own driver holds a key for four of its tics after one report,
+    /// so what the guest gets is a key that stays down for as long as the hand
+    /// does. Control and shift are not here because a vanilla runtime cannot
+    /// answer for either name: this machine's Doom cannot be made to fire or to
+    /// run from its keyboard.
+    proc poll_card() warp {
+        if RV_INPUT_CARD == 0 { return; }
+        if io_input_free() == 0 { return; }
+        let i: num = 1;
+        repeat move_keys.len() {
+            if sensing::key_pressed(move_keys[i]) { io_push(move_codes[i]); }
+            i += 1;
+        }
+    }
+
+    on flag_clicked {
+        looks::hide();
+        forever {
+            poll_card();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The keys, one hat each
+    // ------------------------------------------------------------------
+    //
+    // Every key a vanilla runtime accepts has a hat here, because a hat is the
+    // one mechanism that does not need the key to be down when a block runs.
+    // The right-hand numbers are the bytes those keys make, and they are ASCII
+    // for every console key: 97 is `a`, 46 is `.`, 13 is the carriage return a
+    // terminal's Enter sends.
+
+    on key_pressed(Key::A) { letter_key(97); }
+    on key_pressed(Key::B) { letter_key(98); }
+    on key_pressed(Key::C) { letter_key(99); }
+    on key_pressed(Key::D) { letter_key(100); }
+    on key_pressed(Key::E) { letter_key(101); }
+    on key_pressed(Key::F) { letter_key(102); }
+    on key_pressed(Key::G) { letter_key(103); }
+    on key_pressed(Key::H) { letter_key(104); }
+    on key_pressed(Key::I) { letter_key(105); }
+    on key_pressed(Key::J) { letter_key(106); }
+    on key_pressed(Key::K) { letter_key(107); }
+    on key_pressed(Key::L) { letter_key(108); }
+    on key_pressed(Key::M) { letter_key(109); }
+    on key_pressed(Key::N) { letter_key(110); }
+    on key_pressed(Key::O) { letter_key(111); }
+    on key_pressed(Key::P) { letter_key(112); }
+    on key_pressed(Key::Q) { letter_key(113); }
+    on key_pressed(Key::R) { letter_key(114); }
+    on key_pressed(Key::S) { letter_key(115); }
+    on key_pressed(Key::T) { letter_key(116); }
+    on key_pressed(Key::U) { letter_key(117); }
+    on key_pressed(Key::V) { letter_key(118); }
+    on key_pressed(Key::W) { letter_key(119); }
+    on key_pressed(Key::X) { letter_key(120); }
+    on key_pressed(Key::Y) { letter_key(121); }
+    on key_pressed(Key::Z) { letter_key(122); }
+
+    on key_pressed(Key::Digit0) { key_event(48); }
+    on key_pressed(Key::Digit1) { key_event(49); }
+    on key_pressed(Key::Digit2) { key_event(50); }
+    on key_pressed(Key::Digit3) { key_event(51); }
+    on key_pressed(Key::Digit4) { key_event(52); }
+    on key_pressed(Key::Digit5) { key_event(53); }
+    on key_pressed(Key::Digit6) { key_event(54); }
+    on key_pressed(Key::Digit7) { key_event(55); }
+    on key_pressed(Key::Digit8) { key_event(56); }
+    on key_pressed(Key::Digit9) { key_event(57); }
+
+    on key_pressed(Key::Space) { key_event(32); }
+    on key_pressed(Key::Enter) { enter_key(); }
+    on key_pressed(Key::UpArrow) { arrow_key(65); }
+    on key_pressed(Key::DownArrow) { arrow_key(66); }
+    on key_pressed(Key::RightArrow) { arrow_key(67); }
+    on key_pressed(Key::LeftArrow) { arrow_key(68); }
+
+    // The thirty-two printable keys the editor's dropdown has no item for. The
+    // runtime matches them by field value, so these fire on the key-down and
+    // the byte is made whatever the frame is doing.
+    on key_pressed(Key::Exclamation) { key_event(33); }
+    on key_pressed(Key::Quote) { key_event(34); }
+    on key_pressed(Key::Hash) { key_event(35); }
+    on key_pressed(Key::Dollar) { key_event(36); }
+    on key_pressed(Key::Percent) { key_event(37); }
+    on key_pressed(Key::Ampersand) { key_event(38); }
+    on key_pressed(Key::Apostrophe) { key_event(39); }
+    on key_pressed(Key::LeftParen) { key_event(40); }
+    on key_pressed(Key::RightParen) { key_event(41); }
+    on key_pressed(Key::Star) { key_event(42); }
+    on key_pressed(Key::Plus) { key_event(43); }
+    on key_pressed(Key::Comma) { key_event(44); }
+    on key_pressed(Key::Minus) { key_event(45); }
+    on key_pressed(Key::Period) { key_event(46); }
+    on key_pressed(Key::Slash) { key_event(47); }
+    on key_pressed(Key::Colon) { key_event(58); }
+    on key_pressed(Key::Semicolon) { key_event(59); }
+    on key_pressed(Key::LessThan) { key_event(60); }
+    on key_pressed(Key::Equals) { key_event(61); }
+    on key_pressed(Key::GreaterThan) { key_event(62); }
+    on key_pressed(Key::Question) { key_event(63); }
+    on key_pressed(Key::At) { key_event(64); }
+    on key_pressed(Key::LeftBracket) { key_event(91); }
+    on key_pressed(Key::Backslash) { key_event(92); }
+    on key_pressed(Key::RightBracket) { key_event(93); }
+    on key_pressed(Key::Caret) { key_event(94); }
+    on key_pressed(Key::Underscore) { key_event(95); }
+    on key_pressed(Key::Backtick) { key_event(96); }
+    on key_pressed(Key::LeftBrace) { key_event(123); }
+    on key_pressed(Key::Pipe) { key_event(124); }
+    on key_pressed(Key::RightBrace) { key_event(125); }
+    on key_pressed(Key::Tilde) { key_event(126); }
+
+    // The five the extended runtimes know and vanilla drops before any block
+    // sees them. These hats are inert on a vanilla runtime -- nothing emits, so
+    // nothing starts them -- which is why the machine listens this way rather
+    // than by asking.
+    on key_pressed(Key::Backspace) { backspace_key(); }
+    on key_pressed(Key::Delete) { delete_key(); }
+    on key_pressed(Key::Escape) { escape_key(); }
+    on key_pressed(Key::Shift) { shift_key(); }
+    on key_pressed(Key::Control) { control_key(); }
+}

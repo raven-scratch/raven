@@ -1,0 +1,188 @@
+// The monitor: the LCD controller's scanout, drawn on the Stage.
+//
+// This is the only module in the project that is allowed to know what Scratch
+// is, and it is deliberately the only one. Everything to its left is a computer:
+// a controller with timings and a framebuffer, which scans memory out and
+// produces pixels. The monitor is the screen at the end of the ribbon cable,
+// and all it does is take the pixels and put them where a reader can see them.
+//
+// It draws with the pen, which is the only general purpose drawing Scratch has.
+// A row is drawn as *runs*: the controller's pixels are read left to right, and
+// a stretch of one colour becomes one horizontal pen line whose length is the
+// run's width and whose thickness is one panel pixel. A screen of text is
+// mostly background with short runs where the glyphs are, so the pen work is
+// proportional to what is on the screen rather than to its area -- which is
+// what makes this affordable at all, because there are a hundred and seventy
+// thousand pixels on a 480 by 360 Stage and Scratch has no notion of putting
+// one there.
+//
+// Every pass erases the whole pen layer and draws the whole panel again, from
+// the controller's memory, unconditionally. Partial redraw was tried and the
+// owner rejected it three times, and he is right: Scratch's pen has no erase
+// that takes back part of a line, so any scheme that redraws less than the whole
+// panel has to be exactly right about what it leaves alone, and being exactly
+// right several hundred times a second is not a thing this machine can be. What
+// it produced was burn-in -- the pen keeps an old row under a new one wherever
+// the bookkeeping was wrong. The only erase Scratch has is `pen clear`, which
+// takes the whole layer, so the monitor takes the whole layer and repaints it.
+// There is no dirty row, no dirty span, no range and no throttle: `monitor_draw`
+// is one erase and one complete pass over the controller's memory, and the
+// picture is right because nothing of the previous one is left.
+//
+// The pen layer is the Monitor sprite's own, and it is the only thing in this
+// build that draws on it: `src/sprites/machine.rav` runs the CPU and the devices
+// and never touches the pen, and the Stage's backdrop is a costume rather than
+// pen work. So `pen clear` taking the whole layer takes exactly the monitor's
+// own picture and nothing else.
+
+use board::decode;
+use screen;
+use dev::pl110;
+use mem::sdram;
+
+/// Erase the pen layer and draw the controller's whole scanout on it.
+pub proc monitor_draw() warp {
+    if clcd_on() == 0 { return; }
+    pen::clear();
+    // The numbers every row of this pass shares, worked out once: the width and
+    // the height, the horizontal scale, the pen's thickness, the vertical step
+    // from one row's centre to the next, and how many bits a pixel is. A pass
+    // paid a call for each of them several hundred times for the same answer.
+    let width: num = clcd_width();
+    let height: num = clcd_height();
+    let scale: num = SCREEN_W / width;
+    let step: num = SCREEN_H / height;
+    let bits: num = clcd_bits();
+    pen::set_pen_size_to(step);
+    let row: num = 0;
+    repeat_until row >= height {
+        monitor_reads += width;
+        // A sixteen bit panel is the one this board's guests program, and it is
+        // the one a row can be walked a *word* at a time: two pixels share an
+        // item of `mem::sdram`, so an aligned row costs one list read per two
+        // columns instead of a call and a list read per column. Every other
+        // depth keeps the general reader below.
+        if bits == 16 {
+            monitor_row16(row, width, scale, step);
+        } else {
+            monitor_row_any(row, width, scale, step);
+        }
+        row += 1;
+    }
+}
+
+/// One scanline of a sixteen bit panel, as runs, a 32 bit word at a time.
+///
+/// The panel is the shape the RISC-V card's direct colour one is: `mem::sdram`
+/// is one Scratch list item to the 32 bit word, two pixels to an item, the even
+/// column in the low half. So the walk is the same walk. `runword` is the
+/// current run's colour written twice -- `pixel * 65537` is `pixel * 65536 +
+/// pixel` -- and a word equal to it cannot start or end a run, so a background
+/// word is skipped on one read and one comparison. Only a run's own colour is
+/// handed to `clcd_rgb565`, and the run is decided by the raw 16 bit pixel,
+/// which says the same thing because the five, six and five bit to eight bit
+/// tables are injective.
+///
+/// The pen is moved to the centre of the first pixel of a run and drawn to the
+/// centre of the last one, with a pen as wide as one panel pixel. That is what
+/// makes a run of N pixels come out exactly N pixels wide: the line itself is
+/// N-1 pixels long and the round cap at each end is half a pixel, and the two
+/// halves make the Nth.
+pub proc monitor_row16(p_row: num, p_width: num, p_scale: num, p_step: num) warp {
+    let y: num = SCREEN_H / 2 - (p_row + 0.5) * p_step;
+    // A row is `p_width / 2` words and starts at its own byte offset, and the
+    // controller's base is a multiple of eight, so both the word index and the
+    // count are exact.
+    let words: num = p_width / 2;
+    let base: num = floor(clcd_ubas / 4) + p_row * words;
+    let start: num = 0;
+    let word: num = sdram::ram[base + 1];
+    let pixel: num = word % 65536;
+    let runword: num = pixel * 65537;
+    let col: num = 1;
+    let high: num = floor(word / 65536);
+    let next: num = high;
+    if next != pixel {
+        monitor_run(start, col - 1, clcd_rgb565(pixel), y, p_scale);
+        pixel = next;
+        runword = pixel * 65537;
+        start = col;
+    }
+    col += 1;
+    let k: num = 1;
+    repeat_until k >= words {
+        word = sdram::ram[base + k + 1];
+        if word == runword {
+            col += 2;
+        } else {
+            // The low half is the word less its high half, not `word % 65536`:
+            // a framebuffer word is a 32 bit unsigned number, and Scratch's
+            // remainder on a value above 2^31 is the slow path -- measured at
+            // three times the cost of the same remainder on a small number,
+            // while the divide and the multiply below are not.
+            high = floor(word / 65536);
+            next = word - high * 65536;
+            if next != pixel {
+                monitor_run(start, col - 1, clcd_rgb565(pixel), y, p_scale);
+                pixel = next;
+                runword = pixel * 65537;
+                start = col;
+            }
+            col += 1;
+            next = high;
+            if next != pixel {
+                monitor_run(start, col - 1, clcd_rgb565(pixel), y, p_scale);
+                pixel = next;
+                runword = pixel * 65537;
+                start = col;
+            }
+            col += 1;
+        }
+        k += 1;
+    }
+    monitor_run(start, p_width - 1, clcd_rgb565(pixel), y, p_scale);
+}
+
+/// One scanline at every depth but sixteen, a pixel at a time, as runs.
+///
+/// The pixel itself is the controller's own read -- `clcd_pixel` -- because the
+/// mapping from an address to a pixel is the controller's business and differs
+/// per depth: one, two, four and eight bit panels are palette lookups, and
+/// twenty-four bit ones are three bytes in an order the control register
+/// decides.
+pub proc monitor_row_any(p_row: num, p_width: num, p_scale: num, p_step: num) warp {
+    let y: num = SCREEN_H / 2 - (p_row + 0.5) * p_step;
+    let start: num = 0;
+    let colour: num = clcd_pixel(0, p_row);
+    let x: num = 1;
+    repeat_until x >= p_width {
+        let next: num = clcd_pixel(x, p_row);
+        if next != colour {
+            monitor_run(start, x - 1, colour, y, p_scale);
+            colour = next;
+            start = x;
+        }
+        x += 1;
+    }
+    monitor_run(start, p_width - 1, colour, y, p_scale);
+}
+
+pub proc monitor_run(p_from: num, p_to: num, p_colour: num, p_y: num, p_scale: num) warp {
+    monitor_runs += 1;
+    pen::set_pen_color_to_color(p_colour);
+    motion::go_to_xy(SCREEN_LEFT + (p_from + 0.5) * p_scale, p_y);
+    pen::pen_down();
+    motion::set_x(SCREEN_LEFT + (p_to + 0.5) * p_scale);
+    pen::pen_up();
+}
+
+/// How many pixels the monitor read and how many runs it drew, for the report.
+/// A check that counts them can tell a screen that changed from one that did
+/// not, which is the difference between a display that works and a display that
+/// happens to be showing the right thing once.
+@scratch_global
+pub var monitor_reads: num = 0;
+@scratch_global
+pub var monitor_runs: num = 0;
+@scratch_global
+pub var monitor_frames: num = 0;

@@ -1,0 +1,312 @@
+// The monitor for the graphics card: the card's scanout, drawn on the Stage.
+//
+// This is the RISC-V board's `monitor::lcd`, and it is the same idea with a
+// different signal. The ARM board's monitor reads a display controller's
+// memories as it scans them: a horizontal stream of pixels at a programmed
+// resolution, one row at a time. This board's card is read the same way -- a
+// row at a time, in runs, out of the card's own memory -- and the two panels
+// it can wear differ only in where that memory is and what a pixel means.
+//
+//   INDEX8    the board's latched copy of the frame the guest committed, and
+//             a palette that turns each byte into a colour. The monitor draws
+//             `efb_scan_pixels` and never the guest's buffer, which is the
+//             point of the card's commit handshake: a picture the guest is
+//             halfway through writing is not a picture, and the Stage never
+//             shows one.
+//
+//   RGB565    the guest's own framebuffer, where it wrote it. A direct colour
+//             card holds the colour of every pixel, so there is nothing to
+//             copy and nothing to commit -- a real card scans out of its own
+//             memory while the guest writes into it, and this does the same.
+//
+// A row is drawn as *runs*: a stretch of one colour becomes one horizontal line
+// whose length is the run's width and whose thickness is the card's own row
+// height. A picture of text is mostly background, so the pen work is
+// proportional to how much ink the picture has rather than to its area -- and
+// the background itself, which is the half of those runs the pen has nothing to
+// say about, is one stroke across the row rather than one stroke per gap. What
+// a pass costs and what each of its parts costs is measured in the README.
+//
+// Every pass erases the whole pen layer and draws the whole panel again, from
+// the card's memory, unconditionally. Partial redraw was tried here and the
+// owner rejected it three times, and he is right: Scratch's pen has no erase
+// that takes back part of a line, so a scheme that redraws less than the whole
+// panel has to be exactly right about what it leaves alone, and being exactly
+// right is not a thing this machine can be. What it produced was burn-in. The
+// only erase Scratch has is `pen clear`, which takes the whole layer, so the
+// monitor takes the whole layer and repaints it. There is no dirty row, no
+// dirty range, no pending flag and no throttle: `monitor_draw` is one erase and
+// one complete pass over the card's memory.
+//
+// The pen layer is the Monitor sprite's own, and it is the only thing in this
+// build that draws on it: `src/sprites/rvmachine.rav` and
+// `src/sprites/rvinput.rav` run the hart and the keyboard and never touch the
+// pen, and the Stage's backdrop is a costume rather than pen work. So `pen
+// clear` taking the whole layer takes exactly the monitor's own picture and
+// nothing else.
+
+use rvboard::decode;
+use rvdev::efb;
+use rvscreen;
+
+/// Erase the pen layer and draw the card's whole scanout on it.
+pub proc monitor_draw() warp {
+    pen::clear();
+    if RV_EFB_INDEXED == 1 {
+        monitor_all_indexed();
+        return;
+    }
+    monitor_all_direct();
+}
+
+/// Every row of the indexed panel, with the pass's scale and pen size set once.
+pub proc monitor_all_indexed() warp {
+    let scale: num = SCREEN_W / RV_EFB_WIDTH;
+    let step: num = SCREEN_H / RV_EFB_HEIGHT;
+    pen::set_pen_size_to(step);
+    monitor_reads += RV_EFB_WIDTH * RV_EFB_HEIGHT;
+    let row: num = 0;
+    repeat_until row >= RV_EFB_HEIGHT {
+        monitor_row_indexed(row, scale, step);
+        row += 1;
+    }
+}
+
+/// Every row of the direct colour panel, with the pass's scale, vertical step
+/// and pen thickness worked out once rather than per row.
+pub proc monitor_all_direct() warp {
+    let scale: num = SCREEN_W / RV_EFB_WIDTH;
+    let step: num = SCREEN_H / RV_EFB_HEIGHT;
+    pen::set_pen_size_to(step);
+    monitor_pen_pixel = -1;
+    monitor_reads += RV_EFB_WIDTH * RV_EFB_HEIGHT;
+    let row: num = 0;
+    repeat_until row >= RV_EFB_HEIGHT {
+        let y: num = SCREEN_H / 2 - (row + 0.5) * step;
+        monitor_row_direct(row, y, scale);
+        row += 1;
+    }
+}
+
+/// One scanline of the indexed panel, as runs. The colour of a run is the
+/// palette's, and the run is decided by the *index*, so two palette entries
+/// that happen to be the same colour are two strokes rather than one.
+pub proc monitor_row_indexed(p_row: num, p_scale: num, p_step: num) warp {
+    let y: num = SCREEN_H / 2 - (p_row + 0.5) * p_step;
+    let base: num = p_row * RV_EFB_PITCH;
+    let start: num = 0;
+    let index: num = efb_scan_pixels[base + 1];
+    let x: num = 1;
+    repeat_until x >= RV_EFB_WIDTH {
+        let next: num = efb_scan_pixels[base + x + 1];
+        if next != index {
+            monitor_run(start, x - 1, monitor_palette(index), y, p_scale);
+            index = next;
+            start = x;
+        }
+        x += 1;
+    }
+    monitor_run(start, RV_EFB_WIDTH - 1, monitor_palette(index), y, p_scale);
+}
+
+/// One scanline of the direct colour panel, as runs.
+///
+/// A row is walked a *32 bit word* at a time rather than a pixel at a time,
+/// because that is what the card is made of: two pixels share an item and the
+/// even column is the low half, so the word a row starts at is its row number
+/// times the words a row holds and column `x` is word `x / 2`. A pixel at a
+/// time would be a division and a list read each, twice the divisions and twice
+/// the reads for the same runs; a word at a time is one read and one division
+/// per two columns.
+///
+/// The run is decided by the 16 bit pixel itself -- comparing two of those is
+/// comparing their colours, because the five, six and five bit to eight bit
+/// tables are injective -- and only a run's own colour is turned into red,
+/// green and blue.
+///
+/// **The fast path is the whole reason this is affordable.** A console row is
+/// mostly background, and a background word has both of its pixels equal to the
+/// run's own colour. `runword` is that colour written twice -- `pixel * 65537`
+/// is `pixel * 65536 + pixel`, the low pixel and the high one -- so a word
+/// equal to it cannot start or end a run, and the row advances two columns on
+/// one read and one comparison. The alternative is to take the word apart into
+/// two pixels and compare each, which is what the slow path does and what every
+/// word of a picture of text used to pay. `runword` is rewritten at exactly the
+/// places `pixel` is, so it is always the current run's colour doubled and the
+/// test can never be stale.
+///
+/// **The row's own colour is painted once, not once per gap.** A text row is
+/// forty-seven runs and half of them are the background between the glyphs; the
+/// pen has no fill, so each of those gaps used to be a stroke of its own. A
+/// row's *background* is stroked across the whole width before anything else
+/// and a run of that colour is then left undrawn: the band is already there.
+/// Measured on one console picture read out of a real run -- 360 rows, 16971
+/// runs -- 8659 of the runs are the row's background, so the pass draws 8312
+/// runs plus 360 bands instead of 16971 runs: 49% fewer strokes, and the
+/// pixels under them are the same pixels either way.
+///
+/// **Which colour is the background is decided by two pixels, not one**, and
+/// that is a correction rather than a detail. Taking it from the first pixel
+/// alone is wrong in exactly the case this console presents: the text starts at
+/// column 0, so the first pixel of a text row is often a glyph pixel, and a
+/// band in a glyph's colour is a full-width line of ink. The row can only be
+/// banded when its two ends agree, because a background that runs under the
+/// whole row is a colour the row both begins and ends with -- and when they do
+/// not agree the row's content genuinely varies and no band is used at all. The
+/// extra cost is one list read of the row's last word per row, which is 360
+/// reads a pass.
+///
+/// It stays correct whatever the two pixels say, which is what makes the test
+/// worth having rather than a guess that has to be right: a run of any colour
+/// other than the band's is still drawn, and a run of the band's colour is
+/// already painted, so a row whose ends agree on a colour that is not its
+/// background is a row with more strokes rather than a row with the wrong
+/// picture.
+///
+/// **And the pen's colour is set when it changes.** A row of one ink colour --
+/// which is what a terminal is -- used to call `monitor_rgb565` and the pen
+/// colour block once per run, tens of times a row for the same answer. The
+/// pixel the pen is set to is remembered across rows, so a run whose colour is
+/// the last one drawn costs a comparison instead of three list reads and six
+/// operations.
+pub proc monitor_row_direct(p_row: num, p_y: num, p_scale: num) warp {
+    let base: num = p_row * RV_EFB_WORDS_PER_ROW;
+    let word: num = efb_words[base + 1];
+    let pixel: num = word % 65536;
+    // The row's background candidate: the colour both ends of it are. Minus one
+    // is "no band", which is a value no pixel can be.
+    let rowpixel: num = -1;
+    let tail: num = efb_words[base + RV_EFB_WORDS_PER_ROW];
+    if floor(tail / 65536) % 65536 == pixel { rowpixel = pixel; }
+    let runword: num = pixel * 65537;
+    let start: num = 0;
+    let col: num = 1;
+    if rowpixel >= 0 { monitor_band(rowpixel, p_y, p_scale); }
+    let next: num = floor(word / 65536) % 65536;
+    if next != pixel {
+        if pixel != rowpixel { monitor_ink(pixel, start, col - 1, p_y, p_scale); }
+        pixel = next;
+        runword = pixel * 65537;
+        start = col;
+    }
+    col += 1;
+    let k: num = 1;
+    repeat_until k >= RV_EFB_WORDS_PER_ROW {
+        word = efb_words[base + k + 1];
+        if word == runword {
+            col += 2;
+        } else {
+            // The low half is the word less its high half, not `word % 65536`.
+            // A framebuffer word is a 32 bit unsigned number, and Scratch's
+            // remainder on a value above 2^31 is the slow path -- measured at
+            // three times the cost of the same remainder on a small number,
+            // while the divide and the multiply below are not. The high half is
+            // already below 65536, so it needs no remainder of its own.
+            let high: num = floor(word / 65536);
+            next = word - high * 65536;
+            if next != pixel {
+                if pixel != rowpixel { monitor_ink(pixel, start, col - 1, p_y, p_scale); }
+                pixel = next;
+                runword = pixel * 65537;
+                start = col;
+            }
+            col += 1;
+            next = high;
+            if next != pixel {
+                if pixel != rowpixel { monitor_ink(pixel, start, col - 1, p_y, p_scale); }
+                pixel = next;
+                runword = pixel * 65537;
+                start = col;
+            }
+            col += 1;
+        }
+        k += 1;
+    }
+    if pixel != rowpixel {
+        monitor_ink(pixel, start, RV_EFB_WIDTH - 1, p_y, p_scale);
+    }
+}
+
+/// One stroke of the row's own colour across the whole of it, and the pen is
+/// left set to that colour.
+pub proc monitor_band(p_colour: num, p_y: num, p_scale: num) warp {
+    pen::set_pen_color_to_color(monitor_rgb565(p_colour));
+    monitor_pen_pixel = p_colour;
+    monitor_runs += 1;
+    motion::go_to_xy(SCREEN_LEFT + 0.5 * p_scale, p_y);
+    pen::pen_down();
+    motion::set_x(SCREEN_LEFT + (RV_EFB_WIDTH - 0.5) * p_scale);
+    pen::pen_up();
+}
+
+/// One run of ink, in whatever colour the pen is already set to. The caller
+/// owns the colour because a row changes it once and strokes with it many
+/// times, and `monitor_rgb565` is three list reads and six operations charged
+/// per call.
+pub proc monitor_ink(p_pixel: num, p_from: num, p_to: num, p_y: num, p_scale: num) warp {
+    if p_pixel != monitor_pen_pixel {
+        pen::set_pen_color_to_color(monitor_rgb565(p_pixel));
+        monitor_pen_pixel = p_pixel;
+    }
+    monitor_runs += 1;
+    motion::go_to_xy(SCREEN_LEFT + (p_from + 0.5) * p_scale, p_y);
+    pen::pen_down();
+    motion::set_x(SCREEN_LEFT + (p_to + 0.5) * p_scale);
+    pen::pen_up();
+}
+
+/// A palette index of the indexed panel as a colour. The card's palette is
+/// `0x00RRGGBB`, which is also what Scratch's pen means by a colour, so the
+/// entry is the colour and nothing has to be unpacked.
+pub fn monitor_palette(p_index: num) -> num {
+    efb_scan_palette[(p_index % 256) + 1] % 16777216
+}
+
+/// A 16 bit `r5g6b5` pixel as the `0xRRGGBB` Scratch's pen wants.
+///
+/// The three fields are five, six and five bits wide, so each has its own
+/// table: a five bit channel has thirty-two possible values and a six bit one
+/// has sixty-four, and the tables are what an eight bit channel is, rounded
+/// the way the display would round it. That is two table reads, one of them
+/// twice, and no division by anything but a power of two -- which is the only
+/// kind a machine with no bitwise operator has.
+pub fn monitor_rgb565(p_pixel: num) -> num {
+    efb_r5[floor(p_pixel / 2048) % 32 + 1] * 65536
+        + efb_g6[floor(p_pixel / 32) % 64 + 1] * 256
+        + efb_r5[p_pixel % 32 + 1]
+}
+
+/// Five bits of red, scaled to eight.
+@scratch_global
+pub var efb_r5: list<num> = [0, 8, 16, 25, 33, 41, 49, 58, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173, 181, 189, 197, 206, 214, 222, 230, 239, 247, 255];
+
+/// Six bits of green, scaled to eight.
+@scratch_global
+pub var efb_g6: list<num> = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 45, 49, 53, 57, 61, 65, 69, 73, 77, 81, 85, 89, 93, 97, 101, 105, 109, 113, 117, 121, 125, 130, 134, 138, 142, 146, 150, 154, 158, 162, 166, 170, 174, 178, 182, 186, 190, 194, 198, 202, 206, 210, 215, 219, 223, 227, 231, 235, 239, 243, 247, 251, 255];
+
+pub proc monitor_run(p_from: num, p_to: num, p_colour: num, p_y: num, p_scale: num) warp {
+    monitor_runs += 1;
+    pen::set_pen_color_to_color(p_colour);
+    motion::go_to_xy(SCREEN_LEFT + (p_from + 0.5) * p_scale, p_y);
+    pen::pen_down();
+    motion::set_x(SCREEN_LEFT + (p_to + 0.5) * p_scale);
+    pen::pen_up();
+}
+
+/// Frames drawn, pixels read and runs issued, for the report. The pixel count
+/// is what says the monitor looked at a whole picture rather than at a corner
+/// of one, and the run count is what says the picture had structure.
+@scratch_global
+pub var monitor_frames: num = 0;
+@scratch_global
+pub var monitor_reads: num = 0;
+@scratch_global
+pub var monitor_runs: num = 0;
+
+/// The 16 bit pixel the pen's colour is currently set to, or minus one when it
+/// is not set to one at all. A pass resets it, and nothing else does: it is a
+/// fact about the pen, not about the card, so it has to survive from one run to
+/// the next and from one row to the next or the saving it exists for is lost
+/// at every boundary.
+@scratch_global
+pub var monitor_pen_pixel: num = -1;

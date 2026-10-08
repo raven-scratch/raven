@@ -1,0 +1,157 @@
+// PL190 vectored interrupt controller: the primary controller at `0x1014_0000`.
+//
+// A VIC is not a pile of bits; it is a *priority* order. Thirty-two device
+// lines come in, and each of sixteen slots can be programmed to watch one of
+// them, in the order the slots are numbered. When an interrupt is taken the
+// controller answers the slot's address, and the order the slots were filled in
+// is the order the kernel has decided its interrupts matter in. That is why the
+// vector registers are here and not just the mask: a machine that answered with
+// the lowest-numbered line instead of the highest-priority one would still boot
+// and would still run, and the one interrupt that is meant to interrupt another
+// would wait.
+//
+// The mask is three registers, not one. `INT_ENABLE` is read and written,
+// `INT_ENABLE_CLEAR` is written with ones to *clear* bits, and the two are
+// separate addresses because a controller that had to be read before it was
+// written could not be programmed from two pieces of code at once. A device
+// raises its line by putting a one in `vic_raw`, and the only thing that clears
+// it is the device itself, which is what level sensitivity means.
+//
+// The board's own interrupt refresh is what fills `vic_raw` in: it asks every
+// device the board file says is wired to this controller for its line, and
+// builds the mask. No device knows a VIC exists.
+
+use board::decode;
+use cpu::alu;
+
+/// The device lines, as the board last saw them. This is the only input.
+@scratch_global
+pub var vic_raw: num = 0;
+/// Which lines are enabled, which lines are routed to FIQ rather than IRQ, and
+/// the software interrupt register. All three are masks.
+@scratch_global
+pub var vic_enable: num = 0;
+@scratch_global
+pub var vic_select: num = 0;
+@scratch_global
+pub var vic_soft: num = 0;
+/// The protection register, which the kernel writes once and this machine has
+/// no use for: it decides which modes may write the other registers, and there
+/// is one mode here.
+@scratch_global
+pub var vic_protect: num = 0;
+@scratch_global
+pub var vic_def_addr: num = 0;
+@scratch_global
+pub var vic_vect_addr: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+@scratch_global
+pub var vic_vect_cntl: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+
+pub proc vic_reset() warp {
+    vic_raw = 0;
+    vic_enable = 0;
+    vic_select = 0;
+    vic_soft = 0;
+    vic_protect = 0;
+    vic_def_addr = 0;
+    let i: num = 0;
+    repeat_until i >= 16 {
+        vic_vect_addr[i + 1] = 0;
+        vic_vect_cntl[i + 1] = 0;
+        i += 1;
+    }
+}
+
+/// The board hands the controller the device lines it last saw. This is the
+/// only thing that writes ic_raw, and it is what makes the line a level:
+/// a device that stops asking stops being in the mask.
+pub proc vic_set_raw(p_mask: num) warp {
+    vic_raw = p_mask % 4294967296;
+}
+
+/// Every line that is asking for attention, before the mask is applied.
+pub proc vic_pending() -> num warp {
+    return alu_or(vic_raw, vic_soft);
+}
+
+/// What the processor is being asked to take: pending, enabled, and not routed
+/// to the other bank.
+pub proc vic_irq_status() -> num warp {
+    return alu_and(vic_pending(), alu_and(vic_enable, alu_not(vic_select)));
+}
+
+pub proc vic_fiq_status() -> num warp {
+    return alu_and(vic_pending(), alu_and(vic_enable, vic_select));
+}
+
+/// The interrupt line this controller drives. A VIC is level sensitive: it is
+/// asserted for as long as any enabled line is, and the device that raised it
+/// is what takes it away.
+pub proc vic_irq() -> num warp {
+    if vic_irq_status() > 0 { return 1; }
+    return 0;
+}
+
+/// The address the controller answers an acknowledge with: the slot with the
+/// lowest number whose enabled source is asserting. Slots are priority order,
+/// so this is the highest-priority interrupt that is actually asking.
+pub proc vic_priority_addr() -> num warp {
+    let pending: num = vic_irq_status();
+    let i: num = 0;
+    repeat_until i >= 16 {
+        let cntl: num = vic_vect_cntl[i + 1];
+        if floor(cntl / 32) % 2 > 0 {
+            let source: num = cntl % 32;
+            if floor(pending / cpu_pow2[source + 1]) % 2 > 0 {
+                return vic_vect_addr[i + 1];
+            }
+        }
+        i += 1;
+    }
+    return vic_def_addr;
+}
+
+pub proc vic_read(p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word == 0 { return vic_irq_status(); }
+    if word == 1 { return vic_fiq_status(); }
+    if word == 2 { return vic_pending(); }
+    if word == 3 { return vic_select; }
+    if word == 4 { return vic_enable; }
+    if word == 6 { return vic_soft; }
+    if word == 8 { return vic_protect; }
+    if word == 12 { return vic_priority_addr(); }
+    if word == 13 { return vic_def_addr; }
+    // The sixteen vector addresses, then the sixteen control registers, then
+    // the test control register. The offsets are the manual's.
+    if word >= 64 && word < 80 { return vic_vect_addr[word - 64 + 1]; }
+    if word >= 128 && word < 144 { return vic_vect_cntl[word - 128 + 1]; }
+    return 0;
+}
+
+pub proc vic_write(p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    let value: num = p_value % 4294967296;
+    if word == 3 { vic_select = value; return; }
+    if word == 4 { vic_enable = alu_or(vic_enable, value); return; }
+    if word == 5 { vic_enable = alu_and(vic_enable, alu_not(value)); return; }
+    if word == 6 { vic_soft = alu_or(vic_soft, value); return; }
+    if word == 7 { vic_soft = alu_and(vic_soft, alu_not(value)); return; }
+    if word == 8 { vic_protect = value; return; }
+    // An acknowledge: writing the priority address retires that source until
+    // the device raises it again. Nothing here has to be remembered, because
+    // the mask and the device lines are the whole of the state.
+    if word == 12 { return; }
+    if word == 13 { vic_def_addr = value; return; }
+    if word >= 64 && word < 80 { vic_vect_addr[word - 64 + 1] = value; return; }
+    if word >= 128 && word < 144 { vic_vect_cntl[word - 128 + 1] = value; return; }
+}
+
+pub proc vic_tick(p_cycles: num) warp {
+    // A VIC has no clock. It is a combinational function of its inputs and its
+    // mask, which is why `vic_irq` can be asked at any moment and is.
+}

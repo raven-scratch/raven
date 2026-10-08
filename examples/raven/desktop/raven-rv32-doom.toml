@@ -1,0 +1,22 @@
+# The same RISC-V board with the other guest in it: the bare metal
+# embeddedDOOM that drives the graphics card, rather than the Linux that boots
+# to a shell.
+#
+#     node tools/build.mjs --board boards/mini-rv32.mjs --guest doom
+#
+# The board file, the decoder, the devices, the hart and the monitor are all
+# identical to `raven-rv32.toml`; the only difference is which image
+# `tools/build.mjs` writes into `src/rvboard/image.rav`. That is the whole
+# point of the board being data and the guest being a property of it.
+[project]
+name = "desktop-rv32-doom"
+output = "dist"
+extensions = ["pen"]
+
+[targets]
+stage = "src/rvstage.rav"
+sprites = [
+    "src/sprites/rvmachine.rav",
+    "src/sprites/rvinput.rav",
+    "src/sprites/rvmonitor.rav",
+]

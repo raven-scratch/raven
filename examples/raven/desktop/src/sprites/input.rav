@@ -1,0 +1,106 @@
+// The ARM board's keyboard: what the reader types, into the PL011's receiver.
+//
+// The Versatile PB's console is UART0, the PL011 at `0x101F1000`, and the
+// guest's own command line names it: `console=tty0 console=ttyAMA0,115200`
+// (`images/versatile-pb.dtb`), so `/dev/console` is `ttyAMA0` and the shell
+// `init` execs reads from this port. `dev::console::type_byte` puts a byte in
+// front of that port's receive FIFO and `pl011_rx_level` is what the FIFO's
+// status reports; this sprite is the only caller, and it is the reader's own
+// keyboard.
+//
+// It is the same shape as the RISC-V board's `src/sprites/rvinput.rav` and for
+// the same reason: vanilla Scratch has two ways to see a key and this uses
+// both. A hat per key the dropdown names -- `a`-`z`, `0`-`9`, space, enter and
+// the four arrows -- and `when any key pressed` followed by `key pressed?` for
+// the thirty-two printable ASCII keys the dropdown has no name for, from the
+// one table in `src/keys/ascii.rav`. Neither reaches backspace, escape, tab or
+// the modifiers: the runtime drops a key whose name is longer than one
+// character before any block sees it
+// (`ref/scratch-vm/node_modules/scratch-vm/src/io/keyboard.js:47-67`, `:115-118`),
+// which is why this shell can be typed at but not corrected. See the README.
+
+use dev::console;
+use keys::ascii;
+
+sprite "Input" {
+    costume "blank" = "assets/blank.svg";
+
+    /// `ESC` is the byte an arrow key's sequence starts with. A real terminal
+    /// sends `ESC [ A` for up and the port carries it whatever the shell on the
+    /// other end does with it.
+    const ESC: num = 27;
+
+    /// `CARRIAGE_RETURN` is the byte a terminal's Enter key sends: the key is
+    /// `\r`, and the kernel's line discipline maps it to `\n` (`ICRNL`, set by
+    /// default), which is what ends the shell's line.
+    const ENTER: num = 13;
+
+    /// The thirty-two keys with no hat, from the `when any key pressed` hat.
+    /// The hat fires on every key-down the runtime accepted and does not say
+    /// which key; the key that fired it is still down while this runs, so this
+    /// asks.
+    proc symbol_keys() warp {
+        let i: num = 1;
+        repeat ascii_chars.len() {
+            if sensing::key_pressed(ascii_chars[i]) { type_byte(ascii_bytes[i]); }
+            i += 1;
+        }
+    }
+
+    proc arrow_key(p_ansi: num) warp {
+        type_byte(ESC);
+        type_byte(91);
+        type_byte(p_ansi);
+    }
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on key_pressed(Key::Any) { symbol_keys(); }
+
+    on key_pressed(Key::A) { type_byte(97); }
+    on key_pressed(Key::B) { type_byte(98); }
+    on key_pressed(Key::C) { type_byte(99); }
+    on key_pressed(Key::D) { type_byte(100); }
+    on key_pressed(Key::E) { type_byte(101); }
+    on key_pressed(Key::F) { type_byte(102); }
+    on key_pressed(Key::G) { type_byte(103); }
+    on key_pressed(Key::H) { type_byte(104); }
+    on key_pressed(Key::I) { type_byte(105); }
+    on key_pressed(Key::J) { type_byte(106); }
+    on key_pressed(Key::K) { type_byte(107); }
+    on key_pressed(Key::L) { type_byte(108); }
+    on key_pressed(Key::M) { type_byte(109); }
+    on key_pressed(Key::N) { type_byte(110); }
+    on key_pressed(Key::O) { type_byte(111); }
+    on key_pressed(Key::P) { type_byte(112); }
+    on key_pressed(Key::Q) { type_byte(113); }
+    on key_pressed(Key::R) { type_byte(114); }
+    on key_pressed(Key::S) { type_byte(115); }
+    on key_pressed(Key::T) { type_byte(116); }
+    on key_pressed(Key::U) { type_byte(117); }
+    on key_pressed(Key::V) { type_byte(118); }
+    on key_pressed(Key::W) { type_byte(119); }
+    on key_pressed(Key::X) { type_byte(120); }
+    on key_pressed(Key::Y) { type_byte(121); }
+    on key_pressed(Key::Z) { type_byte(122); }
+
+    on key_pressed(Key::Digit0) { type_byte(48); }
+    on key_pressed(Key::Digit1) { type_byte(49); }
+    on key_pressed(Key::Digit2) { type_byte(50); }
+    on key_pressed(Key::Digit3) { type_byte(51); }
+    on key_pressed(Key::Digit4) { type_byte(52); }
+    on key_pressed(Key::Digit5) { type_byte(53); }
+    on key_pressed(Key::Digit6) { type_byte(54); }
+    on key_pressed(Key::Digit7) { type_byte(55); }
+    on key_pressed(Key::Digit8) { type_byte(56); }
+    on key_pressed(Key::Digit9) { type_byte(57); }
+
+    on key_pressed(Key::Space) { type_byte(32); }
+    on key_pressed(Key::Enter) { type_byte(ENTER); }
+    on key_pressed(Key::UpArrow) { arrow_key(65); }
+    on key_pressed(Key::DownArrow) { arrow_key(66); }
+    on key_pressed(Key::RightArrow) { arrow_key(67); }
+    on key_pressed(Key::LeftArrow) { arrow_key(68); }
+}

@@ -1,0 +1,55 @@
+// The console's two byte streams.
+//
+// A UART is a byte pipe, and this is the pipe's other end. The PL011 pushes
+// every byte the guest transmits onto `console_out`; whatever is watching --
+// the serial monitor, or the check -- drains it. What the keyboard produces is
+// pushed onto `console_in` and the PL011's receive FIFO takes it from there.
+//
+// Codes and not characters, for the reason rv32ima's console gives: the guest
+// writes a byte and Scratch cannot make a character out of a number, so the
+// translation belongs to whatever displays it.
+//
+// `console_trace` is a second copy that nothing drains. A check has no way to
+// sample a list every frame, and the boot log is the thing worth checking, so
+// every byte goes there too and the check reads it at the end. It is capped,
+// because a guest that runs forever would otherwise grow it without bound.
+
+@scratch_global
+pub var console_out: list<num> = [];
+@scratch_global
+pub var console_in: list<num> = [];
+@scratch_global
+pub var console_trace: list<num> = [];
+
+/// How many bytes `console_trace` keeps. A boot log is tens of kilobytes;
+/// this is room for several of them and a ceiling on the project's memory.
+pub const TRACE_LIMIT: num = 262144;
+
+/// How many bytes reached UART0's data register and how many the transmitter
+/// refused because the port was not enabled. A guest that has plenty to say and
+/// says none of it looks the same from the console either way, and these are
+/// how the two are told apart: bytes counted but not dropped are bytes the
+/// model lost, and none counted at all is a guest that never wrote.
+@scratch_global
+pub var console_writes: num = 0;
+@scratch_global
+pub var console_refused: num = 0;
+
+pub proc console_reset() warp {
+    console_out.clear();
+    console_in.clear();
+    console_trace.clear();
+    console_writes = 0;
+    console_refused = 0;
+}
+
+/// The UART's transmitter: one byte out of the machine.
+pub proc put_byte(p_byte: num) warp {
+    console_out.push(p_byte % 256);
+    if console_trace.len() < TRACE_LIMIT { console_trace.push(p_byte % 256); }
+}
+
+/// Something outside the machine typed a byte.
+pub proc type_byte(p_byte: num) warp {
+    console_in.push(p_byte % 256);
+}

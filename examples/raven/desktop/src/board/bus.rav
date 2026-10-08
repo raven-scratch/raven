@@ -1,0 +1,289 @@
+// The bus: one read, one write, and the address decoder between them.
+//
+// Everything the CPU asks for goes through here, and everything a device
+// answers comes back the same way. The decoder is generated from the board file
+// into `board::decode`, so this file does not know what is plugged into the
+// machine -- it knows how to look an address up and how to hand the access to
+// whichever module the table names.
+//
+// The lookup is one list read and not a walk. Every device on this board lives
+// inside one 2 MiB window, so the window is divided into 4 KiB pages and
+// `page_dev` is one entry per page naming the device that answers there. A page
+// with nothing on it reads back as zero, which is also what an unbacked address
+// everywhere else reads back as, so a hole in the memory map needs no special
+// case: a program that reads from nowhere gets zero, exactly as it would from a
+// real bus with nothing driving it.
+//
+// Order matters at the front. SDRAM is checked first because almost every
+// access goes there, and the boot ROM's alias is checked before it because an
+// ARM926 comes out of reset executing at address zero, where the board has not
+// put any SDRAM yet -- the flash chip is aliased down until the boot ROM clears
+// the remap bit, which is what a real Versatile does.
+//
+// The interrupts are *collected* here and not pushed by the devices. A device
+// answers `_irq` with its line and knows nothing else; the board walks the
+// devices the board file says are wired, builds the two controllers' raw masks
+// out of the line numbers in `vic_line` and `sic_line`, and hands the primary
+// controller's answer to the CPU. That is why a machine with a different
+// controller is a board file and not a device change.
+
+use board::decode;
+use mem::ram;
+use dev::flash;
+use dev::pl011;
+use dev::pl110;
+use dev::pl190;
+use dev::pl192;
+use dev::sp804;
+use dev::versatile_sys;
+use cpu::state;
+
+/// The board's remap bit. Clear means the boot ROM answers at address zero and
+/// the SDRAM below its alias is hidden; set means the SDRAM is where the memory
+/// map says it is. It comes out of reset clear, because that is where the CPU
+/// comes out of reset.
+@scratch_global
+pub var bus_remap: num = 1;
+
+/// Set when something a device's line depends on has changed -- a register was
+/// written, or the board's clock was ticked. The machine refreshes the two
+/// controllers when it is set and clears it, which is how level-sensitive lines
+/// stay exact without asking every device on every instruction.
+@scratch_global
+pub var bus_irq_dirty: num = 1;
+
+pub proc bus_reset() warp {
+    bus_remap = 1;
+    bus_irq_dirty = 1;
+    ram_reset();
+    pl011_reset();
+    sp804_reset();
+    clcd_reset();
+    flash_reset();
+    vic_reset();
+    sic_reset();
+    sys_reset();
+}
+
+/// Clear the alias, which is the boot ROM's last act before it jumps into the
+/// kernel. After this, address zero is SDRAM.
+pub proc bus_remap_off() warp {
+    bus_remap = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+
+pub proc bus_read8(p_addr: num) -> num warp {
+    if bus_sdram(p_addr) > 0 { return ram_read8(p_addr); }
+    return bus_periph_byte(p_addr, 0);
+}
+
+pub proc bus_read16(p_addr: num) -> num warp {
+    if bus_sdram(p_addr) > 0 { return ram_read16(p_addr); }
+    return bus_periph_byte(p_addr, 1);
+}
+
+pub proc bus_read32(p_addr: num) -> num warp {
+    if bus_remap > 0 && p_addr < BOOTROM_ALIAS_SIZE { return flash_read32(p_addr); }
+    if p_addr < RAM_SIZE { return ram_read32(p_addr); }
+    // The window is the whole *chip*, not the boot ROM: the kernel, the
+    // initramfs and the device tree live above the firmware in the same
+    // flash, and the boot ROM copies them out of it. A window the size of
+    // the ROM is a window that reads zero for everything past the firmware
+    // -- which is a copy loop that runs at full speed and moves nothing.
+    if p_addr >= BOOTROM_BASE && p_addr - BOOTROM_BASE < FLASH_SIZE {
+        return flash_read32(p_addr - BOOTROM_BASE);
+    }
+    if p_addr >= PERIPH_BASE && p_addr - PERIPH_BASE < PERIPH_SIZE {
+        return bus_periph_read(p_addr);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+pub proc bus_write8(p_addr: num, p_value: num) warp {
+    if bus_sdram(p_addr) > 0 { ram_write8(p_addr, p_value); return; }
+    bus_periph_write(p_addr, p_value, 0);
+}
+
+pub proc bus_write16(p_addr: num, p_value: num) warp {
+    if bus_sdram(p_addr) > 0 { ram_write16(p_addr, p_value); return; }
+    bus_periph_write(p_addr, p_value, 1);
+}
+
+pub proc bus_write32(p_addr: num, p_value: num) warp {
+    if bus_remap > 0 && p_addr < BOOTROM_ALIAS_SIZE { return; }
+    if p_addr < RAM_SIZE { ram_write32(p_addr, p_value); return; }
+    if p_addr >= BOOTROM_BASE && p_addr - BOOTROM_BASE < FLASH_SIZE { return; }
+    if p_addr >= PERIPH_BASE && p_addr - PERIPH_BASE < PERIPH_SIZE {
+        bus_periph_write(p_addr, p_value, 2);
+        return;
+    }
+}
+
+/// Whether an address is SDRAM, taking the boot ROM's alias into account.
+pub proc bus_sdram(p_addr: num) -> num warp {
+    if bus_remap > 0 && p_addr < BOOTROM_ALIAS_SIZE { return 0; }
+    if p_addr < RAM_SIZE { return 1; }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Device access
+// ---------------------------------------------------------------------------
+
+/// A byte or halfword access to a device register. Every register on this board
+/// is 32 bits wide and the drivers reach them with 32-bit accesses; a narrower
+/// one is answered by reading the register it lands in and taking the part of
+/// it that the address selects, which is one list read and no state.
+pub proc bus_periph_byte(p_addr: num, p_width: num) -> num warp {
+    let base: num = p_addr - p_addr % 4;
+    let value: num = bus_read32(base);
+    let lane: num = p_addr % 4;
+    if p_width == 0 { return floor(value / ram_byte_shift[lane + 1]) % 256; }
+    if lane == 3 {
+        let low: num = floor(value / 16777216);
+        let high: num = bus_read32(base + 4) % 256;
+        return low + high * 256;
+    }
+    return floor(value / ram_byte_shift[lane + 1]) % 65536;
+}
+
+/// The address decoder proper. The page an address lands in names the device;
+/// the device's base turns the address into a register offset.
+pub proc bus_periph_read(p_addr: num) -> num warp {
+    let id: num = bus_device_at(p_addr);
+    if id == DEV_NONE { return 0; }
+    return bus_device_read(id, p_addr - dev_base[id + 1]);
+}
+
+pub proc bus_periph_write(p_addr: num, p_value: num, p_width: num) warp {
+    let id: num = bus_device_at(p_addr);
+    if id == DEV_NONE { return; }
+    // A register write can move an interrupt line -- clearing a timer's status,
+    // or taking a byte out of a FIFO -- so the controllers are told to look
+    // again before the next instruction runs.
+    bus_irq_dirty = 1;
+    bus_device_write(id, p_addr - dev_base[id + 1], p_value, p_width);
+}
+
+pub proc bus_device_at(p_addr: num) -> num warp {
+    let page: num = floor((p_addr - PERIPH_BASE) / PAGE_SIZE);
+    return page_dev[page + 1];
+}
+
+/// One 32-bit read from a named device. A device this build of the board does
+/// not fit answers zero, which is what an empty socket reads as.
+pub proc bus_device_read(p_id: num, p_off: num) -> num warp {
+    if p_id == DEV_SYSCTL { return sys_read(p_off); }
+    if p_id == DEV_UART0 { return pl011_read(0, p_off); }
+    if p_id == DEV_UART1 { return pl011_read(1, p_off); }
+    if p_id == DEV_UART2 { return pl011_read(2, p_off); }
+    if p_id == DEV_UART3 { return pl011_read(3, p_off); }
+    if p_id == DEV_TIMER0 { return sp804_read(0, p_off); }
+    if p_id == DEV_TIMER1 { return sp804_read(1, p_off); }
+    if p_id == DEV_VIC { return vic_read(p_off); }
+    if p_id == DEV_SIC { return sic_read(p_off); }
+    if p_id == DEV_SMC { if p_off == 0 { return bus_remap; } return 0; }
+    if p_id == DEV_CLCD { return clcd_read(p_off); }
+    return 0;
+}
+
+/// One 32-bit write to a named device. `p_width` is 2 for a word, 1 for a
+/// halfword and 0 for a byte; the devices that only a 32-bit access can reach
+/// ignore it, and a device with byte lanes of its own is the exception rather
+/// than the rule.
+/// The board's static memory controller, which is where the remap bit
+/// lives. Writing a zero to it takes the flash out of address zero and
+/// puts SDRAM there, and that is the whole of what this machine uses it
+/// for: it is the last thing the boot ROM does before it jumps into the
+/// kernel, and it is why the launch routine has to be running from the
+/// flash window rather than from the alias when it does it.
+pub proc bus_smc_write(p_off: num, p_value: num) warp {
+    if p_off != 0 { return; }
+    if floor(p_value / 1) % 2 > 0 { bus_remap = 1; } else { bus_remap = 0; }
+}
+pub proc bus_device_write(p_id: num, p_off: num, p_value: num, p_width: num) warp {
+    if p_id == DEV_SYSCTL { sys_write(p_off, p_value % 4294967296); return; }
+    if p_id == DEV_UART0 { pl011_write(0, p_off, p_value % 4294967296); return; }
+    if p_id == DEV_UART1 { pl011_write(1, p_off, p_value % 4294967296); return; }
+    if p_id == DEV_UART2 { pl011_write(2, p_off, p_value % 4294967296); return; }
+    if p_id == DEV_UART3 { pl011_write(3, p_off, p_value % 4294967296); return; }
+    if p_id == DEV_TIMER0 { sp804_write(0, p_off, p_value); return; }
+    if p_id == DEV_TIMER1 { sp804_write(1, p_off, p_value); return; }
+    if p_id == DEV_VIC { vic_write(p_off, p_value); return; }
+    if p_id == DEV_SIC { sic_write(p_off, p_value); return; }
+    if p_id == DEV_SMC { bus_smc_write(p_off, p_value); return; }
+    if p_id == DEV_CLCD { clcd_write(p_off, p_value); return; }
+}
+
+/// A device's interrupt line, by the id the decoder gave it. A device the board
+/// does not fit, or one with no line, answers zero.
+pub proc bus_device_irq(p_id: num) -> num warp {
+    if p_id == DEV_TIMER0 { return sp804_irq(0); }
+    if p_id == DEV_TIMER1 { return sp804_irq(1); }
+    if p_id == DEV_CLCD { return clcd_irq(); }
+    if p_id == DEV_UART0 { return pl011_irq(0); }
+    if p_id == DEV_UART1 { return pl011_irq(1); }
+    if p_id == DEV_UART2 { return pl011_irq(2); }
+    if p_id == DEV_UART3 { return pl011_irq(3); }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Interrupts
+// ---------------------------------------------------------------------------
+
+/// Ask every device the board file says is wired to a controller for its line,
+/// build the two controllers' raw masks out of the line numbers the board file
+/// gave, and hand the primary controller's answer to the CPU.
+///
+/// The second controller is collected first because its output is one of the
+/// primary controller's inputs: the board wires it to the line the board file
+/// names in its `cascades_to`, and a mask built the other way round would be
+/// one refresh out of date.
+pub proc bus_refresh_irqs() warp {
+    bus_irq_dirty = 0;
+    let vic: num = 0;
+    let sic: num = 0;
+    let id: num = 1;
+    repeat_until id > DEV_HIGHEST {
+        if bus_device_irq(id) > 0 {
+            let vline: num = vic_line[id + 1];
+            let sline: num = sic_line[id + 1];
+            if vline >= 0 { vic += cpu_pow2[vline + 1]; }
+            if sline >= 0 { sic += cpu_pow2[sline + 1]; }
+        }
+        id += 1;
+    }
+    sic_set_raw(sic);
+    if sic_irq() > 0 { vic += 2147483648; }
+    vic_set_raw(vic);
+    if vic_irq() > 0 { cpu_irq_pending = 1; } else { cpu_irq_pending = 0; }
+}
+
+// ---------------------------------------------------------------------------
+// Time
+// ---------------------------------------------------------------------------
+
+/// One device's share of a slice: the processor's cycles, converted into the
+/// device's own clock.
+pub fn bus_device_cycles(p_cycles: num, p_clock: num) -> num {
+    floor(p_cycles * p_clock / CLOCK_CPU)
+}
+
+pub proc bus_tick(p_cycles: num) warp {
+    bus_irq_dirty = 1;
+    sp804_tick(0, bus_device_cycles(p_cycles, CLOCK_TIMCLK));
+    sp804_tick(1, bus_device_cycles(p_cycles, CLOCK_TIMCLK));
+    pl011_tick(bus_device_cycles(p_cycles, CLOCK_PCLK));
+    clcd_tick(bus_device_cycles(p_cycles, CLOCK_CLCDCLK));
+    vic_tick(p_cycles);
+    sic_tick(p_cycles);
+    sys_tick(p_cycles);
+}

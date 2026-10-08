@@ -1,0 +1,109 @@
+// The RISC-V machine, as a sprite.
+//
+// The sprite owns the power-on order and the frame loop, and nothing else.
+// The hart, the bus, the decoder and the devices are modules; this is the
+// board's reset line and its clock. The order is a real one:
+//
+//     powerOn   the bus and its devices, then the hart, then the guest image
+//               laid into RAM -- a processor released before its memory is
+//               there is a processor reading a bus with nothing on it
+//     run       one slice of the guest per frame, until it powers off or the
+//               budget runs out
+//
+// The slice is a decision and not a constant of nature. A Scratch frame is 33
+// milliseconds and the terminal and the monitor both have to draw in what is
+// left of it, so the machine hands the frame back before that. A longer slice
+// is not more throughput; it is a screen that redraws less often.
+
+use rvboard::decode;
+use rvboard::image;
+use rvbus::bus;
+use rvcpu::hart;
+use rvdev::syscon;
+
+sprite "Machine" {
+    costume "blank" = "assets/blank.svg";
+
+    /// Zero stopped, one running.
+    @scratch_sprite var machine_state: num = 0;
+
+    /// The processor's cycles per slice: the most instructions a slice may
+    /// retire, whatever the clock says. The number is the *board file's*, for
+    /// the guest this build boots -- see `RV_SLICE` in `src/rvboard/decode.rav`
+    /// and `slice` in `boards/mini-rv32.mjs` -- because what a guest costs a
+    /// frame is what its own panel costs the pen, and the two guests cost very
+    /// different amounts.
+    @scratch_sprite var machine_slice: num = 262144;
+
+    /// The slice's real-time budget, in microseconds, and the number that keeps
+    /// the frame a frame. A slice runs until it has retired `machine_slice`
+    /// instructions or spent this much wall clock, whichever comes first, and
+    /// the ceiling is what stops a slice out of the display's turn: the
+    /// machine's thread is `warp`, so once a slice starts nothing can
+    /// interrupt it, and a slice that takes longer than a Scratch frame is a
+    /// display that cannot redraw thirty times a second however cheap the
+    /// redraw is. The guest's own instruction rate is not hurt by a short
+    /// slice -- the frame loop runs another one as soon as this returns -- only
+    /// by the share of the frame the display takes.
+    ///
+    /// The number is chosen against the display's own share of the frame: the
+    /// two share a Scratch frame of 33.3 milliseconds, a whole-panel repaint is
+    /// 5.3 of those milliseconds in the VM and the host's own renderer spends
+    /// something more drawing its 8672 strokes, so twenty leaves about seven
+    /// for the renderer. `node tools/watch-rv32.mjs --boot` prints the slice in
+    /// force and `--slice-us N` sets it, which is how it was measured rather
+    /// than guessed; the README's table has the numbers. `--slice-us 0` turns
+    /// the bound off and gives the pure instruction slice back.
+    @scratch_sprite var machine_slice_us: num = 20000;
+
+    /// Frames the machine may run before it stops itself. The check's own
+    /// budget is wall-clock, so this is a backstop: a check that never
+    /// returns is worse than one that fails.
+    @scratch_sprite var machine_budget: num = 1000000;
+
+    @scratch_sprite var machine_frames: num = 0;
+    @scratch_sprite var machine_seconds: num = 0;
+
+    /// One slice of the guest, in `warp` so the slice is not cut short by
+    /// Scratch's own turn taking.
+    proc machine_run_slice() warp {
+        hart_run_slice(machine_slice, machine_slice_us);
+        machine_frames += 1;
+    }
+
+    /// The frame loop. The only procedure in the machine that is not `warp`:
+    /// everything below it runs to the end of its slice without yielding,
+    /// which is the only way an interpreter gets any work done in Scratch,
+    /// and this is the loop that hands the frame back.
+    proc run_loop() {
+        while rv_state == 1 {
+            machine_run_slice();
+            if machine_frames > machine_budget { rv_state = 0; }
+        }
+    }
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("Machine.powerOn") {
+        // The slice is the *board's*, for the guest this build boots. It is
+        // applied here rather than in the declaration because a declaration's
+        // value has to be a literal and this one is the board file's, and
+        // because a tool that wants to measure another slice sets it after
+        // power-on -- `tools/watch-rv32.mjs`'s `--slice` and `--slice-us`.
+        machine_slice = RV_SLICE;
+        machine_slice_us = RV_SLICE_US;
+        bus_reset();
+        hart_reset();
+        hart_load_ram();
+        machine_frames = 0;
+        rv_state = 1;
+        sensing::reset_timer();
+    }
+
+    on broadcast_received("Machine.run") {
+        run_loop();
+        machine_seconds = sensing::timer();
+    }
+}

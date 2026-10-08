@@ -1,0 +1,120 @@
+// The core local interruptor: `mtime` and `mtimecmp`.
+//
+// A CLINT is two 64 bit counters and a comparator. `mtime` is the machine's
+// own clock and only ever goes up; `mtimecmp` is what the software wants to be
+// interrupted at, and the timer interrupt is the comparison between them --
+// there is no "fire once" state anywhere, so a guest that never writes
+// `mtimecmp` is never interrupted, which is exactly what a machine with no
+// timer driver wants.
+//
+// `mtime` is a count of *real time*, not of retired instructions, and that is
+// what this module is for. On silicon `mtime` is a counter off the board's
+// timer crystal and has nothing to do with how many instructions retired; the
+// reference does the same thing in software, advancing its `timerl` by the
+// microseconds the host's clock moved during the last block of instructions
+// (`ref/mini-rv32ima/mini-rv32ima/mini-rv32ima.h`, `MiniRV32IMAStep`), and the
+// device tree's `timebase-frequency` says how many of those counts a second
+// holds. So one instruction is *not* one microsecond: a machine that retires
+// four million instructions a second and counts one microsecond per
+// instruction is a clock that runs four times fast, and the kernel's cursor
+// blink, its `sleep 1` and its uptime all run four times fast with it. The
+// board does declare a one megahertz processor, and the machine is built to
+// match it -- by counting microseconds of wall clock, which is what this board
+// can actually measure.
+//
+// `mtimecmp` is not here. It is a register the guest writes and a comparison
+// the hart makes, and the hart is where the comparison happens because the
+// hart is what has to take the interrupt.
+
+use rvboard::decode;
+
+/// The low and high halves of `mtime`. Two cells rather than one because a
+/// thirty-two bit counter at one megahertz wraps every seventy-one minutes and
+/// a guest that keeps time across a wrap must not see it jump backwards.
+@scratch_global
+pub var clint_mtime_l: num = 0;
+@scratch_global
+pub var clint_mtime_h: num = 0;
+
+/// The host's clock at the last advance, in days since 2000. It is kept here
+/// rather than by the caller because the gap *between* slices is real time too:
+/// a slice is not a whole frame, so a machine that measured only inside its own
+/// slices would count the fraction of the frame it ran in and lose the rest to
+/// the display. The reference has the same shape -- its `lastTime` is updated
+/// once per block of instructions, so the next difference spans whatever
+/// happened in between.
+@scratch_global
+pub var clint_last_days: num = 0;
+
+/// What the guest asked to be interrupted at.
+@scratch_global
+pub var clint_match_l: num = 0;
+@scratch_global
+pub var clint_match_h: num = 0;
+
+/// The timer interrupt has arrived: `mtime` has caught up with `mtimecmp`.
+///
+/// The comparison is `>` rather than `>=` because that is what the reference
+/// does, and a guest that sets `mtimecmp` to the current `mtime` is asking for
+/// an interrupt one microsecond from now rather than immediately.
+pub proc clint_expired() -> num warp {
+    if clint_match_h == 0 && clint_match_l == 0 { return 0; }
+    if clint_mtime_h > clint_match_h { return 1; }
+    if clint_mtime_h == clint_match_h && clint_mtime_l > clint_match_l { return 1; }
+    return 0;
+}
+
+/// `mtime` moved on to `p_now_days`, the host's clock in days since 2000.
+///
+/// This is where `mtime` moves, and it is the only place. The difference from
+/// the last reading is taken in days and scaled once, because two absolute
+/// readings eight thousand days out are numbers a double rounds to about a
+/// millisecond while their difference is not. `86400000000` is the microseconds
+/// in a day, which is the unit `days since 2000` counts in.
+///
+/// A negative step is refused rather than wrapped. The host's wall clock is not
+/// monotonic -- it is `Date.now` under the stage -- and `mtime` is what the
+/// guest orders its whole life by, so one backwards step would show the guest a
+/// timer that went back in time. Refusing it costs the guest the time the clock
+/// jumped, which is what a host clock jump costs, instead of a `mtime` smaller
+/// than the one it read a moment ago.
+pub proc clint_tick(p_now_days: num) warp {
+    let delta: num = floor((p_now_days - clint_last_days) * 86400000000 + 0.5);
+    clint_last_days = p_now_days;
+    if delta < 0 { return; }
+    clint_mtime_l += delta;
+    if clint_mtime_l > 4294967295 {
+        clint_mtime_l -= 4294967296;
+        clint_mtime_h += 1;
+    }
+}
+
+/// `mtime` at +0xbff8 and +0xbffc, `mtimecmp` at +0x4000 and +0x4004. The
+/// offsets are odd-looking and they are the real ones: a CLINT puts its
+/// counters near the top of a sixteen kilobyte window and leaves the rest
+/// unused, and a guest that has the addresses compiled in does not care.
+pub proc clint_read(p_off: num) -> num warp {
+    if p_off == 49148 { return clint_mtime_h; }
+    if p_off == 49144 { return clint_mtime_l; }
+    if p_off == 16388 { return clint_match_h; }
+    if p_off == 16384 { return clint_match_l; }
+    return 0;
+}
+
+/// A partial write to one half of a counter. The halves are written
+/// separately and the guest is expected to order them; a real CLINT behaves
+/// the same way, and the kernel's own code for it is written for that.
+pub proc clint_write(p_off: num, p_value: num) warp {
+    if p_off == 16388 { clint_match_h = p_value % 4294967296; return; }
+    if p_off == 16384 { clint_match_l = p_value % 4294967296; return; }
+}
+
+pub proc clint_reset() warp {
+    clint_mtime_l = 0;
+    clint_mtime_h = 0;
+    clint_match_l = 0;
+    clint_match_h = 0;
+    // The baseline has to be *now*, or the first tick after a power-on would
+    // charge the machine for every microsecond since the year 2000.
+    clint_last_days = sensing::days_since_2000();
+}

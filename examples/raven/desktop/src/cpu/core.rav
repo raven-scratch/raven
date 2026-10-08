@@ -1,0 +1,1102 @@
+// The ARM926EJ-S core: fetch, decode, execute, and the exception model.
+//
+// The instruction set below is ARMv5TE in ARM state -- data processing, the
+// barrel shifter, the multiplies including the halfword ones, the single and
+// extra loads and stores, the block transfers, the branches including `blx`,
+// the program status register transfers, the coprocessor moves that reach CP15,
+// `clz`, `swp`, and `swi`. Thumb is not here; the kernel and every program in
+// the image are built in ARM state, and a Thumb decoder is a separate module
+// that would sit beside this one.
+//
+// Two things about the shape of an interpreter in this language are worth
+// saying once. The first is that a `proc` returns one value, so an instruction
+// that produces two -- a load that also sets a flag, a shift that also carries
+// -- writes the second into a cell and the caller reads it. The second is that
+// everything the decoder needs to talk about lives in a Scratch variable rather
+// than a local, because a local in a `proc` is a cell of the arena and a
+// variable is one block to read.
+//
+// The decode tree is ARM's own: bits 27 to 25 choose the class, bits 24 to 20
+// choose the operation inside it, and the corners that do not follow that rule
+// -- the multiplies, the extra loads and stores, the program status transfers
+// and `swp` -- are the ones the tree has special cases for, so they have
+// special cases here.
+
+use board::decode;
+use cpu::state;
+use cpu::alu;
+use cpu::luts;
+use cpu::mem;
+
+/// The instruction being executed, and the operand it works on. Scratch has
+/// no registers of its own to spill into, so these are the CPU's scratch.
+@scratch_global
+pub var cpu_ir: num = 0;
+@scratch_global
+pub var cpu_op2: num = 0;
+@scratch_global
+pub var cpu_op1: num = 0;
+@scratch_global
+pub var cpu_rd: num = 0;
+@scratch_global
+pub var cpu_rn: num = 0;
+@scratch_global
+pub var cpu_rm: num = 0;
+@scratch_global
+pub var cpu_rs: num = 0;
+@scratch_global
+pub var cpu_opcode: num = 0;
+@scratch_global
+pub var cpu_setflags: num = 0;
+@scratch_global
+pub var cpu_result: num = 0;
+@scratch_global
+pub var cpu_writeback: num = 0;
+@scratch_global
+pub var cpu_address: num = 0;
+@scratch_global
+pub var cpu_temp: num = 0;
+
+/// Whether an interrupt is waiting at the interrupt controller. The board sets
+/// it when a device raises its line and clears it when the last one is
+/// serviced, so this is the CPU's entire view of the outside world.
+
+/// One instruction.
+///
+/// The program counter holds the address of the instruction being executed, so
+/// it advances by four at the end unless the instruction wrote `r15`, which is
+/// what `cpu_branched` records. A fault ends the instruction where it stands,
+/// before the advance, because the exception's return address is built from
+/// this counter and an abort handler that is handed the wrong address is a
+/// handler that loops.
+@scratch_global
+pub var cpu_irq_pending: num = 0;
+
+pub proc mem_cpu_fetch(p_addr: num) -> num warp {
+    let word: num = cpu_fetch(p_addr);
+    if mem_fault > 0 { mem_fault = 2; }
+    return word;
+}
+
+/// Take an exception. The saved status register goes to the *old* mode's bank
+/// -- which is why the mode is changed after it is written -- and the return
+/// address goes to the new mode's `r14`.
+pub proc cpu_enter_status(p_mode: num) warp {
+    let c: num = cpu_cpsr;
+    if floor(c / 32) % 2 > 0 { c -= 32; }
+    if floor(c / 128) % 2 == 0 { c += 128; }
+    if p_mode == MODE_FIQ && floor(c / 64) % 2 == 0 { c += 64; }
+    cpu_cpsr = c;
+}
+
+pub proc cpu_clear_fault() warp {
+    mem_fault = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Decode
+// ---------------------------------------------------------------------------
+
+pub proc cpu_exception(p_vector: num, p_lr_offset: num, p_lr: num) warp {
+    // The status register is saved into the bank of the mode being
+    // *entered*, so the mode has to move before it is written. Reading it
+    // first and writing it after is the whole of this, and getting the
+    // order wrong saves it into the bank being left, leaves the bank being
+    // entered at zero, and returns from the first handler in whatever mode
+    // zero happens to be. That runs -- zero maps to the user bank -- and is
+    // wrong in a way that shows up only as a machine that is quietly in the
+    // wrong mode, with the wrong registers, for the rest of its life.
+    let saved: num = cpu_cpsr;
+    let mode: num = 0;
+    if p_vector == 4 { mode = MODE_UNDEF; }
+    if p_vector == 8 { mode = MODE_SVC; }
+    if p_vector == 12 { mode = MODE_ABORT; }
+    if p_vector == 16 { mode = MODE_ABORT; }
+    if p_vector == 24 { mode = MODE_IRQ; }
+    if p_vector == 28 { mode = MODE_FIQ; }
+    cpu_set_mode(mode);
+    cpu_set_spsr(saved);
+    cpu_enter_status(mode);
+    cpu_set_reg(14, p_lr);
+    cpu_pc = (vector_base() + p_vector) % 4294967296;
+    cpu_branched = 1;
+    cpu_clear_fault();
+}
+
+/// The status register as an exception entry leaves it: Thumb off, IRQ masked,
+/// and FIQ masked as well for FIQ.
+pub proc cpu_undefined() warp {
+    cpu_exception(4, 4, cpu_pc + 4);
+}
+
+// ---------------------------------------------------------------------------
+// Interrupts
+// ---------------------------------------------------------------------------
+
+/// Deliver a pending interrupt if one is enabled and the processor is not in
+/// a mode that has it masked. ARM's IRQ is level sensitive: it is taken when
+/// the line is asserted and the I bit is clear, and the line stays asserted
+/// until the device that raised it is serviced.
+pub proc cpu_bx(p_link: num) warp {
+    let target: num = cpu_get_reg(cpu_ir % 16);
+    if target % 2 > 0 { cpu_undefined(); return; }
+    if p_link > 0 { cpu_set_reg(14, cpu_pc + 4); }
+    cpu_set_reg(15, target - target % 4);
+}
+
+pub proc cpu_clz() warp {
+    cpu_set_reg(floor(cpu_ir / 4096) % 16, alu_clz(cpu_get_reg(cpu_ir % 16)));
+}
+
+pub proc cpu_swap() warp {
+    let rn: num = floor(cpu_ir / 65536) % 16;
+    let rd: num = floor(cpu_ir / 4096) % 16;
+    let rm: num = cpu_ir % 16;
+    let address: num = cpu_get_reg(rn) % 4294967296;
+    let byte: num = floor(cpu_ir / 4194304) % 2;
+    if byte > 0 {
+        let old: num = cpu_read8(address, 0);
+        if mem_fault > 0 { return; }
+        cpu_write8(address, cpu_get_reg(rm));
+        cpu_set_reg(rd, old);
+        return;
+    }
+    cpu_temp = cpu_get_reg(rm);
+    let aligned: num = address - address % 4;
+    let old: num = cpu_read32(aligned, 0);
+    if mem_fault > 0 { return; }
+    cpu_write32(aligned, cpu_temp);
+    cpu_set_reg(rd, old);
+}
+
+/// The extra loads and stores: halfwords, signed bytes, signed halfwords, and
+/// the doubleword pair ARMv5TE adds. They share the multiply's encoding space
+/// and are told apart by the `SH` field in bits 6 and 5.
+pub proc cpu_msr_write(p_value: num, p_mask: num, p_spsr: num) warp {
+    // The mask is bits 19:16, one bit per byte of the status register, most
+    // significant byte first.
+    let keep: num = 0;
+    let i: num = 0;
+    repeat_until i >= 4 {
+        // The field mask's own bit i selects byte i of the status register:
+        // bit 16 is `c`, the mode and interrupt bits, and bit 19 is `f`, the
+        // condition flags. Reading the mask from the other end writes the
+        // flags and the mode and leaves the mode where it was.
+        if floor(p_mask / cpu_pow2[i + 1]) % 2 == 0 {
+            keep += 255 * cpu_pow2[i * 8 + 1];
+        }
+        i += 1;
+    }
+    let value: num = p_value % 4294967296;
+    let merged: num = alu_and(keep, cpu_cpsr) + alu_and(alu_not(keep), value);
+    // The mode field is only writable from a privileged mode, and this machine
+    // is always privileged while Linux is running.
+    if p_spsr > 0 { cpu_set_spsr(merged); return; }
+    cpu_cpsr = merged;
+    cpu_set_mode(merged % 32);
+}
+
+// ---------------------------------------------------------------------------
+// Coprocessor
+// ---------------------------------------------------------------------------
+
+pub proc cpu_msr_register() warp {
+    cpu_msr_write(cpu_get_reg(cpu_ir % 16), floor(cpu_ir / 65536) % 16,
+        floor(cpu_ir / 4194304) % 2);
+}
+
+/// `msr` with an immediate, which shares the data processing immediate space
+/// and is told apart by its destination field.
+pub proc cpu_mrs() warp {
+    let value: num = cpu_cpsr;
+    if floor(cpu_ir / 4194304) % 2 > 0 { value = cpu_spsr(); }
+    cpu_set_reg(floor(cpu_ir / 4096) % 16, value);
+}
+
+/// The space whose bits 27:23 are `00010`, told apart by bits 11:4 and by the
+/// fields each instruction is required to leave empty.
+///
+/// `mrs` and `msr` are told apart from the comparisons by those fields: an `mrs`
+/// names r15 as its source and an `msr` names r15 as its destination, and `tst`,
+/// `teq`, `cmp` and `cmn` put a register number -- or zero -- in both. They have
+/// to be told apart, because a register-form comparison with no shift is
+/// otherwise bit for bit the same shape: `teq r3, r4` is
+/// `00010 0 0 0 1 0011 0000 0000 0000 0100` and `msr cpsr_c, r4` is the same
+/// with r15 in the destination field. Reading every one of them as a status
+/// register move is what this did, and the kernel's `__lookup_processor_type` --
+/// which is four `teq`s in a row -- wrote its way through the program status
+/// register and looped.
+///
+/// `bx`, `blx` and `clz` all fix bits 11:4 at `1111 0001`, with `blx` at
+/// `1111 0011`; `clz` is the one whose bit 22 is set. The halfword multiplies
+/// are the ones whose bits 7:4 are even and whose `S` bit is clear, which is
+/// what tells `smlabb` from the register-form comparison that shares its bits
+/// 7:4.
+pub proc cpu_class_misc() warp {
+    let b114: num = floor(cpu_ir / 16) % 256;
+    let b74: num = b114 % 16;
+    if b114 == 241 {
+        if floor(cpu_ir / 4194304) % 2 > 0 { cpu_clz(); return; }
+        cpu_bx(0);
+        return;
+    }
+    if b114 == 243 { cpu_bx(1); return; }
+    if b74 == 9 { cpu_swap(); return; }
+    if b74 == 0 {
+        // `mrs` names `r15` as its source and `msr` names it as its
+        // destination, but that is not enough to tell them apart: `msr` with
+        // every field in its mask has `1111` in the source field too.
+        // `e16ff000` is `msr spsr_fsxc, r0` -- the instruction the interrupt
+        // vector uses to set the mode the handler returns into -- and a test
+        // that only looks for the `r15` reads it as `mrs`, which writes the
+        // *saved* status register into the program counter. Bit 21 is what
+        // separates them: set on `msr`, clear on `mrs`; the assembler says so,
+        // `e10f0000` being `mrs r0, cpsr` and `e16ff000` the `msr`.
+        if floor(cpu_ir / 2097152) % 2 > 0 {
+            if floor(cpu_ir / 4096) % 16 == 15 { cpu_msr_register(); return; }
+        } else {
+            if floor(cpu_ir / 65536) % 16 == 15 { cpu_mrs(); return; }
+        }
+        cpu_data_processing(0);
+        return;
+    }
+    if b74 == 8 || b74 == 10 || b74 == 12 || b74 == 14 {
+        if floor(cpu_ir / 1048576) % 2 == 0 { cpu_halfword_multiply(); return; }
+    }
+    cpu_data_processing(0);
+}
+
+/// `mul` and `mla`. Every multiply form -- this one, the long pair below it, and
+/// the halfword pair wrapped around them -- packs its operands the same way:
+/// `Rd` at bits 19:16, `Rn` at bits 15:12, `Rs` at bits 11:8 and `Rm` at bits
+/// 3:0, with `A` at bit 21 turning a `mul` into an `mla`.
+///
+/// `Rs` is read from bits 11:8 and not from bits 6:3, which is where dividing
+/// by eight looks: bits 6:5 are the shift type and bits 4:0 are the register, so
+/// a multiply decoded that way multiplies by a register nobody named. It is the
+/// quiet kind of wrong -- `mla r3, r0, r7, r3` in `__create_mapping` indexed the
+/// memory-type table by whatever happened to be in `r2` and the kernel read a
+/// section descriptor at `0xc8b24af4`. `arm-linux-as` is the authority:
+/// `mla r0, r1, r2, r3` is `e0203291`, and bits 11:8 of that are two.
+pub proc cpu_multiply() warp {
+    let rd: num = floor(cpu_ir / 65536) % 16;
+    let rn: num = floor(cpu_ir / 4096) % 16;
+    let rs: num = floor(cpu_ir / 256) % 16;
+    let rm: num = cpu_ir % 16;
+    let value: num = cpu_get_reg(rm) * cpu_get_reg(rs);
+    if floor(cpu_ir / 2097152) % 2 > 0 { value += cpu_get_reg(rn); }
+    value = value % 4294967296;
+    cpu_set_reg(rd, value);
+    if floor(cpu_ir / 1048576) % 2 > 0 { alu_flags_nz(value); }
+}
+
+/// A 32 by 32 product written as a pair, or accumulated into one. The halves
+/// come out of one exact product rather than from the sixteen-bit pieces
+/// `rv32ima` has to use, because fifty-three bits is enough for all of it.
+pub proc cpu_halfword(p_value: num, p_which: num) -> num warp {
+    let signed: num = alu_signed(p_value);
+    if p_which == 0 {
+        let low: num = signed % 65536;
+        if low > 32767 { return low - 65536; }
+        return low;
+    }
+    let high: num = floor(signed / 65536) % 65536;
+    if high > 32767 { return high - 65536; }
+    return high;
+}
+
+/// `swp` and `swpb`: one read, one write, one write back, and no atomics
+/// beyond being uninterrupted by this machine's own single thread.
+pub proc cpu_halfword_multiply() warp {
+    let op: num = floor(cpu_ir / 2097152) % 8;
+    let rd: num = floor(cpu_ir / 65536) % 16;
+    let rn: num = floor(cpu_ir / 4096) % 16;
+    let rs: num = floor(cpu_ir / 256) % 16;
+    let rm: num = cpu_ir % 16;
+    let x: num = floor(cpu_ir / 32) % 2;
+    let y: num = floor(cpu_ir / 64) % 2;
+    let a: num = cpu_halfword(cpu_get_reg(rm), x);
+    let b: num = cpu_halfword(cpu_get_reg(rs), y);
+    let product: num = a * b;
+    // What the opcode field means, which the assembler settles rather than the
+    // manual's ordering: `smlabb` is op 0, `smlawb` op 1, `smlalbb` op 2 and
+    // `smulbb` op 3 -- `e1003281`, `e1203281`, `e1410382`, `e1600281`.
+    //
+    // So op 0 and op 1 are the two accumulating word forms and *both* take `Rn`:
+    // `smlabb` multiplies the low halves and adds, `smlawb` multiplies the *top*
+    // half of the first operand and adds. Accumulating on op 1 alone -- and
+    // treating op 0 as the not-accumulating one -- makes every `smlabb` a
+    // `smulbb`, which is the difference between a product and a product plus a
+    // pointer. The kernel's `smlabb r8, r8, sl, r7` computes the right number
+    // and leaves it nowhere.
+    if op == 0 || op == 1 {
+        if op == 1 { product = floor(alu_signed(cpu_get_reg(rm)) / 65536) * b; }
+        product += cpu_get_reg(rn);
+        cpu_set_reg(rd, product % 4294967296);
+        return;
+    }
+    if op == 3 {
+        // `smulxy`: a word result and no accumulate at all.
+        cpu_set_reg(rd, product % 4294967296);
+        return;
+    }
+    // smlalxy: the halfword product accumulated into a pair.
+    let rdhi: num = floor(cpu_ir / 65536) % 16;
+    let rdlo: num = floor(cpu_ir / 4096) % 16;
+    let total: num = cpu_get_reg(rdhi) * 4294967296 + cpu_get_reg(rdlo) + product;
+    cpu_set_reg(rdlo, total % 4294967296);
+    cpu_set_reg(rdhi, floor(total / 4294967296) % 4294967296);
+}
+
+/// Half of a register, selected by the x or y bit: the low half for 0 and the
+/// high half for 1, sign extended because every one of these is signed.
+pub proc cpu_long_multiply() warp {
+    let rdhi: num = floor(cpu_ir / 65536) % 16;
+    let rdlo: num = floor(cpu_ir / 4096) % 16;
+    let rs: num = floor(cpu_ir / 256) % 16;
+    let rm: num = cpu_ir % 16;
+    let signed_operands: num = floor(cpu_ir / 4194304) % 2;
+    let accumulate: num = floor(cpu_ir / 2097152) % 2;
+    let a: num = cpu_get_reg(rm);
+    let b: num = cpu_get_reg(rs);
+    if signed_operands > 0 { a = alu_signed(a); }
+    if signed_operands > 0 { b = alu_signed(b); }
+    let product: num = a * b;
+    let low: num = product % 4294967296;
+    let high: num = floor(product / 4294967296) % 4294967296;
+    if accumulate > 0 {
+        let oldlo: num = cpu_get_reg(rdlo);
+        let oldhi: num = cpu_get_reg(rdhi);
+        let total: num = oldhi * 4294967296 + oldlo + high * 4294967296 + low;
+        low = total % 4294967296;
+        high = floor(total / 4294967296) % 4294967296;
+    }
+    cpu_set_reg(rdlo, low);
+    cpu_set_reg(rdhi, high);
+    if floor(cpu_ir / 1048576) % 2 > 0 {
+        // A long multiply's carry is "the high word is not zero", and its
+        // overflow is always clear.
+        cpu_cpsr = alu_cpsr_with(cpu_cpsr, alu_field(alu_bit31(low), alu_iszero(low),
+            1 - alu_iszero(high), 0));
+    }
+}
+
+/// The ARMv5TE halfword multiplies. GCC emits `smulbb` and friends for a
+/// sixteen-bit product, so a machine that does not have them is a machine that
+/// faults the first time a program multiplies two shorts -- which is why they
+/// are here and not left as a later module.
+
+pub proc cpu_load16(p_address: num) -> num warp {
+    if p_address % 2 > 0 {
+        if floor(cp15_control / 2) % 2 == 0 {
+            mem_raise(FSR_ALIGNMENT, 0, 0, p_address);
+            return 0;
+        }
+    }
+    let value: num = cpu_read16(p_address, 0);
+    if mem_fault > 0 { return 0; }
+    return value;
+}
+
+pub proc cpu_store16(p_address: num, p_value: num) warp {
+    if p_address % 2 > 0 {
+        if floor(cp15_control / 2) % 2 == 0 {
+            mem_raise(FSR_ALIGNMENT, 0, 1, p_address);
+            return;
+        }
+    }
+    cpu_write16(p_address, p_value % 65536);
+}
+
+// ---------------------------------------------------------------------------
+// Single load and store
+// ---------------------------------------------------------------------------
+
+/// The doubleword pair, `ldrd` and `strd`.
+///
+/// The address must be *word* aligned -- four bytes, not eight. Eight is what an
+/// ARMv6 asks for, and it is a rule that reads as if it were always true; this
+/// core is an ARMv5 and only wants four. `tools/ref/align.S` is the test: it
+/// does the same `strd` at an eight-aligned address, at one four past a multiple
+/// of eight, and at one two past, with alignment checking on the way Linux
+/// leaves it, and asks QEMU's own ARM926. It completes the first two and faults
+/// on the third. Requiring eight here faults on the second, and Linux's
+/// `vprintk_store` does exactly that store -- so the kernel took an alignment
+/// fault while it was still inside `setup_arch`, before it had mapped the high
+/// vector page, and the abort handler could not run.
+///
+/// The pair is `Rd` and `Rd + 1`. The encoding carries one register number and
+/// implies the second, so reading the same field twice -- which is what a second
+/// `floor(cpu_ir / 4096) % 16` is -- loads both halves into the one register and
+/// leaves the other holding whatever it had. Linux's `printk_sprint` is the
+/// instruction that finds it: it picks up its format and its argument list with
+/// one `ldrd r2, [sp, #24]`, and a `vsnprintf` handed the argument list as its
+/// format string dereferences 0xffffffa0.
+///
+/// The status register's write bit is the transfer's, not the load bit's, which
+/// is why `p_load` is a parameter rather than `load` being read again: both
+/// halves of a `ldrd` carry the load bit clear.
+pub proc cpu_doubleword(p_rd: num, p_address: num, p_load: num) warp {
+    if p_address % 4 > 0 {
+        mem_raise(FSR_ALIGNMENT, 0, 1 - p_load, p_address);
+        return;
+    }
+    if p_load > 0 {
+        let low: num = cpu_read32(p_address, 0);
+        if mem_fault > 0 { return; }
+        let high: num = cpu_read32(p_address + 4, 0);
+        if mem_fault > 0 { return; }
+        cpu_set_reg(p_rd, low);
+        cpu_set_reg(p_rd + 1, high);
+    } else {
+        cpu_write32(p_address, cpu_get_reg(p_rd));
+        cpu_write32(p_address + 4, cpu_get_reg(p_rd + 1));
+    }
+}
+
+pub proc cpu_class_extra_load_store() warp {
+    let sh: num = floor(cpu_ir / 32) % 4;
+    let load: num = floor(cpu_ir / 1048576) % 2;
+    let rn: num = floor(cpu_ir / 65536) % 16;
+    let rd: num = floor(cpu_ir / 4096) % 16;
+    let rm: num = cpu_ir % 16;
+    let base: num = cpu_get_reg(rn);
+    let offset: num = 0;
+    if floor(cpu_ir / 4194304) % 2 > 0 { offset = floor(cpu_ir / 256) % 16 * 16 + cpu_ir % 16; }
+    else { offset = cpu_get_reg(rm); }
+    // `U` adds or subtracts and `P` says where the sum goes, exactly as for a
+    // word transfer: pre-indexed the sum is the address and `W` decides the
+    // writeback, post-indexed the base is the address and the sum is always
+    // written back.
+    let pre: num = floor(cpu_ir / 16777216) % 2;
+    let up: num = floor(cpu_ir / 8388608) % 2;
+    let sum: num = (base + offset) % 4294967296;
+    if up == 0 { sum = (base - offset) % 4294967296; }
+    cpu_address = base % 4294967296;
+    if pre > 0 { cpu_address = sum; }
+    let writeback: num = 0;
+    if pre == 0 || floor(cpu_ir / 2097152) % 2 > 0 { writeback = 1; }
+    // What `sh` selects, and what the load bit means inside it, is the
+    // encoding's table and not the mnemonics' order. The toolchain is the
+    // authority this was read off -- assemble it, disassemble it, read the word:
+    //
+    //     e1d100d0  ldrsb r0, [r1]        sh=2, L=1
+    //     e1d320f0  ldrsh r2, [r3]        sh=3, L=1
+    //     e1d540b0  ldrh  r4, [r5]        sh=1, L=1
+    //     e1c760b0  strh  r6, [r7]        sh=1, L=0
+    //     e1cd21d8  ldrd  r2, [sp, #24]   sh=2, L=0
+    //     e1cd21f8  strd  r2, [sp, #24]   sh=3, L=0
+    //
+    // The halfword is the only pair whose direction is the load bit, and the
+    // doubleword is the only pair whose direction is `sh` -- both halves of a
+    // `ldrd` carry the load bit clear, which is why sorting these cases the way
+    // the names sort reads `ldrsh` as a `ldrd`.
+    //
+    // `sh == 0` is `1001` at bits 7:4, the multiply and swap space, and
+    // binutils will not disassemble it in this position. It is not a transfer
+    // on this core, and saying so is better than inventing one.
+    // As with a single transfer: a load that faults leaves its destination
+    // alone, because the retry is the instruction itself.
+    if sh == 1 {
+        if load > 0 {
+            let value: num = cpu_load16(cpu_address);
+            if mem_fault > 0 { return; }
+            cpu_set_reg(rd, value);
+        } else { cpu_store16(cpu_address, cpu_get_reg(rd)); }
+    } else if sh == 2 && load == 0 {
+        cpu_doubleword(rd, cpu_address, 1);
+    } else if sh == 3 && load == 0 {
+        cpu_doubleword(rd, cpu_address, 0);
+    } else if sh == 2 {
+        // ldrsb: the byte, sign extended to the word.
+        let value: num = cpu_read8(cpu_address, 0);
+        if mem_fault > 0 { return; }
+        if value > 127 { value -= 256; }
+        cpu_set_reg(rd, value % 4294967296);
+    } else if sh == 3 {
+        // ldrsh: the halfword, sign extended to the word.
+        let value: num = cpu_load16(cpu_address);
+        if mem_fault > 0 { return; }
+        if value > 32767 { value -= 65536; }
+        cpu_set_reg(rd, value % 4294967296);
+    } else {
+        cpu_undefined();
+        return;
+    }
+    if mem_fault > 0 { return; }
+    // The writeback happens even when the load wrote `r15`, and this is not a
+    // special case for the halfword pair: it is the rule. Suppressing it when
+    // the *destination* is `r15` -- which is what testing `cpu_branched` here
+    // did -- is what a single register `pop` runs into, because `pop {pc}` is
+    // not a multiple transfer but `ldr pc, [sp], #4`, and a load into the
+    // program counter is a branch. What must not be written back is a base
+    // register of `r15`, because writing the program counter *is* that branch.
+    if writeback > 0 && rn != 15 { cpu_set_reg(rn, sum); }
+}
+
+/// A halfword load. ARMv5 allows an unaligned one when the U bit is set in the
+/// control register and faults with an alignment fault when it is not; the two
+/// halfwords either side of the address are what the aligned reads give.
+pub proc cpu_immediate() -> num warp {
+    // The rotate field is bits 11:8 and the value is bits 7:0. Dividing by
+    // 2048 -- which is two to the *eleven* -- takes bits 14:11 instead, and a
+    // rotate that is off by three places turns `mov r1, #16` into
+    // `mov r1, #1`: an immediate that is wrong in a way that looks like a
+    // device ignoring its programming.
+    let value: num = cpu_ir % 256;
+    let rotate: num = floor(cpu_ir / 256) % 16 * 2;
+    if rotate == 0 { return value; }
+    return floor(value / cpu_pow2[rotate + 1]) +
+        value % cpu_pow2[rotate + 1] * cpu_pow2[32 - rotate + 1];
+}
+
+/// The second operand of a register-form data processing instruction: an
+/// immediate shift of a register, or a shift of one register by another. A
+/// shift of zero does not touch the carry, which is what makes `mov r0, r1`
+/// leave C alone.
+pub proc cpu_shift(p_value: num, p_kind: num, p_amount: num) -> num warp {
+    if p_kind == 0 { return alu_lsl(p_value, p_amount, alu_shift_carry); }
+    if p_kind == 1 { return alu_lsr(p_value, p_amount, alu_shift_carry); }
+    if p_kind == 2 { return alu_asr(p_value, p_amount, alu_shift_carry); }
+    return alu_ror(p_value, p_amount, alu_shift_carry);
+}
+
+/// The operation, with the flags an arithmetic one carries. The logical ones
+/// take their carry from the shifter, which is why the two are separated.
+pub proc cpu_operand2() -> num warp {
+    let value: num = cpu_get_reg(cpu_ir % 16);
+    let kind: num = floor(cpu_ir / 32) % 4;
+    let amount: num = 0;
+    if floor(cpu_ir / 16) % 2 == 0 {
+        amount = floor(cpu_ir / 128) % 32;
+        if amount == 0 && kind > 0 && kind < 3 {
+            // LSR #0 and ASR #0 mean thirty-two, which is the encoding's way of
+            // saying "all of them".
+            return cpu_shift(value, kind, 32);
+        }
+        return cpu_shift(value, kind, amount);
+    }
+    amount = cpu_get_reg(floor(cpu_ir / 256) % 16) % 256;
+    if amount == 0 { return value % 4294967296; }
+    if amount > 32 { alu_shift_carry = 0; if kind == 2 { return alu_sign(value) * 4294967295; } return 0; }
+    return cpu_shift(value, kind, amount);
+}
+
+pub proc cpu_apply_opcode() -> num warp {
+    if cpu_opcode == 0 { return alu_and(cpu_op1, cpu_op2); }
+    if cpu_opcode == 1 { return alu_xor(cpu_op1, cpu_op2); }
+    if cpu_opcode == 2 { return alu_sub(cpu_op1, cpu_op2, 0); }
+    if cpu_opcode == 3 { return alu_sub(cpu_op2, cpu_op1, 0); }
+    if cpu_opcode == 4 { return alu_add(cpu_op1, cpu_op2, 0); }
+    if cpu_opcode == 5 { return alu_add(cpu_op1, cpu_op2, floor(cpu_cpsr / 536870912) % 2); }
+    if cpu_opcode == 6 { return alu_sub(cpu_op1, cpu_op2, 1 - floor(cpu_cpsr / 536870912) % 2); }
+    if cpu_opcode == 7 {
+        return alu_sub(cpu_op2, cpu_op1, 1 - floor(cpu_cpsr / 536870912) % 2);
+    }
+    if cpu_opcode == 8 { return alu_and(cpu_op1, cpu_op2); }
+    if cpu_opcode == 9 { return alu_xor(cpu_op1, cpu_op2); }
+    if cpu_opcode == 10 { return alu_sub(cpu_op1, cpu_op2, 0); }
+    if cpu_opcode == 11 { return alu_add(cpu_op1, cpu_op2, 0); }
+    if cpu_opcode == 12 { return alu_or(cpu_op1, cpu_op2); }
+    if cpu_opcode == 13 { return cpu_op2 % 4294967296; }
+    if cpu_opcode == 14 { return alu_and(cpu_op1, alu_not(cpu_op2)); }
+    return alu_not(cpu_op2);
+}
+
+/// The flags a logical operation leaves: N and Z from the result, C from the
+/// shifter, and V alone.
+///
+/// Put into the status register the flags this instruction produced -- but only
+/// if it asked for them.
+///
+/// The arithmetic opcodes leave their four flags waiting in `alu_flags_field`
+/// rather than writing them where they are computed, because `S` is the
+/// instruction's decision and not the adder's. `add fp, sp, #20` must not touch
+/// the flags a `cmp` set two instructions earlier, and neither must `sub`,
+/// `rsb`, `adc`, `sbc` or `rsc`; the comparisons are the same opcodes with `S`
+/// forced, which is what makes them comparisons.
+///
+/// The logical opcodes have no such split: they take their carry from the
+/// shifter rather than from an adder, and this is only reached when `S` is set,
+/// so they write the status register themselves.
+pub proc cpu_commit_flags() warp {
+    if cpu_opcode > 1 && cpu_opcode < 8 { alu_commit_flags(); return; }
+    if cpu_opcode > 9 && cpu_opcode < 12 { alu_commit_flags(); return; }
+    alu_logical_flags(cpu_result);
+}
+
+// ---------------------------------------------------------------------------
+// Multiply, swap and the extra loads and stores
+// ---------------------------------------------------------------------------
+
+/// The multiplies. `mul` and `mla` take the low halves of two registers; the
+/// long forms take all of both and write a pair. A scratch number is exact to
+/// fifty-three bits, so a product of two 32-bit values is exact and the low and
+/// high halves are read out of it rather than computed separately.
+pub proc cpu_data_processing(p_immediate: num) warp {
+    cpu_opcode = floor(cpu_ir / 2097152) % 16;
+    cpu_setflags = floor(cpu_ir / 1048576) % 2;
+    cpu_rn = floor(cpu_ir / 65536) % 16;
+    cpu_rd = floor(cpu_ir / 4096) % 16;
+    if cpu_opcode > 7 && cpu_opcode < 12 { cpu_setflags = 1; }
+    cpu_op1 = cpu_get_reg(cpu_rn);
+    if p_immediate > 0 {
+        cpu_op2 = cpu_immediate();
+        // The carry out of a rotation is the last bit rotated out, which is
+        // bit 31 of what the rotation produced.
+        alu_shift_carry = floor(cpu_op2 / 2147483648) % 2;
+    } else {
+        cpu_op2 = cpu_operand2();
+    }
+    cpu_result = cpu_apply_opcode();
+    if cpu_rd == 15 && cpu_setflags > 0 {
+        // A data processing instruction that writes r15 *and* sets the flags is
+        // not an undefined instruction: it is ARM's exception return, and it is
+        // the instruction every handler ends with. `subs pc, lr, #4` writes
+        // the saved link register back to the program counter and restores the
+        // status register the exception saved on the way in, in one statement.
+        // Reading the saved register has to happen before the mode moves,
+        // because the saved register belongs to the bank being left.
+        let restored: num = cpu_spsr();
+        cpu_set_mode(restored % 32);
+        cpu_cpsr = restored;
+        cpu_set_reg(15, cpu_result);
+        return;
+    }
+    if cpu_setflags > 0 { cpu_commit_flags(); }
+    if cpu_opcode < 8 || cpu_opcode > 11 { cpu_set_reg(cpu_rd, cpu_result); }
+}
+
+/// The rotated immediate: an eight bit value rotated right by twice a four bit
+/// field, which is how a 32-bit constant is spelled in twelve bits.
+pub proc cpu_msr_immediate() warp {
+    cpu_msr_write(cpu_immediate(), floor(cpu_ir / 65536) % 16,
+        floor(cpu_ir / 4194304) % 2);
+}
+
+pub proc cpu_class_data_processing() warp {
+    let b2723: num = floor(cpu_ir / 8388608) % 32;
+    let b114: num = floor(cpu_ir / 16) % 256;
+    if floor(cpu_ir / 33554432) % 2 > 0 {
+        // Bit 25 set: a rotated immediate. `msr` with an immediate lives in
+        // this space too -- `cond 00110 R 10 field_mask 1111 rotate imm8` --
+        // and is told apart by that whole shape: bits 27:23 are six, bits 21:20
+        // are two, and the destination field is required to be `r15`.
+        //
+        // Reading the tag as two instead of six is what this used to do, which
+        // is the *register* form's space and not this one. The instruction that
+        // shows it is the first instruction of any Linux kernel, `msr cpsr_c,
+        // #0xd3`, which then fell through to the data processing path, had its
+        // `S` bit forced to one for being in the comparison opcode range, and
+        // was read as "a data processing instruction that writes r15 with S
+        // set" -- ARM's exception return. It restored a status register that
+        // had never been saved, which is zero, and the kernel died in user mode
+        // on its first instruction.
+        if b2723 == 6 && floor(cpu_ir / 1048576) % 4 == 2 { cpu_msr_immediate(); return; }
+        cpu_data_processing(1);
+        return;
+    }
+    // Bit 25 clear. Bits 27:23 name the miscellaneous space; inside it, bits
+    // 7:4 name the group and *not* bits 11:4.
+    //
+    // Bits 11:8 are the `Rs` register in every one of the multiply encodings, so
+    // a tag read out of bits 11:4 is a register number with a shift amount glued
+    // to it: `lsl r2, r3, #1` has bits 7:4 equal to `1000` and bits 11:4 equal to
+    // eight for the same reason `0x08` has a low nibble of eight, and reading
+    // the tag from bits 11:4 called it -- by way of `b114 == 8` -- a *long
+    // multiply*. It then multiplied two registers nobody had asked it to
+    // multiply and wrote the halves over `rdlo` and `rdhi`. The loop that fills
+    // the kernel's page tables shifts to pick which half of the table to write,
+    // and that shift became a multiply.
+    let b74: num = b114 % 16;
+    // The extra loads and stores are decided first, and *before* the
+    // miscellaneous space below, because the two overlap. `cond 000 P U ...`
+    // with `P` set and `U` clear has bits 27:23 of `00010`, which is the same
+    // five bits an `mrs` or a `bx` has; what tells them apart is bit 7, which
+    // every extra load and store sets and nothing in the miscellaneous space
+    // does. So `b74` of `11`, `13` or `15` is a halfword, a signed byte or a
+    // signed halfword, and never a status register move.
+    //
+    // Taken the other way round, `ldrh r3, [r3, #-8]` -- a pre-indexed
+    // halfword load with a *negative* offset, which is the one shape where the
+    // two spaces collide -- went to `cpu_class_misc`, matched nothing in it,
+    // and fell out as a *comparison*. A load writes its destination and a
+    // comparison does not, so the register kept the address the load was meant
+    // to read from. The BPF verifier reads the last filter entry's code that
+    // way, saw an address where `BPF_RET` should be, and the kernel `BUG()`ed.
+    if b74 == 11 || b74 == 13 || b74 == 15 { cpu_class_extra_load_store(); return; }
+    if b2723 == 2 {
+        // The space where `mrs`, `msr`, `swap`, `bx`, `clz` and the halfword
+        // multiplies live together, told apart by bits 11:4 and by the `SBZ`
+        // fields.
+        cpu_class_misc();
+        return;
+    }
+    if b74 == 9 {
+        // Everything here fixes bits 7:4 at `1001` and is told apart by bits
+        // 27:23: `mul` and `mla` at zero, the long multiplies at one, and a
+        // halfword transfer whose type bits are both clear at three.
+        if b2723 == 0 { cpu_multiply(); return; }
+        if b2723 == 1 { cpu_long_multiply(); return; }
+        cpu_class_extra_load_store();
+        return;
+    }
+    cpu_data_processing(0);
+}
+
+/// One of the eighteen data processing operations. `p_immediate` says which
+/// space the encoding came from; everything after the second operand is the
+/// same, and `S` decides whether the flags are written -- with the four
+/// comparisons having no destination register and always writing them.
+pub proc cpu_load_word(p_address: num) -> num warp {
+    let shift: num = p_address % 4;
+    let base: num = p_address - shift;
+    let low: num = cpu_read32(base, 0);
+    if mem_fault > 0 { return 0; }
+    if shift == 0 { return low; }
+    let high: num = cpu_read32(base + 4, 0);
+    if mem_fault > 0 { return 0; }
+    return floor(low / cpu_pow2[shift * 8 + 1]) +
+        (high % cpu_pow2[shift * 8 + 1]) * cpu_pow2[32 - shift * 8 + 1];
+}
+
+pub proc cpu_store_word(p_address: num, p_value: num) warp {
+    let shift: num = p_address % 4;
+    let base: num = p_address - shift;
+    if shift == 0 { cpu_write32(base, p_value); return; }
+    // Unaligned stores are unpredictable on ARM and this machine writes the
+    // aligned word the way the architecture describes a little-endian
+    // implementation doing it: the bytes that fit, and nothing beyond them.
+    let old: num = cpu_read32(base, 0);
+    if mem_fault > 0 { return; }
+    let bits: num = 32 - shift * 8;
+    let low: num = old - floor(old / cpu_pow2[shift * 8 + 1]) % 256 * cpu_pow2[shift * 8 + 1] +
+        (p_value % 256) * cpu_pow2[shift * 8 + 1];
+    cpu_write32(base, low);
+    if shift > 0 {
+        let second: num = cpu_read32(base + 4, 0);
+        if mem_fault > 0 { return; }
+        cpu_write32(base + 4, floor(p_value / 256) % cpu_pow2[bits + 1] +
+            floor(second / cpu_pow2[bits + 1]) * cpu_pow2[bits + 1]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Block transfer
+// ---------------------------------------------------------------------------
+
+/// `ldm` and `stm`, in all four addressing modes, with or without writeback,
+/// and with the `^` that says the user mode's registers rather than the
+/// current mode's. A block that writes `r15` is a branch and a mode change.
+pub proc cpu_class_load_store() warp {
+    let register_offset: num = floor(cpu_ir / 33554432) % 2;
+    let rn: num = floor(cpu_ir / 65536) % 16;
+    let rd: num = floor(cpu_ir / 4096) % 16;
+    let base: num = cpu_get_reg(rn);
+    let offset: num = 0;
+    if register_offset == 0 { offset = cpu_ir % 4096; }
+    else {
+        offset = cpu_get_reg(cpu_ir % 16);
+        offset = cpu_shift(offset, floor(cpu_ir / 32) % 4, floor(cpu_ir / 128) % 32);
+    }
+    // `U` says whether the offset is added or subtracted, and `P` says where it
+    // goes. Pre-indexed, the sum is the address and is written back only if `W`
+    // asks; post-indexed, the *base* is the address and the sum is always
+    // written back afterwards.
+    //
+    // Using the sum as the address in both cases puts every post-indexed access
+    // one offset past where it belongs. `ldr r0, [r1], #4` then reads from four
+    // bytes too far and advances as well, so a walk through a table is one
+    // entry out from the first step -- and the table this matters for is the
+    // kernel's own, which is filled by `str r3, [r0], #4` in a loop. Every
+    // section mapping landed one entry down, the top of the kernel's image was
+    // mapped a megabyte low, and fetching an instruction there found the middle
+    // of a string.
+    let pre: num = floor(cpu_ir / 16777216) % 2;
+    let up: num = floor(cpu_ir / 8388608) % 2;
+    let sum: num = (base + offset) % 4294967296;
+    if up == 0 { sum = (base - offset) % 4294967296; }
+    cpu_address = base % 4294967296;
+    if pre > 0 { cpu_address = sum; }
+    let load: num = floor(cpu_ir / 1048576) % 2;
+    let byte: num = floor(cpu_ir / 4194304) % 2;
+    // A post-indexed transfer always writes back; a pre-indexed one writes back
+    // when `W` says so.
+    let writeback: num = 0;
+    if pre == 0 || floor(cpu_ir / 2097152) % 2 > 0 { writeback = 1; }
+    // A transfer that faults writes *nothing* -- not the base register and not
+    // the destination. The abort handler returns to the instruction that
+    // faulted and runs it again, so a register the aborted instruction touched
+    // is a register the retry reads: `ldr r0, [sl, r0]` is a load of the GOT
+    // entry whose number is in `r0`, and it is the first thing a statically
+    // linked program executes. Writing the placeholder its failed load returned
+    // into `r0` makes the retry read GOT entry zero instead, which is the word
+    // the dynamic linker reserves as the table's own address and is therefore
+    // always zero -- so `main` comes back as null and the program branches to
+    // address zero before it has run a single instruction of its own.
+    if byte > 0 {
+        if load > 0 {
+            let value: num = cpu_read8(cpu_address, 0);
+            if mem_fault > 0 { return; }
+            cpu_set_reg(rd, value);
+        } else { cpu_write8(cpu_address, cpu_get_reg(rd)); }
+    } else {
+        if load > 0 {
+            let value: num = cpu_load_word(cpu_address);
+            if mem_fault > 0 { return; }
+            cpu_set_reg(rd, value);
+        } else { cpu_store_word(cpu_address, cpu_get_reg(rd)); }
+    }
+    if mem_fault > 0 { return; }
+    if writeback > 0 && rn != 15 { cpu_set_reg(rn, sum); }
+}
+
+/// A word load, aligned or not. ARM allows an unaligned word load and makes it
+/// the aligned word with the bytes rotated, which with byte addressed memory is
+/// two reads and a join.
+/// How many registers a multiple transfer names. Sixteen bits of register
+/// list, so the count is a table read rather than walking all sixteen bits
+/// -- and a kernel copy is eight thousand multiple transfers, each of which
+/// asked this question twice.
+pub fn cpu_block_count() -> num {
+    alu_pop_lut[cpu_ir % 65536 + 1]
+}
+
+/// A register as the user mode would see it, for `ldm`/`stm` with the `^`
+/// suffix. Only `r13` and `r14` differ between the current mode and user mode
+/// on this machine, and only for the modes that bank them.
+pub proc cpu_set_user_reg(p_reg: num, p_value: num) warp {
+    if p_reg == 13 || p_reg == 14 {
+        let savedmode: num = cpu_mode();
+        cpu_set_mode(MODE_USER);
+        cpu_bank[cpu_bank_off + p_reg - 12] = p_value % 4294967296;
+        cpu_set_mode(savedmode);
+        return;
+    }
+    cpu_set_reg(p_reg, p_value);
+}
+
+// ---------------------------------------------------------------------------
+// Branch
+// ---------------------------------------------------------------------------
+
+pub proc cpu_get_user_reg(p_reg: num) -> num warp {
+    if p_reg == 13 || p_reg == 14 {
+        let savedmode: num = cpu_mode();
+        cpu_set_mode(MODE_USER);
+        let value: num = cpu_bank[cpu_bank_off + p_reg - 12];
+        cpu_set_mode(savedmode);
+        return value;
+    }
+    return cpu_get_reg(p_reg);
+}
+
+pub proc cpu_class_block() warp {
+    let pre: num = floor(cpu_ir / 16777216) % 2;
+    let up: num = floor(cpu_ir / 8388608) % 2;
+    // Bit 22 is S, the "use the user mode registers" bit, and bit 21 is W, the
+    // writeback bit. They are adjacent and the first draft had them the other
+    // way round, which makes every `stmia rN!, {...}` look like a store of the
+    // user mode's registers and every `stmia rN, {...}` look like a writeback.
+    let user: num = floor(cpu_ir / 4194304) % 2;
+    let writeback: num = floor(cpu_ir / 2097152) % 2;
+    let load: num = floor(cpu_ir / 1048576) % 2;
+    let rn: num = floor(cpu_ir / 65536) % 16;
+    let base: num = cpu_get_reg(rn);
+    // A store with the user-register bit is ARM's `STM(2)`: it writes the
+    // *User* mode registers while the processor is in whatever mode it is
+    // really in. It is the instruction the kernel's own exception entry is
+    // built from -- `stmdb r0, {sp, lr}^` saves the user stack pointer and link
+    // register on the way into a handler, and `stmdb r8, {sp, lr}^` puts them
+    // back into a signal frame -- and it is only the list *containing* `r15`
+    // that the architecture leaves unpredictable, because the program counter
+    // is not a register the bank being written is running.
+    if user > 0 && load == 0 && floor(cpu_ir / 32768) % 2 > 0 { cpu_undefined(); return; }
+    // The user bit means "the User-mode registers" -- *unless* the register
+    // list contains the program counter, and then it means the opposite:
+    // load the registers the processor is already using and restore the
+    // status register from the saved one on the way out. That form is the
+    // exception return, and its list is `{r0 - pc}`, which spans `r13` and
+    // `r14`: reading it as the user-register form leaves the *handler's*
+    // stack pointer in place, so the function the interrupt interrupted
+    // returns through the handler's frame and finds a status word where its
+    // return address was.
+    let restores: num = 0;
+    if user > 0 && load > 0 && floor(cpu_ir / 32768) % 2 > 0 { restores = 1; }
+    let count: num = cpu_block_count();
+    if count == 0 { cpu_undefined(); return; }
+    let stride: num = 4;
+    // The four addressing modes are the two bits, not a table: increment after
+    // starts at the base and increment before starts one word above it, and the
+    // two decrementing modes start at the bottom of the block they transfer.
+    // The first draft had the two incrementing modes the wrong way round, which
+    // puts every multiple store one word -- two framebuffer pixels -- along, and
+    // leaves the first two pixels of each block unwritten.
+    let start: num = base;
+    if up > 0 { if pre > 0 { start = base + 4; } }
+    else { if pre > 0 { start = base - count * 4; } else { start = base - (count - 1) * 4; } }
+    cpu_address = start % 4294967296;
+    let address: num = cpu_address;
+    let reg: num = 0;
+    let i: num = 0;
+    repeat_until i >= 16 {
+        if floor(cpu_ir / cpu_pow2[i + 1]) % 2 > 0 {
+            if load > 0 {
+                // A block load that faults leaves the register it could not
+                // read alone, like every other load: the fault is retried from
+                // the start of the block.
+                let value: num = cpu_load_word(address);
+                if mem_fault > 0 { return; }
+                if user > 0 && restores == 0 { cpu_set_user_reg(i, value); }
+                else { cpu_set_reg(i, value); }
+            } else {
+                if user > 0 { cpu_store_word(address, cpu_get_user_reg(i)); }
+                else { cpu_store_word(address, cpu_get_reg(i)); }
+            }
+            if mem_fault > 0 { return; }
+            address = (address + 4) % 4294967296;
+        }
+        i += 1;
+    }
+    let final: num = base + count * 4;
+    if up == 0 { final = base - count * 4; }
+    if writeback > 0 { cpu_set_reg(rn, final % 4294967296); }
+    // And the status register last, because the mode it names is the mode the
+    // registers just loaded belong to and switching to it re-banks them.
+    if restores > 0 {
+        let restored: num = cpu_spsr();
+        cpu_set_mode(restored % 32);
+        cpu_cpsr = restored;
+    }
+}
+
+pub proc cpu_class_branch() warp {
+    let link: num = floor(cpu_ir / 16777216) % 2;
+    let offset: num = cpu_ir % 16777216;
+    if floor(offset / 8388608) % 2 > 0 { offset -= 16777216; }
+    let target: num = (cpu_pc + 8 + offset * 4) % 4294967296;
+    if link > 0 { cpu_set_reg(14, cpu_pc + 4); }
+    cpu_set_reg(15, target);
+}
+
+// ---------------------------------------------------------------------------
+// The miscellaneous space
+// ---------------------------------------------------------------------------
+
+/// Bits 27 to 23 equal `00010`. This is where the instructions the decode tree
+/// could not fit live -- the ones that move the status register in and out, the
+/// ones that change instruction set, and the swap -- and it is told apart by
+/// bits 11 to 4, which every one of them fixes to a different value.
+pub proc cpu_class_coprocessor_load_store() warp {
+    // The coprocessor number is bits 11:8. Bits 27:24 are the `1110` that says
+    // this is a coprocessor instruction at all, and reading the number out of
+    // them makes coprocessor 14 out of coprocessor 15 -- which is the whole of
+    // the difference between a register the kernel can read and one it cannot.
+    let cp: num = floor(cpu_ir / 256) % 16;
+    let load: num = floor(cpu_ir / 1048576) % 2;
+    let rn: num = floor(cpu_ir / 65536) % 16;
+    let crd: num = floor(cpu_ir / 4096) % 16;
+    if cp != 15 || load == 0 { cpu_undefined(); return; }
+    // A double register transfer, which Linux uses to read a pair. The board
+    // has no coprocessor 15 registers worth reading in pairs, so this answers
+    // zero rather than faulting.
+    cpu_set_reg(crd, 0);
+    cpu_set_reg(crd + 1, 0);
+}
+
+pub proc cpu_swi() warp {
+    cpu_exception(8, 4, cpu_pc + 4);
+}
+
+/// An undefined instruction takes the undefined-instruction exception, which
+/// is how Linux discovers that this machine has no floating point unit and
+/// how a program that runs off the end of its code is caught.
+pub proc cpu_class_coprocessor_or_swi() warp {
+    let cp: num = floor(cpu_ir / 256) % 16;
+    if cpu_ir >= 4026531840 { cpu_undefined(); return; }
+    if cp == 15 {
+        let crn: num = floor(cpu_ir / 65536) % 16;
+        let crm: num = cpu_ir % 16;
+        let op1: num = floor(cpu_ir / 2097152) % 8;
+        let op2: num = floor(cpu_ir / 32) % 8;
+        let rd: num = floor(cpu_ir / 4096) % 16;
+        if floor(cpu_ir / 1048576) % 2 > 0 {
+            let value: num = cp15_read(op1, crn, crm, op2);
+            if rd == 15 {
+                // `mrc p15, 0, r15, ...` is ARM's test-and-clean, and it is the
+                // one coprocessor read that does not write a register: bits
+                // 31:28 of the data *are* the condition flags and the program
+                // counter is not touched. Done as an ordinary register write it
+                // is a branch, and Linux's `__flush_whole_cache` -- a loop that
+                // reads the cache status into `r15` and branches while it is
+                // dirty -- jumped to address zero on the first pass.
+                cpu_cpsr = alu_cpsr_with(cpu_cpsr, alu_cpsr_field(value));
+                return;
+            }
+            cpu_set_reg(rd, value);
+            return;
+        }
+        cp15_write(op1, crn, crm, op2, cpu_get_reg(rd));
+        return;
+    }
+    // `swi` and a coprocessor instruction share bits 27:25, and only bit 24
+    // tells them apart: `swi` has it set and every coprocessor instruction has
+    // it clear. Testing bits 27:26 instead catches `mrc` and `mcr` as well, so
+    // every coprocessor read the kernel makes -- starting with the one that
+    // asks the processor who it is -- is taken as a supervisor call.
+    if floor(cpu_ir / 16777216) % 16 == 15 { cpu_swi(); return; }
+    // Every other coprocessor: this board has an ARM926, which has none, and
+    // the one instruction Linux uses to find that out is `mrc` on a coprocessor
+    // that does not answer -- which is exactly what an undefined instruction is
+    // for.
+    cpu_undefined();
+}
+
+/// `swi`, the supervisor call. The exception's return address is the address
+/// after the instruction, so the handler can return to it.
+pub proc cpu_execute() warp {
+    let cond: num = floor(cpu_ir / 268435456);
+    if alu_cond(cond) == 0 { return; }
+    let cls: num = floor(cpu_ir / 33554432) % 8;
+    if cls < 2 { cpu_class_data_processing(); return; }
+    if cls < 4 { cpu_class_load_store(); return; }
+    if cls == 4 { cpu_class_block(); return; }
+    if cls == 5 { cpu_class_branch(); return; }
+    if cls == 6 { cpu_class_coprocessor_load_store(); return; }
+    cpu_class_coprocessor_or_swi();
+}
+
+// ---------------------------------------------------------------------------
+// Data processing
+// ---------------------------------------------------------------------------
+
+pub proc cpu_step() warp {
+    // The interrupt is checked before the instruction and not after it. An IRQ
+    // arrives between two instructions, and its return address is the address
+    // of the instruction that would have run next -- which is this one.
+    if cpu_irq_pending > 0 {
+        if floor(cpu_cpsr / 128) % 2 == 0 {
+            cpu_exception(24, 4, cpu_pc + 4);
+            return;
+        }
+    }
+    mem_fault = 0;
+    cpu_ir = mem_cpu_fetch(cpu_pc);
+    if mem_fault > 0 { cpu_exception(12, 4, cpu_pc + 4); return; }
+    cpu_instructions += 1;
+    cpu_branched = 0;
+    cpu_execute();
+    if mem_fault > 0 { cpu_exception(16, 8, cpu_pc + 8); return; }
+    if cpu_branched == 0 { cpu_pc = (cpu_pc + 4) % 4294967296; }
+}
+
+/// Fetch, with the abort number the handler needs: a prefetch abort's saved
+/// link register is the address of the instruction that could not be read plus
+/// four, so the handler returns to it and faults again rather than skipping it.
+pub proc cpu_take_interrupts() warp {
+    if cpu_halted > 0 { return; }
+    if cpu_irq_pending == 0 { return; }
+    if floor(cpu_cpsr / 128) % 2 > 0 { return; }
+    cpu_exception(24, 4, cpu_pc + 4);
+}
+

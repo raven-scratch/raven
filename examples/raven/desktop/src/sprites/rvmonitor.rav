@@ -1,0 +1,31 @@
+// The monitor, as a sprite.
+//
+// The Stage's pen belongs to a sprite, so the screen needs one of its own, and
+// this is it: hidden, with a one-pixel costume it never wears, drawing the
+// graphics card's scanout whenever the card has a frame the monitor has not
+// drawn. What "has not drawn" means is the panel's: the indexed one is the
+// frame the guest committed and the board latched, and the direct colour one
+// is the guest's own memory, read at the rate a pen can draw it.
+//
+// It is a separate target from the machine for the same reason `monitor.rav`
+// is in the ARM build: the machine's thread is `warp` from one end of a slice
+// to the other, and Scratch runs the targets in turn, so the drawing happens
+// in the gap the machine leaves when it hands the frame back.
+
+use rvmonitor::efb;
+
+sprite "Monitor" {
+    costume "blank" = "assets/blank.svg";
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("Monitor.run") {
+        pen::set_pen_size_to(1);
+        forever {
+            monitor_frames += 1;
+            monitor_draw();
+        }
+    }
+}

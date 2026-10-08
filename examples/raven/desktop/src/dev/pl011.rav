@@ -1,0 +1,263 @@
+// PL011 UART: the serial port, and the early console.
+//
+// Four instances, because the board has four and the guest's device tree names
+// all four. Only instance 0 has anything wired to its receiver -- the keyboard
+// -- but all four answer their identification registers, because that is how
+// the AMBA bus finds them: the kernel reads `UARTPeriphID0` to `3` and
+// `UARTPCellID0` to `3`, and a device whose identification does not read back as
+// a PL011 is not created at all. Those eight words are not decoration.
+//
+// The FIFOs are real in the sense that matters. The transmit side holds nothing
+// because a byte handed to it leaves for the console in the same access. The
+// receive side *is* the console's input queue, so a byte the guest has not read
+// is still in the FIFO and the flag register says so. The trigger levels in
+// `UARTIFLS` decide when the receive interrupt is raised, the interrupt mask
+// decides whether it reaches the interrupt controller, and reading the data
+// register is what clears it -- a level, not a latch, which is what the manual
+// says and what the driver expects.
+//
+// A byte written to the data register of a port with nothing attached to its
+// transmitter goes nowhere. That is what happens on real hardware, and it is
+// why UART3, which the board does have, prints nothing.
+
+use board::decode;
+use dev::console;
+
+/// 32 words per instance: every register below byte offset 0x80, which is all
+/// of them except the identification registers, which are constant.
+pub const WORDS_PER_PORT: num = 32;
+
+/// Register word numbers: the byte offsets the manual gives, divided by four.
+pub const R_DR: num = 0;
+pub const R_RSR: num = 1;
+pub const R_FR: num = 6;
+pub const R_ILPR: num = 8;
+pub const R_IBRD: num = 9;
+pub const R_FBRD: num = 10;
+pub const R_LCR: num = 11;
+pub const R_CR: num = 12;
+pub const R_IFLS: num = 13;
+pub const R_IMSC: num = 14;
+pub const R_RIS: num = 15;
+pub const R_MIS: num = 16;
+pub const R_ICR: num = 17;
+pub const R_DMACR: num = 18;
+
+// The flag register's bits.
+pub const FR_CTS: num = 1;
+pub const FR_DSR: num = 2;
+pub const FR_DCD: num = 4;
+pub const FR_BUSY: num = 8;
+pub const FR_RXFE: num = 16;
+pub const FR_TXFF: num = 32;
+pub const FR_RXFF: num = 64;
+pub const FR_TXFE: num = 128;
+
+// The interrupt bits, the same number in RIS, MIS, IMSC and ICR.
+pub const INT_RX: num = 16;
+pub const INT_TX: num = 32;
+pub const INT_RT: num = 64;
+
+// PrimeCell identification. `0x00041011` is a PL011 read a byte at a time --
+// designer 1, part 0x011, revision 0 -- and `0xB105F00D` is the ARM PrimeCell
+// signature the AMBA bus looks for before it will create a device.
+pub const PERIPH0: num = 17;
+pub const PERIPH1: num = 16;
+pub const PERIPH2: num = 4;
+pub const PERIPH3: num = 0;
+pub const CELL0: num = 13;
+pub const CELL1: num = 240;
+pub const CELL2: num = 5;
+pub const CELL3: num = 177;
+
+@scratch_global
+pub var pl011_regs: list<num> = [
+    // Four instances of 32 words. Everything starts at zero; reset puts back
+    // the two words that are not, and no list literal is long enough to hold
+    // four copies of a reset value that only two registers need.
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+
+pub proc pl011_reset() warp {
+    let inst: num = 0;
+    repeat_until inst >= 4 {
+        let base: num = inst * WORDS_PER_PORT;
+        let word: num = 0;
+        repeat_until word >= WORDS_PER_PORT {
+            pl011_regs[base + word + 1] = 0;
+            word += 1;
+        }
+        pl011_regs[base + R_CR + 1] = 768;     // TXE and RXE, the manual's reset value
+        pl011_regs[base + R_IFLS + 1] = 18;    // both triggers at half full
+        inst += 1;
+    }
+}
+
+/// How many bytes are waiting in a port's receive FIFO. Only port 0 has a
+/// receiver; the other three have nothing attached to their input pins, which
+/// is exactly what an unused UART sees.
+pub proc pl011_rx_level(p_inst: num) -> num warp {
+    if p_inst != 0 { return 0; }
+    let level: num = console_in.len();
+    if level > 16 { return 16; }
+    return level;
+}
+
+/// A trigger level from `UARTIFLS`, whose encoding is 0 for 1/8, 1 for 1/4,
+/// 2 for 1/2, 3 for 3/4 and 4 for 7/8 of a sixteen-deep FIFO.
+pub proc pl011_trigger_level(p_sel: num) -> num warp {
+    if p_sel == 0 { return 2; }
+    if p_sel == 1 { return 4; }
+    if p_sel == 2 { return 8; }
+    if p_sel == 3 { return 12; }
+    if p_sel == 4 { return 14; }
+    return 2;
+}
+
+pub proc pl011_rx_trigger(p_inst: num) -> num warp {
+    let sel: num = floor(pl011_regs[p_inst * WORDS_PER_PORT + R_IFLS + 1] / 8) % 8;
+    return pl011_trigger_level(sel);
+}
+
+pub proc pl011_tx_trigger(p_inst: num) -> num warp {
+    let sel: num = pl011_regs[p_inst * WORDS_PER_PORT + R_IFLS + 1] % 8;
+    return pl011_trigger_level(sel);
+}
+
+/// The raw interrupt status, worked out from the FIFOs rather than latched. A
+/// PL011's receive interrupt is a level: it is there for as long as there is
+/// something in the FIFO to read, and it goes when the byte is read.
+///
+/// The transmit interrupt is "the FIFO is at or below its trigger", and this
+/// FIFO is empty whenever anything asks, so it is always set. The driver masks
+/// the line until it has something to send and unmasks it again when it does,
+/// which is exactly what a transmit interrupt is for.
+pub proc pl011_ris(p_inst: num) -> num warp {
+    let value: num = INT_TX;
+    let level: num = pl011_rx_level(p_inst);
+    if level > 0 && level >= pl011_rx_trigger(p_inst) { value += INT_RX; }
+    return value;
+}
+
+/// `ris & imsc`. Scratch has no bitwise and, so it is three tests rather than
+/// one operator; the three bits are the only ones this UART can raise.
+pub proc pl011_mask(p_inst: num) -> num warp {
+    let r: num = pl011_ris(p_inst);
+    let m: num = pl011_regs[p_inst * WORDS_PER_PORT + R_IMSC + 1];
+    let value: num = 0;
+    if floor(r / 16) % 2 > 0 && floor(m / 16) % 2 > 0 { value += INT_RX; }
+    if floor(r / 32) % 2 > 0 && floor(m / 32) % 2 > 0 { value += INT_TX; }
+    if floor(r / 64) % 2 > 0 && floor(m / 64) % 2 > 0 { value += INT_RT; }
+    return value;
+}
+
+/// The masked status: what the interrupt controller reads.
+pub proc pl011_mis(p_inst: num) -> num warp {
+    return pl011_mask(p_inst);
+}
+
+/// The device's interrupt line, one bit. This is the only thing a device ever
+/// says to the rest of the machine.
+pub proc pl011_irq(p_inst: num) -> num warp {
+    if pl011_mask(p_inst) > 0 { return 1; }
+    return 0;
+}
+
+/// The identification registers, which the AMBA bus reads before it will
+/// believe there is a device here at all.
+pub proc pl011_id_register(p_word: num) -> num warp {
+    if p_word == 1016 { return PERIPH0; }
+    if p_word == 1017 { return PERIPH1; }
+    if p_word == 1018 { return PERIPH2; }
+    if p_word == 1019 { return PERIPH3; }
+    if p_word == 1020 { return CELL0; }
+    if p_word == 1021 { return CELL1; }
+    if p_word == 1022 { return CELL2; }
+    if p_word == 1023 { return CELL3; }
+    return 0;
+}
+
+pub proc pl011_flag_register(p_inst: num) -> num warp {
+    // Nothing is plugged into the modem lines, so a driver that asks whether it
+    // may send is told yes. That is what a null-modem cable looks like.
+    let value: num = FR_CTS + FR_DSR + FR_DCD + FR_TXFE;
+    let level: num = pl011_rx_level(p_inst);
+    if level == 0 { value += FR_RXFE; }
+    if level >= 16 { value += FR_RXFF; }
+    return value;
+}
+
+/// Whether the port is on at all. `UARTCR` bit 0 is UARTEN, and a port that is
+/// not enabled does not transmit. The console may print before `pl011_startup`
+/// has run, so a port whose control register has never been written still
+/// sends -- that is the state the boot ROM leaves it in, and a serial port that
+/// stayed silent until Linux configured a baud rate would say nothing about
+/// anything that happened before Linux.
+pub proc pl011_enabled(p_inst: num) -> num warp {
+    let cr: num = pl011_regs[p_inst * WORDS_PER_PORT + R_CR + 1];
+    if cr % 2 > 0 { return 1; }
+    if cr == 768 { return 1; }
+    if cr == 0 { return 0; }
+    return 1;
+}
+
+pub proc pl011_read(p_inst: num, p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word >= 1016 && word <= 1023 { return pl011_id_register(word); }
+    if word > WORDS_PER_PORT - 1 { return 0; }
+    if word == R_DR {
+        // The data register. Reading it takes the oldest byte out of the FIFO,
+        // and that is what clears the receive interrupt.
+        if p_inst == 0 && console_in.len() > 0 {
+            let byte: num = console_in[1];
+            console_in.remove(1);
+            return byte;
+        }
+        return 0;
+    }
+    if word == R_FR { return pl011_flag_register(p_inst); }
+    if word == R_RIS { return pl011_ris(p_inst); }
+    if word == R_MIS { return pl011_mask(p_inst); }
+    // The error-clear register reads as the receive status, which is zero:
+    // nothing on this machine's serial line makes framing or parity errors.
+    if word == R_RSR { return 0; }
+    // The clear register is write-only.
+    if word == R_ICR { return 0; }
+    return pl011_regs[p_inst * WORDS_PER_PORT + word + 1];
+}
+
+pub proc pl011_write(p_inst: num, p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    if word >= 1016 && word <= 1023 { return; }
+    if word > WORDS_PER_PORT - 1 { return; }
+    if word == R_DR {
+        // The transmitter. A port with nothing wired to its output pin loses the
+        // byte, which is what happens on the real board: only UART0 has a
+        // connector on it, and it is the one the monitor is watching.
+        if p_inst == 0 {
+            console_writes += 1;
+            if pl011_enabled(p_inst) > 0 { put_byte(p_value % 256); }
+            else { console_refused += 1; }
+        }
+        return;
+    }
+    // Clearing an interrupt is a write of ones to the bits to clear, and it is
+    // the only write that does. The receive status is not latched here, so a
+    // write that clears it has nothing to clear and is dropped rather than
+    // pretended at.
+    if word == R_ICR || word == R_RSR { return; }
+    pl011_regs[p_inst * WORDS_PER_PORT + word + 1] = p_value % 4294967296;
+}
+
+pub proc pl011_tick(p_cycles: num) warp {
+    // A UART's clock decides its baud rate and nothing this machine can see. A
+    // byte leaves when it is written, which is what a FIFO that is never full
+    // does.
+}

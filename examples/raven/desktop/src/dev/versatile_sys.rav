@@ -1,0 +1,111 @@
+// The board's own registers: the core module at `0x1000_0000`.
+//
+// This is the part of the machine that belongs to the motherboard rather than
+// to any peripheral. It is where the board says who it is, where the LEDs are,
+// where the software switches are, whether an SD card is in its socket, and --
+// the one the whole display path hangs on -- which panel is plugged into the
+// CLCD adaptor.
+//
+// Two device tree nodes land on this address, because on the real board they
+// are one FPGA register window seen two ways: `core-module@10000000`, which is
+// the board's own registers, and `sysreg@0` inside the FPGA node, which is
+// where the display driver and the panel driver both look for `SYS_CLCD`.
+// Serving both from one register file is not a shortcut; it is what the address
+// map says.
+//
+// `SYS_CLCD` is the interesting register. The panel driver reads bits 8 to 12
+// of it and matches them against a table of panels it knows how to drive; if
+// nothing matches it refuses to probe and the machine has no display at all. So
+// the value there is not decoration -- it is the board telling the guest what
+// is physically plugged into it, and `boards/*.mjs` is where it is chosen.
+//
+// The file is flat: one word per 4-byte offset over the first 256 bytes, which
+// is one list read and one list write per access. Sparse would be tidier and
+// would cost a search, and this is a device the kernel touches whenever an LED
+// blinks.
+
+use board::decode;
+
+/// The board's identification. `0x41007004` is what an ARM Versatile reports:
+/// an ARM designer, part 0x07, revision 0. Linux does not read it -- it takes
+/// the board's identity from the device tree -- but a monitor would, and a
+/// machine that answers "who are you" with zero is not one.
+pub const SYS_ID: num = 1090547716;
+
+/// `SYS_CLCD` is at byte offset 0x50, which is word 20.
+pub const SYS_CLCD_WORD: num = 20;
+
+/// `SYS_MCI` is at byte offset 0x48, which is where the MMC driver asks whether
+/// a card is in the socket. Bit 0 is MMC0 and bit 1 is MMC1; with neither set
+/// the driver reports no card, which is the truth for this machine.
+pub const SYS_MCI_WORD: num = 18;
+
+/// How many SD cards are in the board's sockets, as the status register reports
+/// them: bit n for MMCn. Zero until a storage module is fitted.
+@scratch_global
+pub var sys_sd_cards: num = 0;
+
+@scratch_global
+pub var sys_regs: list<num> = [
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0
+];
+
+pub proc sys_reset() warp {
+    let word: num = 0;
+    repeat_until word >= 64 {
+        sys_regs[word + 1] = 0;
+        word += 1;
+    }
+    sys_regs[1] = SYS_ID;
+    sys_regs[SYS_CLCD_WORD + 1] = SYS_CLCD_VALUE;
+    sys_regs[SYS_MCI_WORD + 1] = sys_sd_cards;
+}
+
+/// The two bits of SYS_CLCD that decide how the board's PLD routes the LCD
+/// controller's output: which channel of a sixteen-bit pixel is where. The
+/// display driver sets them, and the controller reads them back, because on
+/// this board that mapping lives in the PLD and not in the controller.
+pub proc sys_clcd_mode() -> num warp {
+    return sys_regs[SYS_CLCD_WORD + 1] % 4;
+}
+pub proc sys_read(p_off: num) -> num warp {
+    let word: num = floor(p_off / 4);
+    if word > 63 { return 0; }
+    return sys_regs[word + 1];
+}
+
+pub proc sys_write(p_off: num, p_value: num) warp {
+    let word: num = floor(p_off / 4);
+    if word > 63 { return; }
+    // A write to a read-only register is dropped rather than remembered.
+    // `SYS_ID` and the card-status register are the board's; the LED register is
+    // writable; `SYS_CLCD` is partly writable, because the display driver sets
+    // the pixel format and the panel power bits in it and reads the panel id
+    // back out of the same word.
+    if word == 0 || word == SYS_MCI_WORD { return; }
+    sys_regs[word + 1] = p_value % 4294967296;
+}
+
+pub proc sys_tick(p_cycles: num) warp {
+    // The board's own registers have no clock. A heartbeat LED would, and would
+    // blink here.
+}
+
+pub proc sys_irq() -> num warp {
+    return 0;
+}

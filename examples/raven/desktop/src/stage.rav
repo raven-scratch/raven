@@ -1,0 +1,32 @@
+// The paper, and the order a power-on happens in.
+//
+// There is no terminal here that owns the screen. The screen is the LCD
+// controller's output, and the LCD controller is a device on the bus like any
+// other, so the stage's job is only to start the machine and get out of the
+// way: one sprite holds the CPU and every device it can reach, and the script
+// that runs it never returns until the guest stops.
+//
+// The order matters, and it is a real power-on order:
+//
+//   1. The machine resets every device and lays the boot ROM and the guest
+//      images where the memory map says they live.
+//   2. The monitor (in the other build, `src/monitor/`) starts drawing the
+//      LCD's scanout.
+//   3. Only then does the CPU come out of reset.
+//
+// The backdrop is the panel's own black: the Stage is the glass, so nothing
+// draws on it that the controller did not scan out.
+
+stage {
+    costume "paper" = "assets/backdrop.svg";
+
+    broadcast "Machine.powerOn";
+    broadcast "Machine.run";
+    broadcast "Monitor.run";
+
+    on flag_clicked {
+        events::broadcast_and_wait("Machine.powerOn");
+        events::broadcast("Monitor.run");
+        events::broadcast("Machine.run");
+    }
+}

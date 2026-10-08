@@ -1,0 +1,45 @@
+// The printable ASCII keys Scratch's key dropdown has no name for.
+//
+// Vanilla Scratch names a key in two places and neither is a keyboard: a hat's
+// key is a *field* whose values are the dropdown (`a`-`z`, `0`-`9`, `space`,
+// `enter`, the four arrows, `any`), and `key pressed?` takes a *value*. The
+// value one is the wider door: `_keyArgToScratchKey` returns a one-character
+// argument upper-cased, and upper case of punctuation is itself
+// (`ref/scratch-vm/node_modules/scratch-vm/src/io/keyboard.js:98-108`), so
+// `key pressed?` answers for `.` `/` `-` `=` `;` `,` and the rest of the
+// printable set. What it cannot do is *see a key-down*: it is a question about
+// the current state, and the only event a vanilla project can hang on a key
+// with no hat is `when any key pressed`, which fires for every key-down the
+// runtime accepted and does not say which key fired it.
+//
+// So the ARM board's input sprite asks, from that hat, about every key in the
+// table below. The RISC-V board needed the same thirty-two keys and the same
+// bytes, and it reads them from hats of their own now -- one per key, with the
+// character in the hat's field -- because a question about the state is answered
+// at a frame boundary and this machine's frames are longer than a keystroke. See
+// the README.
+//
+// The keys that are *not* here are not here because no vanilla block can see
+// them at all: `_keyStringToScratchKey` returns the empty string for any name
+// longer than one character that is not one of its own six and `postData`
+// returns before it emits or records anything (`keyboard.js:47-67`,
+// `:115-118`), so backspace, delete, escape, tab, the modifiers and the
+// function keys never reach a hat, never fire `any`, and cannot be asked about
+// by name either -- `key pressed? "backspace"` is cut to its first character
+// and asks about the letter `B` (`keyboard.js:94-101`, `:108`).
+
+/// The key itself, as the character `key pressed?` is asked about. Index `i` of
+/// this list and index `i` of `ascii_bytes` are the same key: Scratch has no
+/// records, so a table of pairs is two lists read at one index.
+pub var ascii_chars: list<str> = [
+    "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":",
+    ";", "<", "=", ">", "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|", "}", "~"
+];
+
+/// The byte each of those is on a serial console, and on the card's keyboard:
+/// both are ASCII for a symbol. `"` and `\` are written with the escapes
+/// raven-asm reads back (`crates/raven-asm/src/source.rs:14-27`).
+pub var ascii_bytes: list<num> = [
+    33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 58,
+    59, 60, 61, 62, 63, 64, 91, 92, 93, 94, 95, 96, 123, 124, 125, 126
+];

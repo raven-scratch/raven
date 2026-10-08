@@ -1,0 +1,104 @@
+// SDRAM: the memory the CPU, the LCD controller and the SD host all see.
+//
+// One Scratch list item to the 32-bit word at that address, little-endian,
+// because that is the width almost every access to it is. An ARM fetches an
+// instruction with one read and loads or stores a word with one read or write;
+// only the byte and halfword paths pay again for unpacking, and they are the
+// minority. A byte to an item would have made every one of those accesses four
+// list reads and every store four list writes.
+//
+// The list itself is generated -- `mem::sdram` is nothing but a Scratch list
+// literal, one zero per word -- and that is forced by the runtime rather than
+// chosen. Scratch refuses to add to a list at or past 200,000 items and refuses
+// to insert past it as well, so a list that grows through blocks cannot be
+// larger than 200,000 items however it is grown. The only list that can be
+// bigger is one that arrives that way, so the memory is written into the
+// project as a literal of exactly the size the board file asks for, and every
+// access to it is a replace into a list that is already long enough.
+//
+// Two things follow, and both are said again where they matter. A word the
+// guest has not written reads as the zero it was loaded with, which is what a
+// fresh machine's memory is. And a warm reset leaves memory alone, because
+// emptying the list would leave nothing that could ever fill it again -- which
+// is also what SDRAM does, so the machine and the runtime agree.
+//
+// A word is stored as its unsigned 32-bit reading, so `0xFFFF_FFFF` is
+// 4294967295 in the list; turning that back into -1 is the CPU's business and
+// nobody else's, which is why nothing here knows about signs.
+
+use board::decode;
+use mem::sdram;
+
+/// 256^i for the four bytes of a little-endian word: which byte of the word a
+/// given address selects, and by how much.
+@scratch_global
+pub var ram_byte_shift: list<num> = [1, 256, 65536, 16777216];
+
+/// A cold memory clear, one replace per word. Nothing calls it on the reset
+/// path: a project that has just been loaded *is* a cold machine, its memory
+/// arrives zeroed, and wiping it costs a replace for every word of the board's
+/// RAM. It is here for a run that wants a second cold machine without reloading
+/// the project.
+pub proc ram_wipe() warp {
+    let word: num = 1;
+    repeat RAM_WORDS {
+        ram[word] = 0;
+        word += 1;
+    }
+}
+
+/// A warm reset. SDRAM keeps what it was holding, which is what the real part
+/// does and what this list can do; see the note at the top.
+pub proc ram_reset() warp {
+}
+
+pub proc ram_read32(p_addr: num) -> num warp {
+    return ram[floor(p_addr / 4) + 1];
+}
+
+pub proc ram_write32(p_addr: num, p_value: num) warp {
+    ram[floor(p_addr / 4) + 1] = p_value % 4294967296;
+}
+
+/// The byte at a byte address. The low byte of the word is address 0, so the
+/// byte at `a` is word `a / 4` shifted down by `256^(a mod 4)`.
+pub proc ram_read8(p_addr: num) -> num warp {
+    let word: num = ram[floor(p_addr / 4) + 1];
+    return floor(word / ram_byte_shift[(p_addr % 4) + 1]) % 256;
+}
+
+pub proc ram_write8(p_addr: num, p_value: num) warp {
+    let slot: num = floor(p_addr / 4);
+    let shift: num = ram_byte_shift[(p_addr % 4) + 1];
+    let word: num = ram[slot + 1];
+    ram[slot + 1] = word - floor(word / shift) % 256 * shift + (p_value % 256) * shift;
+}
+
+pub proc ram_read16(p_addr: num) -> num warp {
+    if p_addr % 4 == 3 {
+        // A halfword that straddles two words: its low half is the top byte of
+        // the first word and its high half the bottom byte of the second.
+        let low: num = floor(ram[floor(p_addr / 4) + 1] / 16777216);
+        let high: num = ram[floor(p_addr / 4) + 2] % 256;
+        return low + high * 256;
+    }
+    let word: num = ram[floor(p_addr / 4) + 1];
+    return floor(word / ram_byte_shift[(p_addr % 4) + 1]) % 65536;
+}
+
+pub proc ram_write16(p_addr: num, p_value: num) warp {
+    let value: num = p_value % 65536;
+    let slot: num = floor(p_addr / 4);
+    let shift: num = ram_byte_shift[(p_addr % 4) + 1];
+    if p_addr % 4 == 3 {
+        let low: num = value % 256;
+        let high: num = floor(value / 256);
+        let first: num = ram[slot + 1];
+        ram[slot + 1] = first - floor(first / 16777216) % 256 * 16777216 + low * 16777216;
+        let second: num = ram[slot + 2];
+        ram[slot + 2] = second - second % 256 + high;
+        return;
+    }
+    let word: num = ram[slot + 1];
+    ram[slot + 1] = word - floor(word / shift) % 65536 * shift + value * shift;
+}

@@ -1,0 +1,31 @@
+// The monitor, as a sprite.
+//
+// The Stage's pen belongs to a sprite, so the screen needs one of its own, and
+// this is it: hidden, with a one-pixel costume it never wears, drawing the LCD
+// controller's output once a frame.
+//
+// It is a separate target from the machine on purpose. The machine's thread is
+// `warp` from one end of a slice to the other -- it has to be, or an interpreter
+// in Scratch gets nothing done -- and Scratch runs the targets in turn, so the
+// drawing happens in the gap the machine leaves when it hands the frame back.
+// That is the same split `rv32ima` makes between its machine and its terminal,
+// and it is the reason the machine's slice is a decision: it has to be shorter
+// than a frame, because what is left over is the screen's.
+
+use monitor::lcd;
+
+sprite "Monitor" {
+    costume "blank" = "assets/blank.svg";
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("Monitor.run") {
+        pen::set_pen_size_to(1);
+        forever {
+            monitor_frames += 1;
+            monitor_draw();
+        }
+    }
+}

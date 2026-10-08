@@ -1,0 +1,643 @@
+// CP15, the memory management unit, and the CPU's side of the bus.
+//
+// The MMU is a two-level table walk over ARMv5 short descriptors. Level one is
+// indexed by address bits 31:20 and is either a 1 MiB section or a coarse table
+// pointer; level two is indexed by bits 19:12 inside a coarse table and names a
+// 4 KiB small page. Each level carries a *domain* number, and the domain access
+// control register decides whether the domain is checked at all -- three of the
+// four values mean the access permissions in the descriptor are ignored, and
+// that is how a kernel maps a megabyte with one entry and no per-page work.
+//
+// Every bit position below is the kernel's own. `pgtable-2level-hwdef.h` is
+// where ARM's page table format is written down in this kernel, and a
+// translation that disagrees with it is a translation that disagrees with the
+// only program that will ever fill these tables in.
+//
+// There is a translation cache in front of the walk, and it is the one place in
+// this machine where a thing is remembered rather than derived. It is not the
+// real part's behaviour and it is not meant to be: it is invisible from the
+// guest, and what makes it safe is that every CP15 register that can change a
+// translation -- the control register, the table base, the process id and the
+// maintenance operations -- clears all of it. There is no order in which a
+// stale entry survives. Without it an access costs two reads of the page tables
+// on top of the access itself, and a kernel boot becomes something that does
+// not finish.
+
+use board::decode;
+use board::bus;
+use mem::ram;
+use mem::sdram;
+use dev::flash;
+use dev::pl110;
+use cpu::state;
+use cpu::alu;
+
+// ---------------------------------------------------------------------------
+// CP15
+// ---------------------------------------------------------------------------
+
+@scratch_global
+pub var cp15_control: num = 0;
+@scratch_global
+pub var cp15_ttb: num = 0;
+@scratch_global
+pub var cp15_dacr: num = 0;
+@scratch_global
+pub var cp15_fsr: num = 0;
+@scratch_global
+pub var cp15_far: num = 0;
+@scratch_global
+pub var cp15_pid: num = 0;
+@scratch_global
+pub var cp15_aux: num = 0;
+
+/// The main identification register. An ARM926EJ-S answers `0x41069260` --
+/// implementer `0x41`, variant zero, architecture six, part `0x926`, revision
+/// zero -- and Linux compares it against exactly that before it will use the
+/// ARM926 path at all: `__lookup_processor_type` walks its table of processors,
+/// masks each candidate against this, and stops at the first that matches.
+/// A machine that answers anything else is a machine with no processor Linux
+/// recognises, and the failure is silent -- `__error_p` prints through the
+/// debug UART, which this kernel does not have, so it spins.
+///
+/// The number below is `0x41069260`. `0x4106a260` is the same number with one
+/// digit moved and Linux rejects it; that is not a hypothetical, it is what
+/// this line said.
+pub const CP15_MAIN_ID: num = 1090949728;
+
+/// The cache type register: an ARM926EJ-S answers `0x1D152152`, which is
+/// sixteen kilobyte instruction and data caches, four-way, with thirty-two byte
+/// lines. Linux reads it for the line length it must clean a range in; because
+/// nothing here caches, every clean is a no-op and all that matters is that the
+/// number is one the kernel derives a sane geometry from.
+pub const CP15_CACHE_TYPE: num = 487924050;
+
+// Control register bits that this machine acts on.
+pub const CR_M: num = 1;            // MMU enable
+pub const CR_A: num = 2;            // alignment fault enable
+pub const CR_C: num = 4;            // data cache enable (nothing to enable)
+pub const CR_B: num = 128;          // big endian
+pub const CR_S: num = 256;          // system protection
+pub const CR_R: num = 512;          // ROM protection
+pub const CR_V: num = 8192;         // high exception vectors
+
+/// The address the exception vectors are at. Linux sets V, so the vectors are
+/// at the top of the address space and the bottom of memory stays usable; the
+/// boot ROM runs with V clear and lands on the low vectors.
+pub const HIGH_VECTORS: num = 4294901760;
+
+// ---------------------------------------------------------------------------
+// Faults
+// ---------------------------------------------------------------------------
+
+/// 0 while the last access was fine; 1 for a data abort, 2 for a prefetch
+/// abort. The core looks at this after an instruction has finished, because a
+/// fault ends the instruction rather than the access.
+///
+/// There is no second pair of fault registers beside CP15's own. The status and
+/// the address a fault reports *are* CP15 registers five and six, and a machine
+/// that keeps them somewhere else hands the kernel an `mrc` that reads zero --
+/// which is the encoding for "no fault at all". Linux's abort handler reads
+/// exactly that to decide whether to bring a page in, copy it on write or kill
+/// the process, so a zero there is a handler that does the wrong thing rather
+/// than a machine that reports nothing. This is what it did.
+@scratch_global
+pub var mem_fault: num = 0;
+
+/// The fault status codes, from the ARM926 manual. Section and page faults
+/// carry the same three meanings with different numbers, which is why they are
+/// spelled out rather than combined.
+pub const FSR_ALIGNMENT: num = 1;
+pub const FSR_SECTION_TRANSLATION: num = 5;
+pub const FSR_SECTION_DOMAIN: num = 11;
+pub const FSR_SECTION_PERMISSION: num = 13;
+pub const FSR_PAGE_TRANSLATION: num = 7;
+pub const FSR_PAGE_DOMAIN: num = 9;
+pub const FSR_PAGE_PERMISSION: num = 15;
+
+/// The last walk's effective permission: the descriptor's access permissions,
+/// or eight when the domain was a manager and there was nothing to check. The
+/// cache keeps this with the address, which is what lets a cached translation
+/// be asked whether a *write* may use it without walking the tables again.
+@scratch_global
+pub var mem_perm: num = 8;
+
+/// Whether the MMU is on, kept in a cell so that the four access paths below
+/// can take their fast path without a call. The boot ROM runs with it off
+/// for its whole life, including the copy of the kernel, and that copy is
+/// sixteen thousand multiple transfers.
+@scratch_global
+pub var cpu_mmu_on: num = 0;
+
+/// The last translation's physical address, for anything that wants to look at
+/// it without another walk.
+@scratch_global
+pub var mem_physical: num = 0;
+
+// ---------------------------------------------------------------------------
+// The translation cache
+// ---------------------------------------------------------------------------
+
+/// A direct-mapped array of two hundred and fifty-six pages, holding the
+/// virtual page number plus one -- so a zero is an empty slot -- the physical
+/// page, and the permission it was walked with.
+///
+/// Each hit costs one list read and three comparisons instead of two more reads
+/// of the page tables, which is the difference between a machine that boots a
+/// kernel in minutes and one that does not boot it at all.
+@scratch_global
+pub var tlb_tag: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+@scratch_global
+pub var tlb_pa: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+@scratch_global
+pub var tlb_perm: list<num> = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+
+pub proc tlb_flush() warp {
+    let i: num = 0;
+    repeat_until i >= 256 {
+        tlb_tag[i + 1] = 0;
+        i += 1;
+    }
+}
+
+pub proc vector_base() -> num warp {
+    if floor(cp15_control / 8192) % 2 > 0 { return HIGH_VECTORS; }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Records
+// ---------------------------------------------------------------------------
+
+/// Record a fault. The status is the low nibble; bits 7:4 are the domain and
+/// bit 10 says whether it was a write, and Linux reads all three to decide what
+/// to do -- a write permission fault is a copy-on-write page, a read one is a
+/// page that has not been brought in yet.
+pub proc mem_raise(p_status: num, p_domain: num, p_write: num, p_addr: num) warp {
+    mem_fault = 1;
+    cp15_fsr = p_status % 16 + p_domain * 16 + p_write * 1024;
+    cp15_far = p_addr % 4294967296;
+}
+
+pub proc mem_raise_fetch(p_status: num, p_domain: num, p_addr: num) warp {
+    mem_fault = 2;
+    cp15_fsr = p_status % 16 + p_domain * 16;
+    cp15_far = p_addr % 4294967296;
+}
+
+pub proc mem_clear_fault() warp {
+    mem_fault = 0;
+}
+
+pub proc mem_physical_set(p_addr: num) warp {
+    mem_physical = p_addr;
+}
+
+// ---------------------------------------------------------------------------
+// The permission rules
+// ---------------------------------------------------------------------------
+
+/// Whether an access is allowed at this privilege and this access permission.
+///
+/// The four values are ARM's with the S bit clear: no access, supervisor only,
+/// supervisor writes and user reads, and everyone. With the S bit set the
+/// encoding is the extended one, where bit 2 of the permission means read-only
+/// -- and the S bit is one Linux sets, so both are here.
+pub proc mem_permitted(p_ap: num, p_user: num) -> num warp {
+    let s: num = floor(cp15_control / 256) % 2;
+    if s > 0 {
+        // The S bit is CP15 control's bit 8, and the one thing it changes is
+        // that a permission of `00` stops meaning "no access at all" and
+        // starts meaning "privileged read/write, user none" -- which is what
+        // Linux maps a kernel-only page with. Everything else is the classic
+        // table. `devicemaps_init` maps the vector *stub* page with that
+        // permission: reading it the classic way refuses the processor the
+        // page its own interrupt vector branches into, and the abort handler
+        // cannot run because the abort handler is in that page.
+        if p_ap == 0 { if p_user > 0 { return 0; } return 1; }
+        if p_ap == 1 { if p_user > 0 { return 0; } return 1; }
+        if p_ap == 2 { return 1; }
+        return 1;
+    }
+    if p_ap == 0 { return 0; }
+    if p_ap == 1 { if p_user > 0 { return 0; } return 1; }
+    if p_ap == 2 { return 1; }
+    return 1;
+}
+
+/// Whether a *write* is allowed. The read test above is the same table with one
+/// more question: AP 2, and AP 6 with S set, are read-only.
+pub proc mem_permitted_write(p_ap: num, p_user: num) -> num warp {
+    let s: num = floor(cp15_control / 256) % 2;
+    if s > 0 {
+        // The same amendment, and the rest of the classic table: `10` is
+        // read-only for the user and `01` is nobody's but the kernel's.
+        if p_ap == 0 { if p_user > 0 { return 0; } return 1; }
+        if p_ap == 1 { if p_user > 0 { return 0; } return 1; }
+        if p_ap == 2 { if p_user > 0 { return 0; } return 1; }
+        return 1;
+    }
+    if p_ap == 0 { return 0; }
+    if p_ap == 1 { if p_user > 0 { return 0; } return 1; }
+    if p_ap == 2 { if p_user > 0 { return 0; } return 1; }
+    return 1;
+}
+
+/// The domain access control for a domain: 0 none, 1 client, 2 reserved,
+/// 3 manager. Only a client domain has its access permissions checked.
+pub proc mem_domain(p_domain: num) -> num warp {
+    return floor(cp15_dacr / cpu_pow2[p_domain * 2 + 1]) % 4;
+}
+
+/// Whether the processor is in the mode whose accesses are checked against the
+/// user permissions. There is one user mode and everything else is privileged.
+pub proc mem_user() -> num warp {
+    if cpu_mode() == MODE_USER { return 1; }
+    return 0;
+}
+
+/// Whether an access is allowed at this permission. Eight or more means the
+/// domain was a manager and no permission was checked at all.
+pub proc mem_allowed(p_perm: num, p_user: num, p_write: num) -> num warp {
+    if p_perm >= 8 { return 1; }
+    if p_write > 0 { return mem_permitted_write(p_perm, p_user); }
+    return mem_permitted(p_perm, p_user);
+}
+
+// ---------------------------------------------------------------------------
+// The walk
+// ---------------------------------------------------------------------------
+
+/// A small page's permission. The plain form carries four of them, one per
+/// 1 KiB subpage, in a byte at bits 11:4; the extended form carries one for the
+/// whole page at bits 5:4. Linux uses the plain form, because the extra bits
+/// are what let it make a page's first kilobyte read-only.
+pub proc mem_page_ap(p_va: num, p_l2: num, p_kind: num) -> num warp {
+    if p_kind == 3 { return floor(p_l2 / 16) % 4; }
+    return floor(floor(p_l2 / 16) % 256 / cpu_pow2[floor(p_va % 4096 / 1024) * 2 + 1]) % 4;
+}
+
+/// A 64 KiB large page: one translation, four permission fields. Linux does not
+/// build one on this machine -- nothing in its ARMv5 page tables asks for a
+/// large page -- so this path is written from the manual and is not exercised
+/// by anything the project boots. It is here because a machine that faults
+/// where the manual says it should not is a machine that is wrong in a way
+/// nobody will find.
+pub proc mem_large(p_va: num, p_l2: num, p_domain: num, p_user: num, p_write: num) -> num warp {
+    let dac: num = mem_domain(p_domain);
+    if dac == 0 { mem_raise(FSR_PAGE_DOMAIN, p_domain, p_write, p_va); return 0; }
+    let ap: num = floor(floor(p_l2 / 256) % 256 / cpu_pow2[floor(p_va % 65536 / 16384) * 2 + 1]) % 4;
+    if dac < 3 {
+        mem_perm = ap;
+        if mem_allowed(ap, p_user, p_write) == 0 {
+            mem_raise(FSR_PAGE_PERMISSION, p_domain, p_write, p_va);
+            return 0;
+        }
+    } else {
+        mem_perm = 8;
+    }
+    return p_l2 - p_l2 % 65536 + p_va % 65536;
+}
+
+pub proc mem_section(p_va: num, p_l1: num, p_domain: num, p_user: num, p_write: num) -> num warp {
+    let dac: num = mem_domain(p_domain);
+    if dac == 0 { mem_raise(FSR_SECTION_DOMAIN, p_domain, p_write, p_va); return 0; }
+    let ap: num = floor(p_l1 / 1024) % 4;
+    // A manager domain is not checked, and the cache has to remember that it
+    // was not: a permission of its own would be a permission the guest never
+    // asked for, and the cache would then enforce something the walk would not.
+    if dac < 3 {
+        mem_perm = ap;
+        if mem_allowed(ap, p_user, p_write) == 0 {
+            mem_raise(FSR_SECTION_PERMISSION, p_domain, p_write, p_va);
+            return 0;
+        }
+    } else {
+        mem_perm = 8;
+    }
+    return floor(p_l1 / 1048576) * 1048576 + p_va % 1048576;
+}
+
+pub proc mem_coarse(p_va: num, p_l1: num, p_domain: num, p_user: num, p_write: num) -> num warp {
+    let dac: num = mem_domain(p_domain);
+    if dac == 0 { mem_raise(FSR_PAGE_DOMAIN, p_domain, p_write, p_va); return 0; }
+    let l2: num = bus_read32(p_l1 - p_l1 % 1024 + floor(p_va / 4096) % 256 * 4);
+    let kind: num = l2 % 4;
+    if kind == 0 { mem_raise(FSR_PAGE_TRANSLATION, p_domain, p_write, p_va); return 0; }
+    if kind == 1 { return mem_large(p_va, l2, p_domain, p_user, p_write); }
+    let ap: num = mem_page_ap(p_va, l2, kind);
+    if dac < 3 {
+        mem_perm = ap;
+        if mem_allowed(ap, p_user, p_write) == 0 {
+            mem_raise(FSR_PAGE_PERMISSION, p_domain, p_write, p_va);
+            return 0;
+        }
+    } else {
+        mem_perm = 8;
+    }
+    return l2 - l2 % 4096 + p_va % 4096;
+}
+
+/// The walk itself: two reads of the page tables and the permission rules.
+pub proc cpu_walk(p_va: num, p_write: num) -> num warp {
+    let user: num = mem_user();
+    let l1: num = bus_read32(cp15_ttb - cp15_ttb % 16384 + floor(p_va / 1048576) * 4);
+    let kind: num = l1 % 4;
+    let domain: num = floor(l1 / 32) % 16;
+    if kind == 0 {
+        mem_raise(FSR_SECTION_TRANSLATION, domain, p_write, p_va);
+        return 0;
+    }
+    if kind == 2 { return mem_section(p_va, l1, domain, user, p_write); }
+    if kind == 1 { return mem_coarse(p_va, l1, domain, user, p_write); }
+    // A fine page table, which ARMv5 has and Linux on ARMv5 does not use.
+    mem_raise(FSR_SECTION_TRANSLATION, domain, p_write, p_va);
+    return 0;
+}
+
+/// Translate a virtual address, through the cache if it is there and by walking
+/// the tables if it is not.
+pub proc cpu_translate(p_vaddr: num, p_write: num) -> num warp {
+    mem_fault = 0;
+    let va: num = p_vaddr % 4294967296;
+    if cp15_control % 2 == 0 { return va; }
+    // A process id that is not zero remaps the low addresses, so nothing about
+    // a virtual page is stable across a context switch and the cache is not
+    // used. Linux on this machine keeps it at zero.
+    if cp15_pid > 0 { return cpu_walk(va, p_write); }
+    let page: num = floor(va / 4096);
+    let slot: num = page % 256;
+    if tlb_tag[slot + 1] == page + 1 {
+        if mem_allowed(tlb_perm[slot + 1], mem_user(), p_write) > 0 {
+            return tlb_pa[slot + 1] + va % 4096;
+        }
+    }
+    let pa: num = cpu_walk(va, p_write);
+    if mem_fault == 0 {
+        tlb_tag[slot + 1] = page + 1;
+        tlb_pa[slot + 1] = pa - pa % 4096;
+        tlb_perm[slot + 1] = mem_perm;
+    }
+    return pa;
+}
+
+// ---------------------------------------------------------------------------
+// The CPU's side of the bus
+// ---------------------------------------------------------------------------
+//
+// Every access is a call to the bus, which owns the decode. SDRAM is the one
+// answer reached without it, because a list index is a list index and a call to
+// reach the list is a Scratch custom block to save a division -- but the decode
+// itself is not written out here. Writing it out was tried and is slower: the
+// comparisons cost more in blocks than the call they save, and a board's memory
+// map belongs in one place.
+
+pub proc cpu_read8(p_vaddr: num, p_write: num) -> num warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return flash_read32(addr); }
+        if addr < RAM_SIZE { return ram_read8(addr); }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE {
+            return flash_read8(addr - BOOTROM_BASE);
+        }
+        return bus_read8(addr);
+    }
+    let pa: num = cpu_translate(addr, p_write);
+    if mem_fault > 0 { return 0; }
+    return bus_read8(pa);
+}
+
+pub proc cpu_read16(p_vaddr: num, p_write: num) -> num warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE {
+            return flash_read8(addr) + flash_read8(addr + 1) * 256;
+        }
+        if addr < RAM_SIZE { return ram_read16(addr); }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE {
+            return flash_read8(addr - BOOTROM_BASE) +
+                flash_read8(addr - BOOTROM_BASE + 1) * 256;
+        }
+        return bus_read16(addr);
+    }
+    let pa: num = cpu_translate(addr, p_write);
+    if mem_fault > 0 { return 0; }
+    return bus_read16(pa);
+}
+
+pub proc cpu_read32(p_vaddr: num, p_write: num) -> num warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return flash_read32(addr); }
+        if addr < RAM_SIZE { return sdram::ram[floor(addr / 4) + 1]; }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE {
+            return flash_read32(addr - BOOTROM_BASE);
+        }
+        return bus_read32(addr);
+    }
+    let pa: num = cpu_translate(addr, p_write);
+    if mem_fault > 0 { return 0; }
+    return bus_read32(pa);
+}
+
+pub proc cpu_write8(p_vaddr: num, p_value: num) warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
+        if addr < RAM_SIZE { ram_write8(addr, p_value); return; }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
+        bus_write8(addr, p_value);
+        return;
+    }
+    let pa: num = cpu_translate(addr, 1);
+    if mem_fault > 0 { return; }
+    bus_write8(pa, p_value);
+}
+
+pub proc cpu_write16(p_vaddr: num, p_value: num) warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
+        if addr < RAM_SIZE { ram_write16(addr, p_value); return; }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
+        bus_write16(addr, p_value);
+        return;
+    }
+    let pa: num = cpu_translate(addr, 1);
+    if mem_fault > 0 { return; }
+    bus_write16(pa, p_value);
+}
+
+pub proc cpu_write32(p_vaddr: num, p_value: num) warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
+        if addr < RAM_SIZE { ram_write32(addr, p_value); return; }
+        if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
+        bus_write32(addr, p_value);
+        return;
+    }
+    let pa: num = cpu_translate(addr, 1);
+    if mem_fault > 0 { return; }
+    bus_write32(pa, p_value);
+}
+
+/// Fetch one instruction word. A fault here is a prefetch abort, and it aborts
+/// the instruction rather than the fetch, so `cpu_pc` keeps pointing at the
+/// word that could not be read -- which is what the abort handler is handed.
+pub proc cpu_fetch(p_vaddr: num) -> num warp {
+    let addr: num = p_vaddr % 4294967296;
+    if cpu_mmu_on == 0 {
+        let word: num = (addr - addr % 4) % 4294967296;
+        if bus_remap > 0 && word < BOOTROM_ALIAS_SIZE { return flash_read32(word); }
+        if word < RAM_SIZE { return sdram::ram[floor(word / 4) + 1]; }
+        if word >= BOOTROM_BASE && word - BOOTROM_BASE < FLASH_SIZE {
+            return flash_read32(word - BOOTROM_BASE);
+        }
+        return bus_read32(word);
+    }
+    let pa: num = cpu_translate(addr, 0);
+    if mem_fault > 0 {
+        mem_fault = 2;
+        return 0;
+    }
+    return bus_read32(pa - pa % 4);
+}
+
+// ---------------------------------------------------------------------------
+// The fast paths
+// ---------------------------------------------------------------------------
+//
+// The three procedures below are the shape the fast paths above used to call.
+// They are kept because a read that is not the one-word SDRAM case still wants
+// them, and because `cpu_read8` and `cpu_read16` on SDRAM are byte and halfword
+// reads whose byte-within-the-word arithmetic is the RAM module's business and
+// not the CPU's.
+//
+// There is deliberately nothing here for a 32-bit SDRAM read or write. Those
+// are a list index and a list replace, and a call to reach them is a Scratch
+// custom block -- ten microseconds -- to save a division.
+// ---------------------------------------------------------------------------
+// CP15 register access
+// ---------------------------------------------------------------------------
+
+pub proc cp15_read(p_op1: num, p_crn: num, p_crm: num, p_op2: num) -> num warp {
+    if p_crn == 0 {
+        if p_crm == 0 && p_op2 == 0 { return CP15_MAIN_ID; }
+        if p_crm == 0 && p_op2 == 1 { return CP15_CACHE_TYPE; }
+        // The TCM size and the feature registers: there is no tightly coupled
+        // memory on this board, which is what a zero answers.
+        return 0;
+    }
+    if p_crn == 1 { return cp15_control; }
+    if p_crn == 2 { return cp15_ttb; }
+    if p_crn == 3 { return cp15_dacr; }
+    if p_crn == 5 { return cp15_fsr; }
+    if p_crn == 6 { return cp15_far; }
+    if p_crn == 7 {
+        // ARM's test and clean, and test, clean and invalidate. Linux's
+        // `__flush_whole_cache` is `mrc p15, 0, r15, c7, c14, 3` followed by
+        // `bne` back to itself, so the answer is a loop condition and not a
+        // value: bit 30 of the data becomes Z and Z means "the cache is
+        // clean". This machine has no cache to be dirty -- there is main
+        // memory behind the processor and nothing between them -- so the
+        // answer is that it was clean before the operation asked.
+        if p_crm == 10 || p_crm == 14 {
+            if p_op2 == 3 { return 1073741824; }
+        }
+        return 0;
+    }
+    if p_crn == 13 { return cp15_pid; }
+    if p_crn == 15 { return cp15_aux; }
+    return 0;
+}
+
+/// A write to CP15.
+///
+/// The cache and TLB maintenance operations are the ones that matter, and they
+/// matter because of the translation cache above: a machine that cached
+/// translations and ignored `invalidate TLB` would be a machine that faults
+/// where the guest has just told it not to. Every register that can change a
+/// translation clears it, and the rest -- the caches this machine does not have
+/// -- make no difference, which is the point of having no caches.
+pub proc cp15_write(p_op1: num, p_crn: num, p_crm: num, p_op2: num, p_value: num) warp {
+    if p_crn == 1 {
+        cp15_control = p_value % 4294967296;
+        cpu_mmu_on = cp15_control % 2;
+        tlb_flush();
+        return;
+    }
+    if p_crn == 2 { cp15_ttb = p_value % 4294967296; tlb_flush(); return; }
+    if p_crn == 3 { cp15_dacr = p_value % 4294967296; return; }
+    if p_crn == 5 { cp15_fsr = p_value % 4294967296; return; }
+    if p_crn == 6 { cp15_far = p_value % 4294967296; return; }
+    if p_crn == 7 { return; }
+    if p_crn == 8 { tlb_flush(); return; }
+    if p_crn == 13 { cp15_pid = p_value % 4294967296; tlb_flush(); return; }
+    if p_crn == 15 { cp15_aux = p_value % 4294967296; return; }
+}
+
+pub proc cp15_reset() warp {
+    cp15_control = 0;
+    cpu_mmu_on = 0;
+    cp15_ttb = 0;
+    cp15_dacr = 0;
+    cp15_fsr = 0;
+    cp15_far = 0;
+    cp15_pid = 0;
+    cp15_aux = 0;
+    mem_fault = 0;
+    mem_perm = 8;
+    tlb_flush();
+}

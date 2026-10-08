@@ -1,0 +1,244 @@
+// The machine: the CPU and every device it can reach, in one sprite.
+//
+// This is the whole computer's script. There is no terminal sprite and no
+// console sprite, because there is nothing on this machine that is not either
+// a device on the bus or the CPU: what a display shows, it shows from the
+// controller's own scanout, and what a keyboard says, it says into a UART's
+// receive FIFO. The sprite exists to own the reset order and the frame loop.
+//
+//     powerOn   the board's devices, then CP15, then the CPU -- which is the
+//               order a reset line releases them in, and the reason a CPU that
+//               ran first would be reading a bus with no memory on it
+//     run       one slice of the guest per frame, until it halts or the budget
+//               runs out, and then a report
+//
+// The slice is a decision and not a constant of nature. A Scratch frame is 33
+// milliseconds and the monitor has to draw in what is left of it, so the
+// machine hands the frame back before that; a longer slice is not more
+// throughput, it is a screen that redraws less often. The monitor is not in
+// this build yet, so the slice below is the whole frame.
+
+use board::bus;
+use board::decode;
+use dev::console;
+use cpu::state;
+use cpu::core;
+use cpu::mem;
+
+sprite "Machine" {
+    costume "blank" = "assets/blank.svg";
+
+    /// 0 stopped, 1 running.
+    @scratch_sprite var machine_state: num = 0;
+
+    /// Instructions per frame. The guest's clock is this number times the frame
+    /// rate, and every timing device on the board is advanced by it.
+    @scratch_sprite var machine_slice: num = 8192;
+
+    /// Frames the machine may run before it stops itself. A guest that halts
+    /// stops it sooner; a guest that spins needs a bound, and a check that
+    /// never returns is worse than one that fails.
+    @scratch_sprite var machine_budget: num = 2000000;
+
+    /// Stop the machine on the first memory fault instead of letting the guest
+    /// handle it. This is how the first fault after the MMU comes on is found:
+    /// an abort the kernel cannot handle lands on a vector page it has not
+    /// mapped yet, and the second fault overwrites the address the first one
+    /// recorded, so a machine that keeps running leaves only the loop behind.
+    /// A check leaves this at zero.
+    @scratch_sprite var machine_stop_on_fault: num = 0;
+
+    /// Stop after this many guest instructions, or never if it is zero. A check
+    /// that wants the same guest state twice cannot get it from the clock: a
+    /// step of the harness runs a variable amount of machine, so a run bounded
+    /// by seconds ends somewhere different every time. This is the one counter
+    /// that is the *guest's* and not the host's, and stopping on it stops in the
+    /// same place. The check leaves it at zero.
+    @scratch_sprite var machine_limit: num = 0;
+
+    /// Record the program counter of every instruction while this is set, into
+    /// a ring of the last `TRACE_LEN`. A guest that is neither faulting nor
+    /// finishing is a guest inside a loop, and a loop's shape is the addresses
+    /// it repeats -- which no amount of sampling from outside can see, because
+    /// a step is a thousand instructions and the sample lands wherever it
+    /// lands. A check leaves this at zero.
+    @scratch_sprite var machine_trace_on: num = 0;
+    @scratch_sprite var machine_trace_next: num = 0;
+    @scratch_sprite var machine_trace_pc: list<num> = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+
+    /// The stack pointer beside each of those, because the question a ring of
+    /// program counters cannot answer on its own is *where* the stack moved: two
+    /// functions whose frames disagree by a word look like two functions that
+    /// agree until the pointer is written down next to them.
+    @scratch_sprite var machine_trace_sp: list<num> = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
+
+    @scratch_sprite var machine_frames: num = 0;
+    @scratch_sprite var machine_seconds: num = 0;
+
+    /// Stop the machine the moment the program counter reaches `machine_watch_pc`.
+    /// This is how a call site is read rather than guessed at: put the address
+    /// of a function whose *first* entry is the interesting one -- a fault
+    /// handler, a panic, an assertion -- and every register, the caller's frame
+    /// and the whole stack are still exactly as the caller left them. A check
+    /// leaves this at zero.
+    @scratch_sprite var machine_watch_pc: num = 0;
+
+    /// Put a byte at the PL011's data register, which is what firmware does to
+    /// say anything before there is an operating system to say it.
+    proc uart_put(p_byte: num) warp {
+        bus_write32(dev_base[DEV_UART0 + 1], p_byte);
+    }
+
+    /// An unsigned 32-bit number in eight hexadecimal digits -- how firmware
+    /// prints an address, and how the report below prints a register.
+    proc uart_hex(p_value: num) warp {
+        let value: num = p_value % 4294967296;
+        let shift: num = 268435456;
+        repeat 8 {
+            let digit: num = floor(value / shift);
+            if digit < 10 { uart_put(48 + digit); } else { uart_put(87 + digit); }
+            value = value % shift;
+            shift = shift / 16;
+        }
+    }
+
+    /// One slice of the guest, and everything on the board it drives, in warp
+    /// so that the slice is not cut short by Scratch's own turn taking.
+    proc run_slice() warp {
+        let i: num = 0;
+        repeat machine_slice {
+            if cpu_halted == 0 {
+                // A register write or a tick can move an interrupt line, and
+                // the flag is how the board says so. Refreshing only when it is
+                // set is what keeps level-sensitive lines exact without asking
+                // every device on every instruction.
+                if bus_irq_dirty > 0 { bus_refresh_irqs(); }
+                cpu_step();
+                if machine_limit > 0 {
+                    if cpu_instructions >= machine_limit { cpu_halted = 1; }
+                }
+                // The ring is filled after the instruction, so what it holds is
+                // the addresses the processor has just been through. All three
+                // of these are off unless a check asks for them.
+                if machine_watch_pc > 0 {
+                    if cpu_pc == machine_watch_pc { cpu_halted = 1; }
+                }
+                if machine_trace_on > 0 {
+                    machine_trace_pc[machine_trace_next + 1] = cpu_pc;
+                    machine_trace_sp[machine_trace_next + 1] = cpu_get_reg(13);
+                    machine_trace_next = (machine_trace_next + 1) % 256;
+                }
+                // The status register the fault reported, not `mem_fault`:
+                // taking the exception clears that, so a test on it never sees
+                // the instruction that faulted. CP15's own is set by the walk
+                // and survives until the guest clears it.
+                if cp15_fsr > 0 && machine_stop_on_fault > 0 { cpu_halted = 1; }
+            }
+            i += 1;
+        }
+        // The board's clock, once a slice. A slice is a number of the
+        // processor's cycles, and each device is advanced by its share of them.
+        bus_tick(machine_slice);
+        bus_refresh_irqs();
+    }
+
+    /// The frame loop. The only procedure in the machine that is not `warp`:
+    /// everything below it runs to the end of its slice without yielding, which
+    /// is the only way an interpreter gets any work done in Scratch, and this
+    /// is the loop that hands the frame back.
+    proc run_loop() {
+        while machine_state == 1 {
+            run_slice();
+            machine_frames += 1;
+            if cpu_halted > 0 { machine_state = 0; }
+            if machine_frames > machine_budget { machine_state = 0; }
+        }
+    }
+
+    /// What the machine says about itself when it stops. This is not part of a
+    /// computer; it is how a check reads a state that is otherwise only visible
+    /// as a screen.
+    proc report() warp {
+        uart_put(10);
+        uart_put(83);   // 'S'
+        uart_put(84);   // 'T'
+        uart_put(79);   // 'O'
+        uart_put(80);   // 'P'
+        uart_put(32);
+        uart_hex(cpu_halted);
+        uart_put(32);
+        uart_hex(cpu_instructions);
+        uart_put(10);
+        uart_put(80);   // 'P'
+        uart_put(67);   // 'C'
+        uart_put(32);
+        uart_hex(cpu_pc);
+        uart_put(32);
+        uart_put(82);   // 'R'
+        uart_put(48);   // '0'
+        uart_put(32);
+        uart_hex(cpu_regs[1]);
+        uart_put(32);
+        uart_put(67);   // 'C'
+        uart_put(80);   // 'P'
+        uart_put(83);   // 'S'
+        uart_put(82);   // 'R'
+        uart_put(32);
+        uart_hex(cpu_cpsr);
+        uart_put(10);
+    }
+
+    on flag_clicked {
+        looks::hide();
+    }
+
+    on broadcast_received("Machine.powerOn") {
+        console_reset();
+        bus_reset();
+        cp15_reset();
+        cpu_reset();
+        machine_frames = 0;
+        machine_state = 1;
+        sensing::reset_timer();
+    }
+
+    on broadcast_received("Machine.run") {
+        run_loop();
+        machine_seconds = sensing::timer();
+        report();
+    }
+}
