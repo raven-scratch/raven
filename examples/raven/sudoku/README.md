@@ -179,8 +179,12 @@ rather than switching on, that the last entry reaches the win card, and that the
 menu deals again afterwards.
 
 ```sh
-SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
+node examples/raven/sudoku/tools/check.mjs
 ```
+
+It finds a Scratch VM wherever the machine keeps one, the way every check in the
+repository does — see `tools/vm-root.mjs`, and set `SCRATCH_VM_ROOT` only if
+yours is somewhere that search does not reach.
 
 `ROUNDS` sets how many puzzles are dealt per difficulty (three by default), which
 is the knob to turn when the generator changes.

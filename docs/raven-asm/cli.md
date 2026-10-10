@@ -54,6 +54,27 @@ warning: this project uses 2 block(s) that vanilla Scratch does not have
 vanilla editor cannot pick up an extended block by accident. `check` accepts the
 same flag.
 
+## Optimising
+
+`raven-asm build` emits exactly what you wrote: one statement, one block, always.
+It has no optimiser and no flag to turn one on, because that is the promise the
+language is built on.
+
+Folding is a **separate program** over a separate input, so running it is your
+decision rather than a compiler's:
+
+```sh
+raven-opt --manifest-path raven-asm.toml --output optimised/   # a copy
+raven-opt --manifest-path raven-asm.toml --in-place            # over the project
+```
+
+The output is raven-asm source that `raven-asm build` accepts and that means what
+it meant before, with fewer blocks in it. [What the optimiser
+does](/raven-asm/optimizer) is what it will and will not rewrite.
+
+`raven` runs it for you, because its macros are already lowerings a reader did not
+write; `raven build --no-optimize` turns it off there.
+
 ## `raven-asm check`
 
 Exactly the same work as `build`, minus the file writes. Use it in an editor

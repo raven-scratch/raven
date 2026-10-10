@@ -41,8 +41,25 @@ use dev::pl110;
 use mem::sdram;
 
 /// Erase the pen layer and draw the controller's whole scanout on it.
+///
+/// **It draws nothing when the controller's memory has not been written since
+/// the last pass.** `clcd_dirty` is set by any CPU store that lands inside the
+/// scanout and by every controller register that moves or resizes it, and it is
+/// cleared here. A pass on an unchanged framebuffer would paint exactly the
+/// pixels the pen is already holding.
+///
+/// This is not the partial redraw this file's header rejects, and the difference
+/// is the whole reason it is safe: a pass that runs still erases the layer and
+/// repaints every row, so there is no bookkeeping about what was left alone. A
+/// skipped pass is a pass with nothing to do, not a pass that did half its work.
+///
+/// `monitor_frames` counts the passes that actually drew, which is what the
+/// check reads it for.
 pub proc monitor_draw() warp {
     if clcd_on() == 0 { return; }
+    if clcd_dirty == 0 { return; }
+    clcd_dirty = 0;
+    monitor_frames += 1;
     pen::clear();
     // The numbers every row of this pass shares, worked out once: the width and
     // the height, the horizontal scale, the pen's thickness, the vertical step
@@ -97,10 +114,13 @@ pub proc monitor_row16(p_row: num, p_width: num, p_scale: num, p_step: num) warp
     let base: num = floor(clcd_ubas / 4) + p_row * words;
     let start: num = 0;
     let word: num = sdram::ram[base + 1];
-    let pixel: num = word % 65536;
+    // The low half is the word less its high half, for the same reason the loop
+    // below does it that way: `word % 65536` on a framebuffer word above 2^31 is
+    // Scratch's slow remainder, and this is the first pixel of every row.
+    let high: num = floor(word / 65536);
+    let pixel: num = word - high * 65536;
     let runword: num = pixel * 65537;
     let col: num = 1;
-    let high: num = floor(word / 65536);
     let next: num = high;
     if next != pixel {
         monitor_run(start, col - 1, clcd_rgb565(pixel), y, p_scale);

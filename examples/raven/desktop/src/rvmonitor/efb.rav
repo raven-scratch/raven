@@ -50,7 +50,27 @@ use rvdev::efb;
 use rvscreen;
 
 /// Erase the pen layer and draw the card's whole scanout on it.
+///
+/// **It draws nothing when the card has not moved.** `efb_dirty` is set by every
+/// access that can change what this reads -- a latch for the indexed panel, any
+/// framebuffer access for the direct colour one -- and cleared here. A pass whose
+/// card is unchanged would paint exactly the pixels the pen is already holding,
+/// so skipping it is not a partial redraw and cannot burn anything in: the whole
+/// panel is still repainted by every pass that runs.
+///
+/// This is the difference between a Stage that costs a whole-panel walk per
+/// Scratch frame and one that costs it per *guest* frame. A guest that draws
+/// thirty times a second under a monitor that runs sixty times a second used to
+/// pay for sixty pictures; it now pays for thirty, and a guest computing with a
+/// still screen -- which is most of a boot -- pays for almost none.
+///
+/// `monitor_frames` counts the passes that actually drew, which is what the
+/// checks read it for. A skipped pass is not a frame the Stage failed to update;
+/// it is a frame in which there was nothing to update.
 pub proc monitor_draw() warp {
+    if efb_dirty == 0 { return; }
+    efb_dirty = 0;
+    monitor_frames += 1;
     pen::clear();
     if RV_EFB_INDEXED == 1 {
         monitor_all_indexed();

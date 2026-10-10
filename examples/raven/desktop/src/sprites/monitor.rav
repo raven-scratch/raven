@@ -24,7 +24,9 @@ sprite "Monitor" {
     on broadcast_received("Monitor.run") {
         pen::set_pen_size_to(1);
         forever {
-            monitor_frames += 1;
+            // The counter is moved inside `monitor_draw`, because a pass only
+            // happens when the controller's memory has moved: this loop spins,
+            // and what is worth counting is the passes that painted something.
             monitor_draw();
         }
     }

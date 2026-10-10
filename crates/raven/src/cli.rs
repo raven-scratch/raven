@@ -65,6 +65,16 @@ pub enum Command {
         /// and the uncompressed dist/project.json.
         #[arg(long)]
         debug: bool,
+        /// Do not run the raven-asm optimiser, so one statement in the lowered
+        /// raven-asm is one Scratch block.
+        ///
+        /// raven builds optimised by default, because its whole job is to lower
+        /// things a reader never wrote and the optimiser is more of the same.
+        /// This is how to get the unoptimised blocks back — for reading the
+        /// lowered raven-asm against the editor, or for checking that a
+        /// difference in behaviour is not the optimiser's.
+        #[arg(long)]
+        no_optimize: bool,
     },
 
     /// Parse, resolve, type check and expand, writing nothing.
@@ -139,9 +149,14 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Command::Build { manifest, debug } => {
+        Command::Build {
+            manifest,
+            debug,
+            no_optimize,
+        } => {
             let mut options = Options::new(manifest);
             options.debug = debug;
+            options.optimize = !no_optimize;
             let result = driver::build(&options)?;
             report(&result.warnings);
             let lines: usize = result
@@ -160,6 +175,12 @@ pub fn run(cli: Cli) -> Result<()> {
                 "             {} target file(s), {lines} line(s) of raven-asm",
                 result.asm.len()
             );
+            if options.optimize {
+                println!("             raven-asm optimiser: {}", result.optimized);
+                println!("             `--no-optimize` keeps one lowered statement per block");
+            } else {
+                println!("             optimiser off: one lowered statement is one block");
+            }
             if let Some(dir) = &result.asm_dir {
                 println!("    Kept the raven-asm in {}", dir.display());
             }

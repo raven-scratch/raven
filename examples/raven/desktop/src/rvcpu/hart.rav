@@ -47,6 +47,7 @@ use rvbus::bus;
 use rvdev::clint;
 use rvdev::syscon;
 use rvcpu::tables;
+use log;
 
 // ---------------------------------------------------------------------------
 // The processor's state
@@ -859,6 +860,12 @@ pub proc interrupt_pending() -> num warp {
 /// exception travel the same road and are told apart at the far end -- which
 /// is exactly how the ISA describes it.
 pub proc deliver_trap() warp {
+    // Logged before the state moves, so the line describes the hart that
+    // trapped rather than the handler it is about to enter. `rv_trap` is the
+    // raw code the decoder set: the top bit means an interrupt, and the low
+    // bits are the exception number plus one, which is why `mcause` below is
+    // `rv_trap - 1` for everything but an interrupt.
+    log_line(f"trap code={rv_trap} cause={rv_mcause} pc={log_hex(rv_pc)} ir={log_hex(rv_ir)} mtvec={log_hex(rv_mtvec)} mepc={log_hex(rv_mepc)} mtval={log_hex(rv_mtval)} i={rv_instructions}");
     if floor(rv_trap / 2147483648) > 0 {
         rv_mcause = rv_trap;
         rv_mtval = 0;

@@ -3,8 +3,11 @@
  * Run the built project in a real Scratch VM and check the stage it draws.
  *
  *   python examples/raven/penfont/tools/font2vm.py --stage examples/raven/penfont/dist/page
- *   SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
- *     node examples/raven/penfont/tools/check.mjs [--text "…"] [--png out.png]
+ *   node examples/raven/penfont/tools/check.mjs [--text "…"] [--png out.png]
+ *
+ * The Scratch VM is found automatically -- `$SCRATCH_VM_ROOT` if it is set, and
+ * otherwise the checkouts this repository's READMEs tell you to clone. See
+ * `tools/vm-root.mjs`. It does not have to be configured to run this.
  *
  * There is no way to check a pen renderer by reading `project.json`: the whole
  * question is whether the block sequence the compiler emitted puts the lines
@@ -37,6 +40,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
+import { loadVm } from "../../../../tools/vm-root.mjs";
 
 const require = createRequire(import.meta.url);
 const Module = require("module");
@@ -56,15 +60,36 @@ Module._load = function (request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const VM_ROOT = process.env.SCRATCH_VM_ROOT;
-if (!VM_ROOT) {
-  console.error("set SCRATCH_VM_ROOT to ref/scratch-editor/packages/scratch-vm");
+// The VM, found wherever it is on this machine. This check is run against a
+// checkout the reader has, not against the one it was written on, so the
+// search lives in one place (`tools/vm-root.mjs`) and does not require the
+// environment variable: `$SCRATCH_VM_ROOT` wins, then the checkouts this
+// repository's own READMEs tell you to clone.
+let VirtualMachine;
+try {
+  ({ VirtualMachine } = loadVm());
+} catch (error) {
+  console.error(error.message);
   process.exit(2);
 }
-const VirtualMachine = require(resolvePath(process.cwd(), VM_ROOT, "src", "virtual-machine.js"));
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The VM is stepped a frame at a time, at the frame rate the project is written
+// for, so what the checker waits for is the project reaching a state rather than
+// a number of milliseconds that happens to be enough on the machine this was
+// written on. The pacing matters: the engine's own loop uses `wait` blocks, and
+// stepping in a tight loop would run the project slower than its waits allowed.
+const FRAME_MS = 1000 / 30;
+
+async function spin(frames = 1) {
+  for (let i = 0; i < frames; i += 1) {
+    const began = Date.now();
+    vm.runtime._step();
+    const left = FRAME_MS - (Date.now() - began);
+    if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The project's own numbers
@@ -296,6 +321,7 @@ const skins = new Map();
 const drawables = new Map();
 let ink = [];
 let strokes = [];
+let clears = 0;
 let stamps = 0;
 let penSize = 1;
 let penColour = null;
@@ -419,6 +445,7 @@ const renderer = {
   penClear() {
     ink = [];
     strokes = [];
+    clears += 1;
   },
   penStamp() {
     stamps += 1;
@@ -630,12 +657,6 @@ vm.runtime.on("QUESTION", (q) => {
   setTimeout(() => vm.runtime.emit("ANSWER", answer), 0);
 });
 
-const tap = async (key, ms) => {
-  vm.postIOData("keyboard", { key, isDown: true });
-  vm.postIOData("keyboard", { key, isDown: false });
-  await sleep(ms);
-};
-
 // A phase is one redraw: the pen layer is cleared at the top of it, so what is
 // recorded when it settles is that page and nothing else.
 const snapshot = () => ({
@@ -645,26 +666,62 @@ const snapshot = () => ({
   penColour,
 });
 
+/// Advance until the next phase has been painted: the count of clears says when
+/// its redraw started, and the stroke count says when it stopped arriving. A
+/// page with no strokes is not a page this engine draws, so the wait does not
+/// end on the clear alone.
+async function settle(limit = 900) {
+  const before = clears;
+  let last = -1;
+  let quiet = 0;
+  for (let spent = 0; spent < limit; spent += 1) {
+    await spin(1);
+    if (clears === before) continue;
+    const n = strokes.length;
+    if (n === 0) continue;
+    if (n === last) {
+      quiet += 1;
+      if (quiet >= 4) return;
+    } else {
+      quiet = 0;
+    }
+    last = n;
+  }
+}
+
+/// One key, and then the redraw it asks for. The press and the release are
+/// posted together, the way a key event arrives, and the project's own redraw is
+/// what the wait is for.
+async function tap(key) {
+  vm.postIOData("keyboard", { key, isDown: true });
+  vm.postIOData("keyboard", { key, isDown: false });
+  await settle();
+}
+
+// The sequencer gives a step a wall-clock budget of 75% of `currentStepTime`, and
+// that is null until `runtime.start()` sets it — so without this line a step runs
+// no scripts at all. Setting it here rather than calling `start()` is what keeps
+// the stepping synchronous: one `_step()` is one 30 Hz frame.
+vm.runtime.currentStepTime = FRAME_MS;
 vm.greenFlag();
-vm.start();
-await sleep(500);
+await spin(2);
 // Space asks for a line; the handler above answers it with the text under test.
-await tap(" ", 4000);
+await tap(" ");
 const page = snapshot();
 
 // B turns to the sheet: every glyph the font has, twelve by eight to a page.
-await tap("b", 4000);
+await tap("b");
 const sheet = snapshot();
 
 // And Space on the sheet is a find, which turns to the page the character is on.
 answer = FIND;
-await tap(" ", 4000);
+await tap(" ");
 const found = snapshot();
 
 // B back to the page, and Space asks again, answered with the numbers.
 answer = NUMBERS;
-await tap("b", 4000);
-await tap(" ", 4000);
+await tap("b");
+await tap(" ");
 const digits = snapshot();
 vm.stopAll();
 

@@ -42,6 +42,7 @@ import Module from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { encodePng } from './png.mjs';
+import { findVmRoot, vmHelp } from '../../../../tools/vm-root.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -62,14 +63,12 @@ Module._load = function (request, parent, isMain) {
 
 globalThis.document = { hidden: true };
 
-const candidates = [
-    process.env.SCRATCH_VM_ROOT && path.resolve(process.env.SCRATCH_VM_ROOT),
-    path.join(repo, 'ref', 'turbowarp-vm'),
-    path.join(repo, 'ref', 'scratch-vm', 'node_modules', 'scratch-vm')
-].filter(Boolean);
-const VM_ROOT = candidates.find((dir) => fs.existsSync(path.join(dir, 'src', 'virtual-machine.js')));
+/// Which VM to run in. `tools/vm-root.mjs` is the one place that answers it for
+/// every check in the repository: `SCRATCH_VM_ROOT` when it is set, then the
+/// `ref/` checkouts, then a sibling of the repository.
+const VM_ROOT = findVmRoot();
 if (!VM_ROOT) {
-    console.error(`no Scratch VM found; tried\n  ${candidates.join('\n  ')}`);
+    console.error(vmHelp());
     process.exit(2);
 }
 
@@ -920,8 +919,19 @@ async function main() {
         // guest's last write changed. Everything below -- the two files, the
         // card assertions and the residue assertion -- is then about one frozen
         // machine.
+        //
+        // **The card is marked dirty first, on purpose.** The monitor draws only
+        // when `efb_dirty` is set (see `src/rvmonitor/efb.rav`), so a stopped
+        // guest on a card nothing has touched since the last pass would
+        // correctly produce no pass at all -- and this assertion is about
+        // whether a pass *can* bring the Stage up to date, which needs one to
+        // happen. Setting the flag is the test asking the monitor to draw, not
+        // the monitor being made to draw when it should not: with the guest
+        // stopped nothing else can set it, so a pass here is a repaint of the
+        // frozen card and nothing else.
         set('rv_state', 0);
         const passesBeforeStop = Number(value(stage(), 'monitor_frames'));
+        set('efb_dirty', 1);
         step(40);
         passesAfterStop = Number(value(stage(), 'monitor_frames')) - passesBeforeStop;
 

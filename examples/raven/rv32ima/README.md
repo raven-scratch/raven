@@ -33,7 +33,7 @@ node examples/raven/rv32ima/tools/build.mjs
 cargo run -p raven -- check -m examples/raven/rv32ima/raven-mini.toml
 
 # the only check that is about the guest rather than about the compiler
-SCRATCH_VM_ROOT=path/to/scratch-vm node examples/raven/rv32ima/tools/check.mjs
+node examples/raven/rv32ima/tools/check.mjs
 ```
 
 `tools/mini-image.sh` needs `dtc`, `python3` and `curl`, and a checkout of the

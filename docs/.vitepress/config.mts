@@ -93,6 +93,7 @@ export default defineConfig({
           text: "Using the tool",
           items: [
             { text: "Command line", link: "/raven-asm/cli" },
+            { text: "What the optimiser does", link: "/raven-asm/optimizer" },
             { text: "Troubleshooting", link: "/raven-asm/troubleshooting" },
           ],
         },

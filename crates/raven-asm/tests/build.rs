@@ -587,7 +587,7 @@ fn extended_blocks_build_with_a_warning_by_default() {
 #[test]
 fn strict_rejects_extended_blocks() {
     let project = extended_project("extended-strict");
-    let err = match project.build_with(compile::BuildOptions { strict: true }) {
+    let err = match project.build_with(compile::BuildOptions::strict()) {
         Ok(_) => panic!("`--strict` must reject extended blocks"),
         Err(e) => e,
     };
@@ -631,7 +631,7 @@ fn strict_rejects_extended_reporters() {
 "#,
         );
 
-    let err = match project.build_with(compile::BuildOptions { strict: true }) {
+    let err = match project.build_with(compile::BuildOptions::strict()) {
         Ok(_) => panic!("`--strict` must reject extended reporters"),
         Err(e) => e,
     };

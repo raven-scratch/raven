@@ -107,18 +107,18 @@ pub proc bus_read32(p_addr: num) -> num warp {
 // ---------------------------------------------------------------------------
 
 pub proc bus_write8(p_addr: num, p_value: num) warp {
-    if bus_sdram(p_addr) > 0 { ram_write8(p_addr, p_value); return; }
+    if bus_sdram(p_addr) > 0 { clcd_mark(p_addr); ram_write8(p_addr, p_value); return; }
     bus_periph_write(p_addr, p_value, 0);
 }
 
 pub proc bus_write16(p_addr: num, p_value: num) warp {
-    if bus_sdram(p_addr) > 0 { ram_write16(p_addr, p_value); return; }
+    if bus_sdram(p_addr) > 0 { clcd_mark(p_addr); ram_write16(p_addr, p_value); return; }
     bus_periph_write(p_addr, p_value, 1);
 }
 
 pub proc bus_write32(p_addr: num, p_value: num) warp {
     if bus_remap > 0 && p_addr < BOOTROM_ALIAS_SIZE { return; }
-    if p_addr < RAM_SIZE { ram_write32(p_addr, p_value); return; }
+    if p_addr < RAM_SIZE { clcd_mark(p_addr); ram_write32(p_addr, p_value); return; }
     if p_addr >= BOOTROM_BASE && p_addr - BOOTROM_BASE < FLASH_SIZE { return; }
     if p_addr >= PERIPH_BASE && p_addr - PERIPH_BASE < PERIPH_SIZE {
         bus_periph_write(p_addr, p_value, 2);

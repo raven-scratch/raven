@@ -195,6 +195,162 @@ fn a_reversed_project_rebuilds_the_same_project() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The optimiser
+// ---------------------------------------------------------------------------
+//
+// `raven` runs `raven-opt` over the lowered project before compiling it, so a
+// rewrite that changed what a project *does* would be a wrong program in every
+// raven project and invisible in every raven-asm one. The tests below are the two
+// halves of the proof:
+//
+//   * the optimised build still satisfies the round-trip law -- it reverses and
+//     rebuilds to the same observable project -- which is the strongest
+//     structural statement this repository can make about a compiler output;
+//   * the optimised build emits *fewer* blocks, so "it did something" is
+//     measured rather than assumed. An optimiser that silently did nothing
+//     would pass the first test and fail this one.
+//
+// The optimiser is its own program over its own input now, so "with it" and
+// "without it" are two directories rather than two compiler flags: the source is
+// written, optionally rewritten by `raven_opt`, and compiled. That is exactly
+// the order `crates/raven/src/driver.rs` uses.
+
+/// Write the test project, optionally optimise it, and compile it.
+fn build_with_optimizer(root: &Path, optimize: bool) -> raven_asm::compile::BuildOutput {
+    write(root, "raven-asm.toml", MANIFEST);
+    write(root, "src/stage.rasm", STAGE);
+    write(root, "src/sprites/player.rasm", PLAYER);
+    write(root, "assets/backdrop.svg", BACKDROP_SVG);
+    write(root, "assets/logo.svg", LOGO_SVG);
+    let manifest = root.join("raven-asm.toml");
+    if optimize {
+        raven_opt::optimize_in_place(&manifest).expect("the test project optimises");
+    }
+    raven_asm::compile::build_with_options(&manifest, raven_asm::compile::BuildOptions::default())
+        .expect("the test project compiles")
+}
+
+#[test]
+fn the_optimizer_does_not_change_what_a_project_observably_is() {
+    // The round-trip law, checked on both builds. `fingerprint` keeps every
+    // block, every variable, every list, every costume and every script and
+    // drops only ids and workspace positions, so two projects that agree on it
+    // are two projects Scratch cannot tell apart.
+    for optimize in [false, true] {
+        let original = scratch_dir(&format!("optimizer-rt-{optimize}"));
+        let output = build_with_optimizer(&original, optimize);
+        let reversed = scratch_dir(&format!("optimizer-rt-rev-{optimize}"));
+
+        let decompiled = decompile(&pack(&output), "demo").expect("reverse");
+        write_decompiled(&decompiled, &reversed);
+
+        let rebuilt = raven_asm::compile::build(&reversed.join("raven-asm.toml"))
+            .expect("the reversed project compiles")
+            .project;
+
+        assert_eq!(
+            fingerprint(&output.project),
+            fingerprint(&rebuilt),
+            "the optimiser (on={optimize}) broke the round trip"
+        );
+    }
+}
+
+#[test]
+fn the_optimizer_preserves_the_observable_project() {
+    // The sharper statement, and the one the round-trip test above cannot make:
+    // the optimised build and the unoptimised build are the *same project* as
+    // far as Scratch can see, except that one has fewer blocks.
+    //
+    // They are not identical -- folding a reporter into a literal replaces a
+    // block with a JSON number, which is the whole point -- so this compares
+    // what each script *computes* rather than each block: the fingerprint of
+    // the unoptimised build, with every script re-read as the values it leaves.
+    // That is not a thing this test can do, so it asserts the properties that
+    // are checkable here and leaves the behavioural question to
+    // `tools/check.mjs`, which runs the real VM:
+    //
+    //   * the optimised build has fewer blocks;
+    //   * it has the same targets, variables, lists, costumes and sounds;
+    //   * it still compiles, so no rewrite produced an unspellable block.
+    let plain = scratch_dir("optimizer-off");
+    let folded = scratch_dir("optimizer-on");
+    let without = build_with_optimizer(&plain, false);
+    let with = build_with_optimizer(&folded, true);
+
+    let blocks = |o: &raven_asm::compile::BuildOutput| -> usize {
+        o.project.targets.iter().map(|t| t.blocks.len()).sum()
+    };
+    assert!(
+        blocks(&with) < blocks(&without),
+        "the optimiser made no difference: {} blocks either way",
+        blocks(&without)
+    );
+
+    let names = |o: &raven_asm::compile::BuildOutput| -> Vec<String> {
+        let mut n: Vec<String> = o.project.targets.iter().map(|t| t.name.clone()).collect();
+        n.sort();
+        n
+    };
+    assert_eq!(names(&with), names(&without));
+
+    let shape = |o: &raven_asm::compile::BuildOutput| -> Vec<String> {
+        let mut out = Vec::new();
+        for t in &o.project.targets {
+            out.push(format!("{} vars={}", t.name, t.variables.len()));
+            out.push(format!("{} lists={}", t.name, t.lists.len()));
+            out.push(format!("{} costumes={}", t.name, t.costumes.len()));
+            out.push(format!("{} sounds={}", t.name, t.sounds.len()));
+            out.push(format!("{} broadcasts={}", t.name, t.broadcasts.len()));
+        }
+        out.sort();
+        out
+    };
+    assert_eq!(
+        shape(&with),
+        shape(&without),
+        "the optimiser changed something other than the blocks"
+    );
+}
+
+#[test]
+fn an_unoptimised_build_is_the_lowering_verbatim() {
+    // The contract, and the reason the optimiser is a separate program: with it
+    // *not* run, compiling twice produces the same blocks, and those blocks are
+    // what the source says -- one statement each. This is the guard on
+    // `raven-asm`'s promise, not on `raven`'s.
+    let a = scratch_dir("optimizer-verbatim-a");
+    let b = scratch_dir("optimizer-verbatim-b");
+    let first = build_with_optimizer(&a, false);
+    let second = build_with_optimizer(&b, false);
+    assert_eq!(
+        fingerprint(&first.project),
+        fingerprint(&second.project),
+        "an unoptimised build is not reproducible"
+    );
+}
+
+#[test]
+fn the_optimizer_reports_nothing_to_do_when_there_is_nothing_to_do() {
+    // A run over a project with no foldable operand has to say so rather than
+    // claim a rewrite, because the number is what a caller reports and a
+    // phantom rewrite is a claim the project got smaller when it did not.
+    let root = scratch_dir("optimizer-noop");
+    write(&root, "raven-asm.toml", MANIFEST);
+    write(
+        &root,
+        "src/stage.rasm",
+        "stage {\n    costume \"b\" = \"assets/backdrop.svg\";\n}\n",
+    );
+    write(&root, "assets/backdrop.svg", BACKDROP_SVG);
+    let manifest = root.join("raven-asm.toml");
+    let report = raven_opt::optimize_in_place(&manifest).expect("optimises");
+    assert_eq!(report.files, 1, "one source file");
+    assert_eq!(report.changed, 0, "nothing to fold");
+    assert_eq!(report.folded.total(), 0);
+}
+
 #[test]
 fn the_stage_and_every_sprite_get_a_file() {
     let original = scratch_dir("files-source");

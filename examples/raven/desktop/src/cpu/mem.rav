@@ -31,6 +31,7 @@ use dev::flash;
 use dev::pl110;
 use cpu::state;
 use cpu::alu;
+use log;
 
 // ---------------------------------------------------------------------------
 // CP15
@@ -228,12 +229,18 @@ pub proc mem_raise(p_status: num, p_domain: num, p_write: num, p_addr: num) warp
     mem_fault = 1;
     cp15_fsr = p_status % 16 + p_domain * 16 + p_write * 1024;
     cp15_far = p_addr % 4294967296;
+    // A data abort is the single most useful line in the log: it names the
+    // address, the status and the instruction that touched it, which is the
+    // difference between "the kernel is looping" and "the kernel is looping on
+    // a page it was refused".
+    log_line(f"data-abort addr={log_hex(p_addr)} status={p_status} domain={p_domain} write={p_write} pc={log_hex(cpu_pc)} ir={log_hex(cpu_ir)} i={cpu_instructions}");
 }
 
 pub proc mem_raise_fetch(p_status: num, p_domain: num, p_addr: num) warp {
     mem_fault = 2;
     cp15_fsr = p_status % 16 + p_domain * 16;
     cp15_far = p_addr % 4294967296;
+    log_line(f"prefetch-abort addr={log_hex(p_addr)} status={p_status} domain={p_domain} pc={log_hex(cpu_pc)} i={cpu_instructions}");
 }
 
 pub proc mem_clear_fault() warp {
@@ -302,13 +309,25 @@ pub proc mem_domain(p_domain: num) -> num warp {
 
 /// Whether the processor is in the mode whose accesses are checked against the
 /// user permissions. There is one user mode and everything else is privileged.
+///
+/// The callers that matter use `cpu_cpsr % 32 == MODE_USER` directly rather than
+/// this: it is asked once for every access the processor makes -- 16.5 million
+/// times in the run `tools/profile-blocks.mjs` measures -- and a Scratch custom
+/// block per access is a custom block per access. It is kept as a `proc` because
+/// `mem_allowed` still reads it and because the rule belongs in one place.
 pub proc mem_user() -> num warp {
-    if cpu_mode() == MODE_USER { return 1; }
+    if cpu_cpsr % 32 == MODE_USER { return 1; }
     return 0;
 }
 
 /// Whether an access is allowed at this permission. Eight or more means the
 /// domain was a manager and no permission was checked at all.
+///
+/// The manager case is the fast one and it is the one that matters: Linux puts
+/// every mapping this machine executes through in a manager domain, so the
+/// answer here is almost always "yes, and no table was consulted" -- which is
+/// also why the permission check lives inside `cpu_translate`'s hit path rather
+/// than behind this call.
 pub proc mem_allowed(p_perm: num, p_user: num, p_write: num) -> num warp {
     if p_perm >= 8 { return 1; }
     if p_write > 0 { return mem_permitted_write(p_perm, p_user); }
@@ -408,6 +427,30 @@ pub proc cpu_walk(p_va: num, p_write: num) -> num warp {
 
 /// Translate a virtual address, through the cache if it is there and by walking
 /// the tables if it is not.
+///
+/// This is the hottest procedure in the machine -- `tools/profile-blocks.mjs`
+/// measures 156 million calls over a full boot, one for every fetch and one for
+/// every third instruction's data access -- so its hit path makes no call at
+/// all. Two questions that are calls elsewhere are expressions here:
+///
+///   * the permission test. Asking `mem_allowed(tlb_perm[..], mem_user(),
+///     p_write)` is three Scratch custom blocks for a question whose answer is
+///     nearly always "yes": Linux maps everything this machine executes through
+///     in a *manager* domain, and a manager domain is not checked, which is what
+///     a cached permission of eight or more records.
+///   * `mem_user()`, which computes `cpu_cpsr % 32` for a permission that is a
+///     manager and does not read the user bit at all.
+///
+/// The `allowed` test below is `mem_allowed`'s and `mem_permitted`'s rule
+/// written out, and it is not weakened. The classic table is a permission of
+/// zero for nobody, one for the kernel, two for reading and three for everyone;
+/// with `S` set a zero becomes the kernel's, which is the amendment Linux's own
+/// mappings depend on; and a user access additionally loses a write at two.
+///
+/// A refusal is **not** decided here: it falls through to `cpu_walk`, which owns
+/// the permission rules and raises the fault it always did. So a cached
+/// permission can only ever save work -- it can never permit an access the walk
+/// would have refused. That is the property that makes inlining this safe.
 pub proc cpu_translate(p_vaddr: num, p_write: num) -> num warp {
     mem_fault = 0;
     let va: num = p_vaddr % 4294967296;
@@ -419,9 +462,25 @@ pub proc cpu_translate(p_vaddr: num, p_write: num) -> num warp {
     let page: num = floor(va / 4096);
     let slot: num = page % 256;
     if tlb_tag[slot + 1] == page + 1 {
-        if mem_allowed(tlb_perm[slot + 1], mem_user(), p_write) > 0 {
-            return tlb_pa[slot + 1] + va % 4096;
-        }
+        let perm: num = tlb_perm[slot + 1];
+        if perm >= 8 { return tlb_pa[slot + 1] + va % 4096; }
+        let s: num = floor(cp15_control / 256) % 2;
+        let user: num = 0;
+        if cpu_cpsr % 32 == MODE_USER { user = 1; }
+        // The two tables above, transcribed case by case, so that reading them
+        // side by side is how this is checked. The only row the `S` bit changes
+        // is a permission of zero, which is "nobody" in the classic table and
+        // "the kernel, read and write" with `S` set. Everything else is shared,
+        // and the write question is asked exactly where `mem_permitted_write`
+        // asks it: a permission of two is read-only *for the user*. The catch-all
+        // is `>= 2`, because the tables end in `return 1` for every value above
+        // one rather than only for three.
+        let allowed: num = 0;
+        if perm == 0 { if s > 0 { if user == 0 { allowed = 1; } } }
+        if perm == 1 { if user == 0 { allowed = 1; } }
+        if perm >= 2 { if p_write == 0 { allowed = 1; } else { if perm > 2 { allowed = 1; } else { if user == 0 { allowed = 1; } } } }
+        if allowed > 0 { return tlb_pa[slot + 1] + va % 4096; }
+        return cpu_walk(va, p_write);
     }
     let pa: num = cpu_walk(va, p_write);
     if mem_fault == 0 {
@@ -436,12 +495,15 @@ pub proc cpu_translate(p_vaddr: num, p_write: num) -> num warp {
 // The CPU's side of the bus
 // ---------------------------------------------------------------------------
 //
-// Every access is a call to the bus, which owns the decode. SDRAM is the one
-// answer reached without it, because a list index is a list index and a call to
-// reach the list is a Scratch custom block to save a division -- but the decode
-// itself is not written out here. Writing it out was tried and is slower: the
-// comparisons cost more in blocks than the call they save, and a board's memory
-// map belongs in one place.
+// Every access reaches the bus, which owns the decode -- and the two cases that
+// are not the bus are decided before it, because both are the common one:
+// SDRAM, which is a list index, and the flash window, which the fetch path also
+// reads. The decode itself is not written out here. Writing out the whole of it
+// was tried and is slower: the comparisons cost more in blocks than the call
+// they save, and a board's memory map belongs in one place. What is written out
+// is the *word* read and write, which is what nearly every instruction does, and
+// which `tools/profile-blocks.mjs` measures at 1.1 calls per guest instruction
+// when it is left as a call.
 
 pub proc cpu_read8(p_vaddr: num, p_write: num) -> num warp {
     let addr: num = p_vaddr % 4294967296;
@@ -488,6 +550,14 @@ pub proc cpu_read32(p_vaddr: num, p_write: num) -> num warp {
     }
     let pa: num = cpu_translate(addr, p_write);
     if mem_fault > 0 { return 0; }
+    // SDRAM is decided here rather than in `bus_read32`, for the same reason the
+    // fetch above does it: a load or a store is most of what an instruction
+    // does, and a word read out of memory is a list index. Anything else is the
+    // bus's business and goes to it.
+    if pa < RAM_SIZE { return sdram::ram[floor(pa / 4) + 1]; }
+    if pa >= BOOTROM_BASE && pa - BOOTROM_BASE < FLASH_SIZE {
+        return flash_read32(pa - BOOTROM_BASE);
+    }
     return bus_read32(pa);
 }
 
@@ -495,13 +565,14 @@ pub proc cpu_write8(p_vaddr: num, p_value: num) warp {
     let addr: num = p_vaddr % 4294967296;
     if cpu_mmu_on == 0 {
         if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
-        if addr < RAM_SIZE { ram_write8(addr, p_value); return; }
+        if addr < RAM_SIZE { clcd_mark(addr); ram_write8(addr, p_value); return; }
         if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
         bus_write8(addr, p_value);
         return;
     }
     let pa: num = cpu_translate(addr, 1);
     if mem_fault > 0 { return; }
+    clcd_mark(pa);
     bus_write8(pa, p_value);
 }
 
@@ -509,13 +580,14 @@ pub proc cpu_write16(p_vaddr: num, p_value: num) warp {
     let addr: num = p_vaddr % 4294967296;
     if cpu_mmu_on == 0 {
         if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
-        if addr < RAM_SIZE { ram_write16(addr, p_value); return; }
+        if addr < RAM_SIZE { clcd_mark(addr); ram_write16(addr, p_value); return; }
         if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
         bus_write16(addr, p_value);
         return;
     }
     let pa: num = cpu_translate(addr, 1);
     if mem_fault > 0 { return; }
+    clcd_mark(pa);
     bus_write16(pa, p_value);
 }
 
@@ -523,19 +595,45 @@ pub proc cpu_write32(p_vaddr: num, p_value: num) warp {
     let addr: num = p_vaddr % 4294967296;
     if cpu_mmu_on == 0 {
         if bus_remap > 0 && addr < BOOTROM_ALIAS_SIZE { return; }
-        if addr < RAM_SIZE { ram_write32(addr, p_value); return; }
+        if addr < RAM_SIZE {
+            if addr >= clcd_fb_lo {
+                if addr < clcd_fb_hi { clcd_dirty = 1; }
+            }
+            ram_write32(addr, p_value);
+            return;
+        }
         if addr >= BOOTROM_BASE && addr - BOOTROM_BASE < FLASH_SIZE { return; }
         bus_write32(addr, p_value);
         return;
     }
     let pa: num = cpu_translate(addr, 1);
     if mem_fault > 0 { return; }
+    if pa < RAM_SIZE {
+        if pa >= clcd_fb_lo {
+            if pa < clcd_fb_hi { clcd_dirty = 1; }
+        }
+        ram_write32(pa, p_value);
+        return;
+    }
+    if pa >= BOOTROM_BASE && pa - BOOTROM_BASE < FLASH_SIZE { return; }
     bus_write32(pa, p_value);
 }
 
 /// Fetch one instruction word. A fault here is a prefetch abort, and it aborts
 /// the instruction rather than the fetch, so `cpu_pc` keeps pointing at the
 /// word that could not be read -- which is what the abort handler is handed.
+///
+/// The translated path is inlined rather than handed to `bus_read32`, and it is
+/// the second half of what makes an instruction fetch affordable. A fetch is
+/// *every* instruction, and the chain used to be `cpu_fetch` -> `cpu_translate`
+/// -> `bus_read32` -> `ram_read32`: four Scratch custom blocks and a `% 4` to
+/// read one list item. The three SDRAM cases `bus_read32` decides between are
+/// decided here instead, so the common one -- the kernel's own text, which is
+/// RAM with the remap bit set -- is a list index and nothing else.
+///
+/// A physical address that is not SDRAM still goes to `bus_read32`, so the
+/// decode is in one place and a device or a hole in the memory map answers
+/// exactly as it did. Nothing about which frame or word a fetch reads changes.
 pub proc cpu_fetch(p_vaddr: num) -> num warp {
     let addr: num = p_vaddr % 4294967296;
     if cpu_mmu_on == 0 {
@@ -552,7 +650,12 @@ pub proc cpu_fetch(p_vaddr: num) -> num warp {
         mem_fault = 2;
         return 0;
     }
-    return bus_read32(pa - pa % 4);
+    let word: num = pa - pa % 4;
+    if word < RAM_SIZE { return sdram::ram[floor(word / 4) + 1]; }
+    if word >= BOOTROM_BASE && word - BOOTROM_BASE < FLASH_SIZE {
+        return flash_read32(word - BOOTROM_BASE);
+    }
+    return bus_read32(word);
 }
 
 // ---------------------------------------------------------------------------
@@ -616,9 +719,18 @@ pub proc cp15_write(p_op1: num, p_crn: num, p_crm: num, p_op2: num, p_value: num
         cp15_control = p_value % 4294967296;
         cpu_mmu_on = cp15_control % 2;
         tlb_flush();
+        // The two transitions that change what every subsequent address means,
+        // and the ones a boot is read by: the MMU coming on, and the page table
+        // base being set to a different tree.
+        log_line(f"cp15-control {log_hex(cp15_control)} mmu={cpu_mmu_on} i={cpu_instructions} pc={log_hex(cpu_pc)}");
         return;
     }
-    if p_crn == 2 { cp15_ttb = p_value % 4294967296; tlb_flush(); return; }
+    if p_crn == 2 {
+        cp15_ttb = p_value % 4294967296;
+        tlb_flush();
+        log_line(f"cp15-ttb {log_hex(cp15_ttb)} i={cpu_instructions} pc={log_hex(cpu_pc)}");
+        return;
+    }
     if p_crn == 3 { cp15_dacr = p_value % 4294967296; return; }
     if p_crn == 5 { cp15_fsr = p_value % 4294967296; return; }
     if p_crn == 6 { cp15_far = p_value % 4294967296; return; }

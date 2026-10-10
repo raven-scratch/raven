@@ -194,6 +194,26 @@ block:
 | `f(x)` where `f` is a `proc` with a result type | the call, then a cell copy and a read — 2 blocks beyond the call itself |
 | `num(x)`, `str(x)` | 0 — a retype |
 
+### What a call costs, and why an inlined reporter is cheaper
+
+A reporter written where it is used is evaluated there, in the expression that
+surrounds it, and each Scratch reporter block is one call in the interpreter's own
+loop. Going through a call pays for the call as well: a `proc` that returns a
+value costs the `procedures_call` and a frame the VM pushes to run it, on top of
+the cell copy and the read the table above already counts. An `fn`, `macro` or
+`const` is expanded at the call site, so its computation becomes part of the
+surrounding expression and costs only the blocks that expression needs — which is
+why the same arithmetic written inline is cheaper at run time than the same
+arithmetic reached through a procedure.
+
+This is a decision the source has to make, because it is not one the optimiser can
+make later: replacing a stored value with the reporter that produced it needs the
+proof that nothing wrote it in between, and that is the inference raven-asm
+refuses ([what the optimiser will not
+do](/raven-asm/optimizer#what-it-will-not-do)). Choosing an `fn` over a `proc`
+with a result, or writing the computation where it is read, gets the saving with
+the guarantee intact.
+
 ### Definitions
 
 | raven | raven-asm | Notes |

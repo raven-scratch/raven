@@ -49,16 +49,24 @@ Module._load = function (request, parent, isMain) {
     return originalLoad.call(this, request, parent, isMain);
 };
 
-const VM_ROOT = process.env.SCRATCH_VM_ROOT
-    ? path.resolve(process.env.SCRATCH_VM_ROOT)
-    : path.resolve(__dirname, '../../scratch-editor/packages/scratch-vm');
+// The VM, found wherever it is on this machine. `tools/vm-root.mjs` is the one
+// place that answers this for the whole repository, so this script does not
+// carry its own idea of where a checkout lives. Node loads an ES module from a
+// CommonJS one here, which is why the shared resolver can be ESM while this
+// script stays CommonJS.
+const { findVmRoot, vmHelp } = require('./vm-root.mjs');
+
+const VM_ROOT = findVmRoot();
 
 let VirtualMachine;
 try {
-    VirtualMachine = require(path.join(VM_ROOT, 'src/virtual-machine.js'));
+    if (!VM_ROOT) {
+        console.error(vmHelp());
+        process.exit(2);
+    }
+    VirtualMachine = require(path.join(VM_ROOT, 'src', 'virtual-machine.js'));
 } catch (err) {
     console.error(`Could not load the Scratch VM from ${VM_ROOT}`);
-    console.error('See the header of this file for how to get a checkout.');
     console.error(String(err.message || err));
     process.exit(2);
 }

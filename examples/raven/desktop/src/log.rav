@@ -1,0 +1,137 @@
+// The runtime log: what the machine is doing, written where a reader can see it.
+//
+// A guest that hangs says nothing. That is the whole reason this module exists:
+// when Linux stops printing, the console is silent, the Stage is a frozen
+// picture, and there is no way to tell a guest spinning in a fault handler from
+// one that has quietly stopped running. This is the answer -- the machine writes
+// down what it is doing as it does it, and a check reads the list afterwards.
+//
+// # Two lists, because a hang has two questions
+//
+// "What has happened?" and "what is happening right now?" are different
+// questions with different shapes, so they get different structures:
+//
+//   * `machine_log` is **append-only, to a cap**. It holds the story from
+//     power-on: the reset, the phases, the transitions, every exception. Because
+//     it never wraps, a record written at instruction 1,000 is still there at
+//     instruction 100,000,000 -- which is what makes it possible to see how far
+//     a boot got. When it is full it stops and counts what it dropped rather
+//     than overwriting the beginning.
+//
+//   * `machine_log_tail` is a **ring of the most recent lines**. A hang is
+//     diagnosed from the last few dozen records before it, and those are exactly
+//     the ones an append-only list loses to its cap. The ring is fixed size, so
+//     it costs the same at instruction 1,000 and at 100,000,000.
+//
+// Reading them together is the point: the log says which phase the machine
+// reached, and the tail says what it was doing when it stopped making progress.
+// `tools/log-run.mjs` boots a project and prints both.
+//
+// # Cost
+//
+// A line is a string built with `f"..."`, and a hex field is eight list reads
+// and eight joins. That is far too much per *instruction* and nothing at all per
+// *slice* -- the ARM board's slice is 8,192 instructions and Doom's is 262,144 --
+// so the machine writes a state line once per slice and a record at each event,
+// and the two are the right granularity for the question being asked. A reader
+// who wants instruction-level history wants `machine_trace_on` (the existing
+// 256-entry program-counter ring in `src/cpu/state.rav`), not this.
+//
+// `machine_log_on` turns the whole thing off, and a check that is measuring
+// throughput rather than diagnosing it should: the log is cheap, not free.
+
+/// The story, from power-on, capped. See the module comment.
+@scratch_global
+pub var machine_log: list<str> = [];
+
+/// The most recent lines, as a fixed-size ring.
+@scratch_global
+pub var machine_log_tail: list<str> = [];
+
+/// Where the next tail line goes, once the ring is full.
+@scratch_global
+pub var machine_log_tail_next: num = 0;
+
+/// Zero turns the log off entirely. On by default: a machine that hangs with the
+/// log off is a machine that has to be run again to be understood.
+@scratch_global
+pub var machine_log_on: num = 1;
+
+/// How many lines the append-only log keeps before it stops.
+@scratch_global
+pub var machine_log_max: num = 65536;
+
+/// How many lines the ring keeps. Big enough to hold a slice's worth of detail
+/// and small enough that a `list` of them is not what the project is paying for.
+@scratch_global
+pub var machine_log_tail_max: num = 1024;
+
+/// How many lines were refused because the append-only log was full. A non-zero
+/// count says the interesting part of the run is later than the log reaches, and
+/// the tail is then the only thing worth reading.
+@scratch_global
+pub var machine_log_dropped: num = 0;
+
+/// The hexadecimal digits, so a number can be written the way a disassembly
+/// writes it. Indexed by value plus one, because a Scratch list is 1-based.
+@scratch_global
+pub var log_hex_digits: list<str> = [
+    "0", "1", "2", "3", "4", "5", "6", "7",
+    "8", "9", "A", "B", "C", "D", "E", "F"
+];
+
+/// Empty both lists and reset the counters. Called from the machine's reset, so
+/// a second green flag starts a log rather than continuing one.
+pub proc log_reset() warp {
+    machine_log.clear();
+    machine_log_tail.clear();
+    machine_log_tail_next = 0;
+    machine_log_dropped = 0;
+}
+
+/// A 32-bit value as eight hexadecimal digits, upper case, no prefix.
+///
+/// `proc` and not `fn` because it is a loop: raven's `fn` is an expression and
+/// has no statements, and a formatter that cannot loop cannot format.
+pub proc log_hex(p_value: num) -> str warp {
+    let v: num = p_value % 4294967296;
+    let s: str = "";
+    let shift: num = 268435456;
+    repeat 8 {
+        let d: num = floor(v / shift);
+        s = f"{s}{log_hex_digits[d + 1]}";
+        v = v - d * shift;
+        shift = shift / 16;
+    }
+    return s;
+}
+
+/// One line into both lists.
+///
+/// The two are written together so a caller cannot accidentally log the story
+/// without logging the present, and the length tests are `>=` rather than `==`
+/// so that a log whose cap was lowered mid-run still stops.
+pub proc log_line(p_text: str) warp {
+    if machine_log_on == 0 { return; }
+    if machine_log.len() >= machine_log_max {
+        machine_log_dropped += 1;
+    } else {
+        machine_log.push(p_text);
+    }
+    if machine_log_tail.len() < machine_log_tail_max {
+        machine_log_tail.push(p_text);
+        return;
+    }
+    machine_log_tail[machine_log_tail_next + 1] = p_text;
+    machine_log_tail_next = (machine_log_tail_next + 1) % machine_log_tail_max;
+}
+
+/// A record with no number in it: a phase change, a reset, a decision.
+pub proc log_event(p_tag: str) warp {
+    log_line(p_tag);
+}
+
+/// A record that names an address, which is what most of the interesting ones do.
+pub proc log_event_at(p_tag: str, p_value: num) warp {
+    log_line(f"{p_tag} {log_hex(p_value)}");
+}

@@ -32,6 +32,16 @@ pub struct Options {
     /// Keep the emitted raven-asm without also writing `project.json`.
     /// `--debug` implies this; it exists so the two halves can be tested apart.
     pub emit_asm: bool,
+    /// Run `raven_opt` over the lowered raven-asm before it is emitted.
+    ///
+    /// **On by default, and that is the difference between the two front ends.**
+    /// raven-asm promises one statement per block and defaults the optimiser
+    /// off, because what a reader wrote is what the editor should show. raven
+    /// promises the opposite — its macros are lowerings a reader never wrote,
+    /// and `raven expand` prints them — so an optimisation the lowering chose is
+    /// the same kind of thing and belongs on. `--no-optimize` is how a build
+    /// asks for the blocks the lowering produced verbatim.
+    pub optimize: bool,
 }
 
 impl Options {
@@ -41,6 +51,7 @@ impl Options {
             manifest: manifest.into(),
             emit_asm: false,
             debug: false,
+            optimize: true,
         }
     }
 }
@@ -55,6 +66,10 @@ pub struct BuildResult {
     /// The `.sb3`.
     pub artifact: Option<PathBuf>,
     pub warnings: Vec<Diag>,
+    /// What the raven-asm optimiser did, or zero when it did not run. Reported
+    /// so that "raven builds optimised" is a number a reader can see rather than
+    /// a claim in a comment.
+    pub optimized: raven_opt::Folded,
 }
 
 /// Load and compile, without writing anything.
@@ -107,7 +122,25 @@ pub fn build(options: &Options) -> Result<BuildResult> {
     let written = write_tree(&asm_dir, &pairs, &staging)?;
 
     let manifest_path = asm_dir.join(raven_asm::manifest::MANIFEST_NAME);
-    let build = match raven_asm::compile::build(&manifest_path) {
+    // ---- Optimise, as a separate pass over the lowered project.
+    //
+    // This is what `raven-opt` exists for, and this is the seam: the lowering
+    // has just been written to a staging directory and `raven-asm` is about to
+    // read it, so the optimiser reads and rewrites the project *as source*
+    // before the compiler ever sees it. Nothing about raven-asm changes; the
+    // optimiser is a program over its input.
+    //
+    // In place, because the staging tree is this build's own scratch space and
+    // nothing else will look at it. A failure here is a build failure like any
+    // other, with the same diagnostics.
+    if options.optimize {
+        match raven_opt::optimize_in_place(&manifest_path) {
+            Ok(report) => result.optimized = report.folded,
+            Err(error) => return Err(translate(error, &marked, &asm_dir)),
+        }
+    }
+    let build_options = raven_asm::compile::BuildOptions { strict: false };
+    let build = match raven_asm::compile::build_with_options(&manifest_path, build_options) {
         Ok(build) => build,
         Err(error) => return Err(translate(error, &marked, &asm_dir)),
     };

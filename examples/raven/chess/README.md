@@ -50,8 +50,7 @@ cargo run -p raven -- build -m examples/raven/chess/raven.toml --debug
 
 # the built project, against the Python engine (--debug writes layout.json,
 # which is where the checker finds each list's run of cells)
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
-    node examples/raven/chess/tools/check.mjs
+node examples/raven/chess/tools/check.mjs
 ```
 
 ## The Python engine

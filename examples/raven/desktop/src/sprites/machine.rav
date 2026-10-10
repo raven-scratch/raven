@@ -24,6 +24,7 @@ use dev::console;
 use cpu::state;
 use cpu::core;
 use cpu::mem;
+use log;
 
 sprite "Machine" {
     costume "blank" = "assets/blank.svg";
@@ -136,6 +137,24 @@ sprite "Machine" {
         }
     }
 
+    /// One line describing the whole processor, for the runtime log.
+    ///
+    /// Written once per slice. That is far too often to be free and far too
+    /// rarely to be a cost -- a slice here is thousands of instructions, and a
+    /// line is a dozen fields -- and it is the right rate for the question the
+    /// log exists to answer: a guest that stops making progress stops writing
+    /// new lines, so the last few say where it was, in what mode, and with the
+    /// fault registers whatever they were.
+    ///
+    /// The fault registers are included even on a slice with no fault, because
+    /// the interesting case is a stale one: a guest looping in a handler after a
+    /// fault it never cleared looks exactly like a guest looping for no reason
+    /// unless `fsr` and `far` are on the line.
+    proc log_cpu_state(p_tag: str) warp {
+        if machine_log_on == 0 { return; }
+        log_line(f"{p_tag} i={cpu_instructions} pc={log_hex(cpu_pc)} ir={log_hex(cpu_ir)} cpsr={log_hex(cpu_cpsr)} mode={cpu_mode()} sp={log_hex(cpu_get_reg(13))} lr={log_hex(cpu_get_reg(14))} fsr={log_hex(cp15_fsr)} far={log_hex(cp15_far)} ctl={log_hex(cp15_control)} ttb={log_hex(cp15_ttb)}");
+    }
+
     /// One slice of the guest, and everything on the board it drives, in warp
     /// so that the slice is not cut short by Scratch's own turn taking.
     proc run_slice() warp {
@@ -174,6 +193,9 @@ sprite "Machine" {
         // processor's cycles, and each device is advanced by its share of them.
         bus_tick(machine_slice);
         bus_refresh_irqs();
+        // And the log's own record of the slice, after the board has been
+        // advanced, so the line describes the machine as the frame leaves it.
+        log_cpu_state("slice");
     }
 
     /// The frame loop. The only procedure in the machine that is not `warp`:
@@ -184,9 +206,14 @@ sprite "Machine" {
         while machine_state == 1 {
             run_slice();
             machine_frames += 1;
-            if cpu_halted > 0 { machine_state = 0; }
-            if machine_frames > machine_budget { machine_state = 0; }
+            // The log records *why* it stopped as well as that it did: a guest
+            // that halted and one whose budget ran out are different answers to
+            // "why is there nothing on the screen", and the counters alone do
+            // not tell them apart.
+            if cpu_halted > 0 { machine_state = 0; log_event("stop: halted"); }
+            if machine_frames > machine_budget { machine_state = 0; log_event("stop: budget"); }
         }
+        log_cpu_state("stop");
     }
 
     /// What the machine says about itself when it stops. This is not part of a
@@ -227,10 +254,19 @@ sprite "Machine" {
     }
 
     on broadcast_received("Machine.powerOn") {
+        // The log starts empty on every power-on, so a second green flag reads
+        // as a machine that was just switched on rather than as a continuation
+        // of the run before it.
+        log_reset();
+        log_line(f"power-on board=arm-virt slice={machine_slice} budget={machine_budget}");
         console_reset();
         bus_reset();
         cp15_reset();
         cpu_reset();
+        // The state as reset leaves it: PC zero, supervisor mode, both
+        // interrupts masked. Address zero is the boot ROM's alias at this
+        // point, which is why the first instruction is readable at all.
+        log_cpu_state("reset");
         machine_frames = 0;
         machine_state = 1;
         sensing::reset_timer();

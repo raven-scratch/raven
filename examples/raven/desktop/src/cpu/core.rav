@@ -27,6 +27,7 @@ use cpu::state;
 use cpu::alu;
 use cpu::luts;
 use cpu::mem;
+use log;
 
 /// The instruction being executed, and the operand it works on. Scratch has
 /// no registers of its own to spill into, so these are the CPU's scratch.
@@ -72,12 +73,6 @@ pub var cpu_temp: num = 0;
 @scratch_global
 pub var cpu_irq_pending: num = 0;
 
-pub proc mem_cpu_fetch(p_addr: num) -> num warp {
-    let word: num = cpu_fetch(p_addr);
-    if mem_fault > 0 { mem_fault = 2; }
-    return word;
-}
-
 /// Take an exception. The saved status register goes to the *old* mode's bank
 /// -- which is why the mode is changed after it is written -- and the return
 /// address goes to the new mode's `r14`.
@@ -98,6 +93,11 @@ pub proc cpu_clear_fault() warp {
 // ---------------------------------------------------------------------------
 
 pub proc cpu_exception(p_vector: num, p_lr_offset: num, p_lr: num) warp {
+    // Logged *before* the mode moves, so the line describes the processor that
+    // was interrupted rather than the one that is about to run. The vector
+    // number is the address offset: 4 undefined, 8 supervisor call, 12 and 16
+    // the two aborts, 24 interrupt, 28 fast interrupt.
+    log_line(f"exception vec={p_vector} lr={log_hex(p_lr)} pc={log_hex(cpu_pc)} cpsr={log_hex(cpu_cpsr)} fsr={log_hex(cp15_fsr)} far={log_hex(cp15_far)} i={cpu_instructions}");
     // The status register is saved into the bank of the mode being
     // *entered*, so the mode has to move before it is written. Reading it
     // first and writing it after is the whole of this, and getting the
@@ -1081,7 +1081,12 @@ pub proc cpu_step() warp {
         }
     }
     mem_fault = 0;
-    cpu_ir = mem_cpu_fetch(cpu_pc);
+    // Inlined rather than called. `cpu_fetch` was reached through a
+    // `mem_cpu_fetch` wrapper whose whole body was this call and a fault test
+    // that `cpu_fetch` already performs -- it sets `mem_fault` to 2 on a
+    // prefetch abort itself. A Scratch custom block is a custom block, and this
+    // one was paid once for every instruction the machine ever executed.
+    cpu_ir = cpu_fetch(cpu_pc);
     if mem_fault > 0 { cpu_exception(12, 4, cpu_pc + 4); return; }
     cpu_instructions += 1;
     cpu_branched = 0;

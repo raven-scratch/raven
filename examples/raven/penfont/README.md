@@ -33,8 +33,7 @@ cargo run -p raven -- check -m examples/raven/penfont/raven.toml
 cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
 python lib/penfont/font2vm.py --project examples/raven/penfont \
   --ligatures --stage examples/raven/penfont/dist/page
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
-  node examples/raven/penfont/tools/check.mjs
+node examples/raven/penfont/tools/check.mjs
 ```
 
 The first command writes both files under `src/penfont/`, so it is how the

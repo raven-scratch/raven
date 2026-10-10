@@ -117,6 +117,28 @@ pub var efb_commit: num = 0;
 @scratch_global
 pub var efb_writes: num = 0;
 
+/// One when the panel's memory has changed since the monitor last drew it.
+///
+/// This is what lets the monitor skip a pass it would only repeat. It is a
+/// **whole-panel** flag and not a dirty row or a dirty range, and that is the
+/// whole reason it is safe: a pass that runs at all still erases the pen layer
+/// and repaints every row, so there is no bookkeeping about what was left alone
+/// that could be wrong. What it skips is the entirely redundant pass, which is
+/// a different thing from the partial redraw `src/rvmonitor/efb.rav` records the
+/// owner rejecting three times -- those drew *some* rows and left others, and
+/// the pen has no erase that takes back part of a line, so a row the scheme got
+/// wrong stayed wrong for ever. A skipped pass leaves the pen holding exactly
+/// the picture the card still has, because the card has not moved.
+///
+/// It is set on every write that can change what the monitor reads: a latch (the
+/// indexed panel's source is the latched copy) and any access to the direct
+/// colour framebuffer. It is cleared at the start of a pass, and because the
+/// monitor's `monitor_draw` is `warp` and the machine's slice is `warp`, the two
+/// cannot interleave inside a pass -- so nothing can be written between the
+/// clear and the draw that the draw would miss.
+@scratch_global
+pub var efb_dirty: num = 1;
+
 // ---------------------------------------------------------------------------
 // The window's layout
 // ---------------------------------------------------------------------------
@@ -154,6 +176,9 @@ pub proc efb_latch() warp {
     }
     efb_ack = efb_seq;
     efb_frames += 1;
+    // The indexed panel's source is the latched copy, so a latch is exactly the
+    // event that makes the monitor's picture stale.
+    efb_dirty = 1;
 }
 
 /// The board's side of the contract: watch `FRAME_SEQ` and latch when it
@@ -291,6 +316,10 @@ pub proc efb_write_byte(p_at: num, p_value: num) warp {
 /// aligned on four bytes is one list replace and nothing else.
 pub proc efb_write_direct(p_at: num, p_width: num, p_value: num) warp {
     efb_writes += 1;
+    // The direct panel's source *is* this memory, so any access to it is a
+    // change the monitor has to see. Set once here rather than in each of the
+    // three helpers, because this is the one place every width comes through.
+    efb_dirty = 1;
     if p_width == 4 && p_at % 4 == 0 {
         efb_words[floor(p_at / 4) + 1] = p_value % 4294967296;
         return;
@@ -379,4 +408,7 @@ pub proc efb_reset() warp {
     efb_frames = 0;
     efb_commit = 0;
     efb_writes = 0;
+    // A cleared card is a card the monitor has to draw again, or a reset would
+    // leave the previous run's picture on the Stage for ever.
+    efb_dirty = 1;
 }

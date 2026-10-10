@@ -39,6 +39,7 @@ import Module from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { writeScanoutPng, scanoutRgb } from './png.mjs';
+import { findVmRoot, vmHelp } from '../../../../tools/vm-root.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -66,19 +67,16 @@ globalThis.document = { hidden: true };
 
 /// Which VM to run in, and whether it can compile.
 ///
-/// `SCRATCH_VM_ROOT` wins when it is set. Otherwise TurboWarp's checkout is
-/// taken if there is one, because the machine is too slow for the vanilla
-/// interpreter to finish the boot, and the vanilla VM the rest of the examples
-/// use is the fallback. A VM that compiles is asked to: the flag is a property
-/// of the runtime rather than of the project, so an unpatched VM is unaffected.
-const candidates = [
-    process.env.SCRATCH_VM_ROOT && path.resolve(process.env.SCRATCH_VM_ROOT),
-    path.join(repo, 'ref', 'turbowarp-vm'),
-    path.join(repo, 'ref', 'scratch-vm', 'node_modules', 'scratch-vm')
-].filter(Boolean);
-const VM_ROOT = candidates.find((dir) => fs.existsSync(path.join(dir, 'src', 'virtual-machine.js')));
+/// `tools/vm-root.mjs` answers it for every check in the repository, and its
+/// order is the one this wants: `SCRATCH_VM_ROOT` when it is set, then
+/// TurboWarp's checkout, then the vanilla VM the other examples use. TurboWarp
+/// comes first because the machine is too slow for the interpreter to finish the
+/// boot in a human lifetime. A VM that compiles is asked to: the flag is a
+/// property of the runtime rather than of the project, so an unpatched VM is
+/// unaffected.
+const VM_ROOT = findVmRoot();
 if (!VM_ROOT) {
-    console.error(`no Scratch VM found; tried\n  ${candidates.join('\n  ')}`);
+    console.error(vmHelp());
     process.exit(2);
 }
 

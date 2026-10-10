@@ -40,6 +40,18 @@ pub struct BuildOptions {
     pub strict: bool,
 }
 
+impl BuildOptions {
+    /// The options a `--strict` build uses.
+    ///
+    /// A constructor rather than a struct literal at each call site, because
+    /// every field added here would otherwise have to be added to every test
+    /// that only cares about one of them.
+    #[must_use]
+    pub const fn strict() -> Self {
+        Self { strict: true }
+    }
+}
+
 /// Compile the project described by `manifest_path`.
 pub fn build(manifest_path: &Path) -> Result<BuildOutput> {
     build_with_options(manifest_path, BuildOptions::default())
@@ -488,7 +500,7 @@ impl Compiler {
         let mut extensions: HashSet<String> =
             self.manifest.project.extensions.iter().cloned().collect();
 
-        for (index, target) in targets.iter().enumerate() {
+        for (index, target) in targets.iter_mut().enumerate() {
             let syms = &syms_per_target[index];
             let is_stage = target.kind == TargetKind::Stage;
 

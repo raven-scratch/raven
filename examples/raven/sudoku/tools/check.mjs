@@ -15,19 +15,18 @@
  *   * it plays whole games — one to a win, one to a loss — and fails if the
  *     project does not react.
  *
- * It needs a checkout of the Scratch VM, like `tools/validate-sb3.js`:
+ * It needs a checkout of the Scratch VM, and it finds one wherever it is: see
+ * `tools/vm-root.mjs` for the search, and set `SCRATCH_VM_ROOT` only if yours
+ * lives somewhere none of them reach.
  *
- *   git clone https://github.com/scratchfoundation/scratch-vm ../scratch-vm
- *   cd ../scratch-vm && npm install
- *
- * Then, from the repository root:
+ * From the repository root:
  *
  *   cargo run -p raven -- build -m examples/raven/sudoku/raven.toml --debug
- *   SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
+ *   node examples/raven/sudoku/tools/check.mjs
  *
  * Environment:
- *   SCRATCH_VM_ROOT  path to the `scratch-vm` package (defaults to the sibling
- *                    checkout described above).
+ *   SCRATCH_VM_ROOT  path to a `scratch-vm` package, if it is not somewhere the
+ *                    search already looks.
  *   ROUNDS           how many puzzles to deal per difficulty (default 3).
  */
 
@@ -35,6 +34,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { loadVm } from '../../../../tools/vm-root.mjs';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -57,17 +57,11 @@ Module._load = function (request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const VM_ROOT = process.env.SCRATCH_VM_ROOT
-  ? resolve(process.env.SCRATCH_VM_ROOT)
-  : resolve(root, '../../../scratch-vm');
-
 let VirtualMachine;
 try {
-  VirtualMachine = require(join(VM_ROOT, 'src/virtual-machine.js'));
+  ({ VirtualMachine } = loadVm());
 } catch (error) {
-  console.error(`Could not load the Scratch VM from ${VM_ROOT}`);
-  console.error('Set SCRATCH_VM_ROOT to a scratch-vm checkout.');
-  console.error(String(error.message || error));
+  console.error(error.message);
   process.exit(2);
 }
 
@@ -150,8 +144,6 @@ const check = (ok, message) => {
   return ok;
 };
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 async function main() {
   const sb3 = join(root, 'dist', 'sudoku.sb3');
   const vm = new VirtualMachine();
@@ -168,8 +160,28 @@ async function main() {
 
   const bytes = readFileSync(sb3);
   await vm.loadProject(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  // The VM only steps its threads while it is running.
-  vm.start();
+
+  // The VM is stepped a frame at a time, at the frame rate the project is
+  // written for, instead of being left to a real timer. What the checker waits
+  // for is then a state the project reaches, and how long that takes in seconds
+  // is the machine's business rather than the check's. The sequencer gives a step
+  // a wall-clock budget of 75% of `currentStepTime`, and that is null until
+  // `runtime.start()` sets it, so a step runs no scripts at all without it.
+  const FRAME_MS = 1000 / 30;
+  vm.runtime.currentStepTime = FRAME_MS;
+
+  async function spin(frames = 1) {
+    for (let i = 0; i < frames; i += 1) {
+      const began = Date.now();
+      vm.runtime._step();
+      const left = FRAME_MS - (Date.now() - began);
+      if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+    }
+  }
+
+  /// A pause in the project's own frames. The number of milliseconds names the
+  /// wait the reader meant; a frame is what the VM actually advances.
+  const pause = (ms) => spin(Math.max(1, Math.round(ms / FRAME_MS)));
 
   // A raven `list` is a run of an arena rather than a Scratch list with a name,
   // and a `pub var` is a cell of `_vms` rather than a Scratch variable. The
@@ -291,14 +303,12 @@ async function main() {
     );
   });
 
-  /** Run the VM until `ready` holds, or give up. */
+  /** Run the VM until `ready` holds, or give up. The budget is counted in
+   * frames, so a budget that is generous on one machine is generous on all. */
   const until = async (ready, budgetMs = 40000) => {
-    const deadline = Date.now() + budgetMs;
-    while (Date.now() < deadline) {
-      if (ready()) return true;
-      await sleep(25);
-    }
-    return false;
+    const budget = Math.max(1, Math.round(budgetMs / FRAME_MS));
+    for (let spent = 0; spent < budget && !ready(); spent += 1) await spin(1);
+    return ready();
   };
 
   // `cursor` is a raven `var`, so it is a cell of the project's one arena rather
@@ -314,7 +324,7 @@ async function main() {
     const see = async (key) => {
       const before = vms();
       press(key);
-      await sleep(90);
+      await pause(90);
       const after = vms();
       return after.map((v, i) => v - before[i]);
     };
@@ -334,7 +344,7 @@ async function main() {
       if (cursorSlot >= 0 && cursorCell() === 0) return true;
       press('up arrow');
       press('left arrow');
-      await sleep(120);
+      await pause(120);
     }
     return cursorSlot >= 0 && cursorCell() === 0;
   };
@@ -355,7 +365,7 @@ async function main() {
     const before = (list('puzzle') || []).join(',');
     for (let i = 1; i < level; i += 1) {
       press('down arrow');
-      await sleep(90);
+      await pause(90);
     }
     press('enter');
     return until(() => {
@@ -451,7 +461,7 @@ async function main() {
   // goes home first.
   press('up arrow');
   press('left arrow');
-  await sleep(200);
+  await pause(200);
   cursorSlot = await calibrateCursor();
   check(cursorSlot >= 0, 'could not find the cursor cell in the arena');
   check(await clampToFirst(), `the clamped cursor is on cell ${cursorCell() + 1}, not the first`);
@@ -536,7 +546,7 @@ async function main() {
         if (asKey === rowKey && first.row < 0) first.row = i;
         if (asKey === boxKey && first.box < 0) first.box = i;
       }
-      await sleep(6);
+      await pause(6);
     }
     for (const snapshot of watched) {
       const r = snapshot.indexOf(rowUid);
@@ -611,9 +621,9 @@ async function main() {
     let harder = false;
     for (let attempt = 0; attempt < 40 && !harder; attempt += 1) {
       press('down arrow');
-      await sleep(90);
+      await pause(90);
       press('down arrow');
-      await sleep(90);
+      await pause(90);
       press('enter');
       harder = await until(() => {
         const next = list('puzzle') || [];
@@ -647,7 +657,7 @@ async function main() {
 
     for (let i = 0; i < 3; i += 1) {
       press(wrong);
-      await sleep(80);
+      await pause(80);
     }
     const after = list('cells') || [];
     check(
@@ -658,7 +668,7 @@ async function main() {
     // Once the run is over the board stops taking digits, and Enter twice —
     // card, then menu — deals another puzzle of the same difficulty.
     press(String(solution[at]));
-    await sleep(120);
+    await pause(120);
     check(
       (list('cells') || []).every((v, i) => v === before[i]),
       'the board kept taking digits after the run ended',
@@ -666,7 +676,7 @@ async function main() {
     let restarted = false;
     for (let attempt = 0; attempt < 20 && !restarted; attempt += 1) {
       press('enter');
-      await sleep(300);
+      await pause(300);
       press('enter');
       restarted = await until(() => {
         const next = list('puzzle') || [];

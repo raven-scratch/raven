@@ -20,6 +20,7 @@ use rvboard::image;
 use rvbus::bus;
 use rvcpu::hart;
 use rvdev::syscon;
+use log;
 
 sprite "Machine" {
     costume "blank" = "assets/blank.svg";
@@ -64,11 +65,25 @@ sprite "Machine" {
     @scratch_sprite var machine_frames: num = 0;
     @scratch_sprite var machine_seconds: num = 0;
 
+    /// One line describing the whole hart, for the runtime log.
+    ///
+    /// The counterpart of the ARM board's `log_cpu_state`, and the same shape:
+    /// once a slice, after the slice, with the trap and CSR state on the line
+    /// because a hart stuck in a trap handler is the failure this is here to
+    /// make visible. The three CSRs are the whole of a RISC-V trap's story --
+    /// `mcause` says what kind, `mepc` where, `mtval` what operand.
+    proc log_cpu_state(p_tag: str) warp {
+        if machine_log_on == 0 { return; }
+        log_line(f"{p_tag} i={rv_instructions} pc={log_hex(rv_pc)} ir={log_hex(rv_ir)} mstatus={log_hex(rv_mstatus)} mip={log_hex(rv_mip)} mie={log_hex(rv_mie)} mepc={log_hex(rv_mepc)} mcause={log_hex(rv_mcause)} mtval={log_hex(rv_mtval)} trap={log_hex(rv_trap)}");
+    }
+
     /// One slice of the guest, in `warp` so the slice is not cut short by
     /// Scratch's own turn taking.
     proc machine_run_slice() warp {
         hart_run_slice(machine_slice, machine_slice_us);
         machine_frames += 1;
+        // After the slice, so the line is the state the frame leaves behind.
+        log_cpu_state("slice");
     }
 
     /// The frame loop. The only procedure in the machine that is not `warp`:
@@ -78,8 +93,9 @@ sprite "Machine" {
     proc run_loop() {
         while rv_state == 1 {
             machine_run_slice();
-            if machine_frames > machine_budget { rv_state = 0; }
+            if machine_frames > machine_budget { rv_state = 0; log_event("stop: budget"); }
         }
+        log_cpu_state("stop");
     }
 
     on flag_clicked {
@@ -94,9 +110,18 @@ sprite "Machine" {
         // power-on -- `tools/watch-rv32.mjs`'s `--slice` and `--slice-us`.
         machine_slice = RV_SLICE;
         machine_slice_us = RV_SLICE_US;
+        log_reset();
+        log_line(f"power-on board=mini-rv32 format={RV_EFB_FORMAT} slice={machine_slice} slice_us={machine_slice_us} budget={machine_budget}");
         bus_reset();
         hart_reset();
+        // Loading the image is the longest thing a RISC-V power-on does and the
+        // one that can silently stop: `rv_ram` is grown a byte at a time and
+        // Scratch refuses to grow a list past 200,000 items, so a guest bigger
+        // than that is a guest that never finishes arriving. The length after
+        // the load is on the log line for exactly that reason.
         hart_load_ram();
+        log_line(f"ram-loaded bytes={rv_ram.len()}");
+        log_cpu_state("reset");
         machine_frames = 0;
         rv_state = 1;
         sensing::reset_timer();

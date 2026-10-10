@@ -18,7 +18,8 @@ macros             one block               file format
 | --- | --- | --- |
 | `crates/raven-scratch` | The Scratch 3 domain model: the 150-block catalog, `.sb3` container, ZIP writer, deterministic ids, assets, diagnostics. | — |
 | `crates/raven-asm` | The assembly-level language, its compiler, CLI, and the generated block reference. | `raven-scratch` |
-| `crates/raven` | The high-level language and compiler. | `raven-scratch`, `raven-asm` |
+| `crates/raven-opt` | The optimiser, as a program: a raven-asm project in, an optimised raven-asm project out. | `raven-asm`, `raven-scratch` |
+| `crates/raven` | The high-level language and compiler. | `raven-scratch`, `raven-asm`, `raven-opt` |
 | `crates/raven-re` | The decompiler: a vanilla Scratch 3 `.sb3` back into raven-asm source. | `raven-scratch`, `raven-asm` |
 
 Dependencies only point right. A front end may never be surprised by the layer
@@ -45,14 +46,17 @@ cargo clippy --workspace --all-targets
 cargo test --workspace
 cargo run -p raven -- explain rules        # the language, for a machine reader
 cargo run -p raven-asm -- catalog --markdown > docs/reference/blocks.md   # regenerate
+cargo run -p raven-opt -- -m <raven-asm.toml> -o <dir>   # the optimiser, on its own
 cd docs && npm install && npm run build                                   # docs site
-node tools/validate-sb3.js <file.sb3> --steps 1500   # real Scratch VM (needs SCRATCH_VM_ROOT)
+node tools/validate-sb3.js <file.sb3> --steps 1500   # real Scratch VM
 node tools/check-audio.mjs                 # the generated WAVs, against the tunes
 ```
 
-`tools/validate-sb3.js` needs a checkout of `scratch-editor`'s `scratch-vm`; set
-`SCRATCH_VM_ROOT` to `packages/scratch-vm`. It is the only end-to-end runtime
-check — use it whenever a change alters emitted blocks.
+`tools/validate-sb3.js` needs a checkout of `scratch-editor`'s `scratch-vm`, and
+`tools/vm-root.mjs` is the one place that finds one: it looks in `$SCRATCH_VM_ROOT`
+and then in the `ref/` checkouts and siblings every example's README names. It is
+the only end-to-end runtime check — use it whenever a change alters emitted
+blocks.
 
 ## Releasing and docs
 
@@ -72,17 +76,19 @@ installed — and attaches them to the release as
 
 ```
 raven-v<version>-windows-x86_64.exe        raven-asm-v<version>-windows-x86_64.exe
-raven-re-v<version>-windows-x86_64.exe
+raven-opt-v<version>-windows-x86_64.exe    raven-re-v<version>-windows-x86_64.exe
 raven-v<version>-linux-x86_64              raven-asm-v<version>-linux-x86_64
-raven-re-v<version>-linux-x86_64
+raven-opt-v<version>-linux-x86_64          raven-re-v<version>-linux-x86_64
 raven-v<version>-macos-aarch64             raven-asm-v<version>-macos-aarch64
-raven-re-v<version>-macos-aarch64
+raven-opt-v<version>-macos-aarch64         raven-re-v<version>-macos-aarch64
 ```
 
 Every binary can be carried to another machine and run as it is; `raven`
 compiles raven to raven-asm itself, and `raven-re` hands its result to the
 raven-asm library rather than to an installed `raven-asm`, so neither needs the
-other on the `PATH`.
+other on the `PATH`. `raven-opt` is the optimiser as a program — a raven-asm
+project in, an optimised raven-asm project out — and `raven` links it as a
+library rather than running it, so it is not on the `PATH` either.
 Re-running the workflow for a version that already has a release replaces the
 binaries in it instead of failing, which is how to rebuild them for an existing
 tag.
@@ -116,7 +122,7 @@ node examples/raven/sudoku/tools/assets.mjs       # the costumes
 node examples/raven/sudoku/tools/sounds.mjs       # the loop and the effects
 cargo run -p raven -- check -m examples/raven/sudoku/raven.toml
 cargo run -p raven -- build -m examples/raven/sudoku/raven.toml --debug
-SCRATCH_VM_ROOT=../scratch-vm node examples/raven/sudoku/tools/check.mjs
+node examples/raven/sudoku/tools/check.mjs
 node tools/validate-sb3.js examples/raven/sudoku/dist/sudoku.sb3 --steps 300
 ```
 
@@ -170,7 +176,7 @@ node examples/raven/chess/tools/assets.mjs         # the pieces (PNGs, through a
 node examples/raven/chess/tools/sounds.mjs         # the effects
 cargo run -p raven -- check -m examples/raven/chess/raven.toml
 cargo run -p raven -- build -m examples/raven/chess/raven.toml --debug
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/chess/tools/check.mjs
+node examples/raven/chess/tools/check.mjs
 ```
 
 `lib/penfont` is a library rather than an example, and the one to read when a
@@ -192,7 +198,7 @@ cargo run -p raven -- check -m examples/raven/penfont/raven.toml
 cargo run -p raven -- build -m examples/raven/penfont/raven.toml --debug
 python lib/penfont/font2vm.py --project examples/raven/penfont \
   --ligatures --stage examples/raven/penfont/dist/page
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm node examples/raven/penfont/tools/check.mjs
+node examples/raven/penfont/tools/check.mjs
 ```
 
 `--charset` is how a project pays for what it sets and nothing else: twenty named
@@ -269,11 +275,9 @@ rather than the Scratch project, and for the two it does not.
 git clone https://github.com/bjoernQ/mini-rv32ima-rs ref/mini-rv32ima-rs
 bash examples/raven/rv32ima/tools/mini-image.sh        # needs dtc, python3, curl
 node examples/raven/rv32ima/tools/build.mjs            # the mini guest
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
-  node examples/raven/rv32ima/tools/check.mjs
+node examples/raven/rv32ima/tools/check.mjs
 node examples/raven/rv32ima/tools/build.mjs emdoom     # the Doom guest
-SCRATCH_VM_ROOT=ref/scratch-editor/packages/scratch-vm \
-  node examples/raven/rv32ima/tools/check.mjs emdoom
+node examples/raven/rv32ima/tools/check.mjs emdoom
 ```
 
 `examples/raven/desktop` is the fifth, and the one to read when the emulated
@@ -333,6 +337,9 @@ cargo run -p raven-re -- "test/zhcn/A7 四万字纯画笔中文引擎.sb3" --out
 | Asset loading, rotation centres, md5 ids | `crates/raven-scratch/src/assets.rs`, `ids.rs` |
 | raven-asm grammar | `crates/raven-asm/src/parser.rs`, `lexer.rs` |
 | raven-asm semantics | `crates/raven-asm/src/compile.rs` |
+| The optimiser: what it folds and what it refuses to | `crates/raven-opt/src/optimize.rs` |
+| The optimiser's project I/O and its CLI | `crates/raven-opt/src/lib.rs`, `main.rs` |
+| Writing raven-asm source back out | `crates/raven-asm/src/print.rs` |
 | The block reference generator | `crates/raven-asm/src/docs_gen.rs` |
 | Writing raven-asm text: the escapes | `crates/raven-asm/src/source.rs` |
 | Reading a `.sb3`: the ZIP reader | `crates/raven-re/src/zipr.rs` |

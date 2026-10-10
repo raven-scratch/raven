@@ -20,9 +20,9 @@
 // for it; then the cursor, the palette, the erase sequences and the alternate
 // screen, fed at the terminal rather than through the guest.
 //
-// It needs a checkout of the Scratch VM:
-//
-//     set SCRATCH_VM_ROOT=path/to/scratch-vm
+// It needs a checkout of the Scratch VM, and it finds one wherever it is: see
+// `tools/vm-root.mjs` for the search, and set `SCRATCH_VM_ROOT` only if yours is
+// somewhere that search does not reach.
 //
 // and takes several minutes, most of it the guest's own boot and coremark.
 
@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Module from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { findVmRoot, vmHelp } from '../../../../tools/vm-root.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -167,10 +168,14 @@ if (chosen.length === 0) {
     process.exit(2);
 }
 
-const vmRoot = process.env.SCRATCH_VM_ROOT
-    ? path.resolve(process.env.SCRATCH_VM_ROOT)
-    : path.resolve(repo, '..', 'scratch-vm');
-const { default: VirtualMachine } = await import('file://' + path.join(vmRoot, 'src/virtual-machine.js').replace(/\\/g, '/'));
+const vmRoot = findVmRoot();
+if (!vmRoot) {
+    console.error(vmHelp());
+    process.exit(2);
+}
+const { default: VirtualMachine } = await import(
+    'file://' + path.join(vmRoot, 'src/virtual-machine.js').replace(/\\/g, '/')
+);
 
 let failures = 0;
 

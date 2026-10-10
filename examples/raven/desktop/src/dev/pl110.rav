@@ -48,6 +48,63 @@ pub var clcd_cntl: num = 0;
 pub var clcd_ienb: num = 0;
 @scratch_global
 pub var clcd_ris: num = 0;
+
+/// One when the scanout may have changed since the monitor drew it, and the
+/// half-open physical address range the controller is scanning.
+///
+/// The monitor draws the framebuffer the *CPU* wrote, and nothing tells it when
+/// that happened: this device has no commit handshake and no latch, and the
+/// kernel writes glyph pixels straight into the memory the controller reads. So
+/// the only exact signal is the store itself, and the bounds are what make
+/// recognising one a comparison rather than a page walk.
+///
+/// It is a **whole-panel** flag, not a dirty row or a range, and that is what
+/// makes it safe where the partial-redraw schemes in `src/monitor/lcd.rav` were
+/// not: a pass that runs still erases the pen layer and repaints every row, so
+/// there is no bookkeeping about what was left alone that could be wrong. A
+/// skipped pass leaves the pen holding exactly what the card still holds.
+///
+/// The bounds are an empty range while the controller is off, so the test in
+/// `cpu_write32` rejects a store with one comparison in the common case and
+/// nothing is ever marked before there is a picture to be stale.
+@scratch_global
+pub var clcd_dirty: num = 1;
+@scratch_global
+pub var clcd_fb_lo: num = 4294967295;
+@scratch_global
+pub var clcd_fb_hi: num = 0;
+
+/// Recompute the range a store has to land in to make the Stage stale. Called
+/// whenever a register that decides the picture's size or address is written.
+pub proc clcd_fb_bounds() warp {
+    if clcd_on() == 0 {
+        clcd_fb_lo = 4294967295;
+        clcd_fb_hi = 0;
+        return;
+    }
+    let bytes: num = clcd_width() * clcd_height() * clcd_bits() / 8;
+    clcd_fb_lo = clcd_ubas % 4294967296;
+    clcd_fb_hi = clcd_fb_lo + bytes;
+}
+
+/// Mark the scanout stale if a store landed inside it.
+///
+/// A `proc` and not an inlined test, because the callers are the narrow and
+/// halfword store paths, which a 16-bit framebuffer console barely uses -- a
+/// console paints glyphs a word at a time. The *word* path inlines the same two
+/// comparisons instead (`cpu_write32` in `src/cpu/mem.rav`), because that is the
+/// one a store-per-instruction budget has to pay for.
+///
+/// Missing one of these widths is not a slowdown, it is a wrong picture: a store
+/// the controller's memory saw and the flag did not is a store the Stage never
+/// draws. That is why every width routes through here and not only the one the
+/// boot is known to use.
+pub proc clcd_mark(p_addr: num) warp {
+    if p_addr >= clcd_fb_lo {
+        if p_addr < clcd_fb_hi { clcd_dirty = 1; }
+    }
+}
+
 /// The palette, one word per entry, `0x00RRGGBB`. It is what a pixel means
 /// below sixteen bits per pixel, and it is why a four-bit display can be any
 /// sixteen colours rather than sixteen fixed ones.
@@ -120,6 +177,10 @@ pub proc clcd_reset() warp {
     clcd_ienb = 0;
     clcd_ris = 0;
     clcd_scan = 0;
+    // The controller is off, so the bounds become an empty range and the Stage
+    // is marked stale: a reset is a picture the monitor has to take down.
+    clcd_fb_bounds();
+    clcd_dirty = 1;
     let i: num = 0;
     repeat_until i >= 256 {
         clcd_palette[i + 1] = 0;
@@ -294,16 +355,20 @@ pub proc clcd_write(p_off: num, p_value: num) warp {
     let word: num = floor(p_off / 4);
     let value: num = p_value % 4294967296;
     if word == 0 { clcd_tim0 = value; return; }
-    if word == 1 { clcd_tim1 = value; return; }
+    // Any register that decides the picture's size or address moves the range a
+    // store has to land in, so the bounds are recomputed here and the Stage is
+    // marked stale: a modeset is a new picture even before anything is written.
+    if word == 1 { clcd_tim1 = value; clcd_fb_bounds(); clcd_dirty = 1; return; }
     if word == 2 { clcd_tim2 = value; return; }
     if word == 3 { clcd_tim3 = value; return; }
-    if word == 4 { clcd_ubas = value - value % 8; return; }
+    if word == 4 { clcd_ubas = value - value % 8; clcd_fb_bounds(); clcd_dirty = 1; return; }
     if word == 5 { clcd_lbas = value - value % 8; return; }
-    if word == 6 { clcd_cntl = value; return; }
+    if word == 6 { clcd_cntl = value; clcd_fb_bounds(); clcd_dirty = 1; return; }
     if word == 7 { clcd_ienb = value; return; }
     if word == 10 { clcd_ris = 0; return; }
     if p_off >= 512 && p_off < 1536 {
         clcd_palette[(floor(p_off / 4) - 128) % 256 + 1] = value % 16777216;
+        clcd_dirty = 1;
         return;
     }
 }

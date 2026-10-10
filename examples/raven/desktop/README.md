@@ -53,18 +53,94 @@ src/monitor/*.rav            the monitor: how a scanout becomes the Stage
 > before you spend the hours.**
 >
 > The project uses only vanilla Scratch blocks, so Scratch's editor *interprets*
-> them, and the interpreter here retires about **8,400 guest instructions a
-> second**. The kernel's framebuffer console takes the display over at roughly
-> **90 million** instructions and the shell banner arrives at about **118
-> million** — three to four hours, and a checkerboard the whole time.
+> them, and the interpreter here retires about **7,000 guest instructions a
+> second**. The kernel's framebuffer console takes the display over at about
+> **90 million** instructions and `/init` runs at about **114 million** — four and
+> a half hours, and a checkerboard for the first few seconds of it.
 > TurboWarp's VM compiles the same blocks to JavaScript and gets there in about
-> two minutes, which is what `tools/check.mjs` and `tools/probe.mjs` run.
+> six minutes, which is what `tools/check.mjs` and `tools/probe.mjs` run.
 >
 > If you would rather not wait for either, the machine writes the result out:
 > **`dist/stage.png`** is the framebuffer the LCD controller is scanning at the
 > end of a full boot, three times size, so the console font is legible. `node
 > tools/probe.mjs --budget 240` and `node tools/check.mjs --budget 400`
 > regenerate it.
+
+## What each machine costs, on each runtime
+
+Every number here is measured by `tools/bench-boot.mjs`, which times three
+moments rather than one: the **checkerboard**, when the boot ROM's bring-up
+pattern is on the Stage; the **picture**, when the guest has taken the display
+over from that pattern; and **`/init`**, when a Linux guest has a userspace at
+all.
+
+```sh
+node tools/bench-boot.mjs --vm turbo   --budget 900   # measured, both milestones
+node tools/bench-boot.mjs --vm vanilla                # a rate, and arithmetic
+```
+
+On TurboWarp, which compiles the blocks to JavaScript:
+
+| project | checkerboard | picture | `/init` | instructions at `/init` | rate |
+| --- | --- | --- | --- | --- | --- |
+| `arm` — ARM Versatile-PB, Linux 6.6 | 0.1 s | 91.2 s | **144.6 s** | 113,685,077 | 786,000/s |
+| `rv32` — RISC-V mini-rv32, Linux 6.8 | 1.2 s | 9.9 s | **18.7 s** | 48,036,352 | 2,574,000/s |
+| `doom` — RISC-V mini-rv32, embeddedDOOM | 1.2 s | **6.6 s** | — no userspace | 25,024,512 | 3,776,000/s |
+
+The seconds are the host's as well as the machine's — this same table came out at
+207 s and 144.6 s for the ARM board's `/init` on two runs of the same build — so
+the **instruction counts are the column that reproduces** and the seconds are a
+range. The rates are several times higher than they were before the optimiser
+work described in [what one instruction
+costs](#what-one-instruction-costs), because that work removed the calls a fetch
+was making.
+
+Three things in that table are worth reading carefully.
+
+**The ARM board's picture is 91 seconds of work, and it is the kernel's console.**
+`LCD_UPBASE` is programmed by the boot ROM first, so the controller is scanning
+the firmware's own frame from its first enabled frame; the moment that matters is
+when the *kernel's* PL111 driver reprograms it, which is what "LCD_UPBASE moved
+off the boot ROM's 0xd00000" detects, and it happens at 77.6 million
+instructions. The RISC-V board is the other way round: its card holds nothing
+until the guest's `simplefb` writes it, so its picture arrives much earlier and
+much cheaper.
+
+**The ARM board is eight times slower to `/init`** while retiring only twice the
+instructions. That is the MMU: every ARM access walks a two-level page table
+through a translation cache, and the RISC-V hart has no MMU at all.
+
+**Doom is the cheapest thing here and it is not close.** A bare-metal guest has
+no kernel, no page tables and no userspace, so 25 million instructions is the
+whole of it.
+
+### Scratch's own VM
+
+`--vm vanilla` runs Scratch's interpreter, and the answer there is not a table of
+seconds:
+
+| project | boot on vanilla Scratch |
+| --- | --- |
+| `arm` | **about 4.5 hours** — 7,000 instructions a second, measured |
+| `rv32` | **never** |
+| `doom` | **never** |
+
+The two RISC-V projects **do not boot on Scratch's own VM at all**, and the
+reason is a Scratch limit rather than anything about the machine.
+`hart_load_ram` fills `rv_ram` with `add to list` in a loop, and Scratch refuses
+to grow a list past 200,000 items. The guest image is larger than that, so the
+list stops at exactly 200,000 and the hart never leaves its reset vector — the
+`rv_ram = 200,000` in `tools/bench-boot.mjs --vm vanilla` is that limit, not a
+guess. The ARM board is not affected because `src/mem/sdram.rav` writes its
+sixteen megabytes of memory into the project as a **literal**, which is the
+technique the next section explains; TurboWarp has no such limit, which is why
+every other number on this page is from TurboWarp.
+
+The ARM estimate is a *rate* applied to the instruction count the compiled run
+reached, because waiting four and a half hours is not a measurement. The
+instruction counts transfer between the two VMs — the guest is deterministic and
+only the host differs — and the rate is measured over a bounded window with the
+machine's own `machine_limit`, so both halves are numbers rather than guesses.
 
 ## The machine
 
@@ -979,13 +1055,19 @@ actually doing.
 
 1. **Throughput, which is the binding constraint on the project.** About four
    hundred Scratch blocks an instruction at about two million blocks a second is
-   five thousand guest instructions a second -- measured (`node tools/slice.mjs`
-   prints instructions retired against the wall clock), not guessed. That makes
-   a kernel boot hours. Inlining the bus decode, Scratch's turbo mode and a
-   larger slice were each tried and none of them moved it: what an instruction
-   costs is block count, not calls, so the way forward is fewer blocks in the
-   decoder -- cached instruction fields, fewer dispatch layers -- and past that
-   a TurboWarp-compiled run of the same project.
+   five thousand guest instructions a second under Scratch's own interpreter --
+   measured (`node tools/slice.mjs` prints instructions retired against the wall
+   clock), not guessed. That makes a kernel boot hours, and it is why the check
+   runs TurboWarp's VM instead. The sentence that used to stand here -- that
+   "what an instruction costs is block count, not calls" -- **is wrong where the
+   machine actually runs**, and `tools/profile-blocks.mjs` is what says so. Under
+   the compiler there are no block executions to count: a custom block becomes a
+   JavaScript function, and what an instruction costs is the *number of those
+   functions it calls*. That instrument attributes time per procedure on a real
+   boot, and it found that the machine paid **seven nested Scratch procedure
+   calls to fetch one instruction** and three more to ask a question whose answer
+   was already in the translation cache. Removing those calls is worth 1.36x; see
+   [what one instruction costs](#what-one-instruction-costs).
 
 2. **The rest of the board.** The PL031 clock, the PL050 keyboard interfaces and
    the PL061 GPIO blocks, which the kernel probes and which answer zero today;
@@ -996,6 +1078,96 @@ actually doing.
    instruction rather than answering wrongly. The ARMv5TE halfword multiplies
    are decoded -- `smlabb` and its siblings -- and they are exercised on every
    boot now that the kernel gets to `genl_register_family`.
+
+## What one instruction costs
+
+The bind above used to be an argument. It is now a measurement, because
+`tools/profile-blocks.mjs` attributes time per procedure on a real boot:
+
+```sh
+node tools/profile-blocks.mjs --boot --budget 900    # seconds and instructions to /init
+node tools/profile-blocks.mjs --budget 120           # and where the seconds go
+```
+
+TurboWarp compiles each script to a generator and each custom block to a
+*second* generator, kept on the thread as the factory that makes it. Wrapping
+those factories -- which is what the generated call sites look up, once per call
+-- gives an exclusive time per procedure, and that is the number a lag source has
+to be named by. Inclusive time cannot name one: it charges `cpu_step` for the
+whole instruction.
+
+On a full boot of 113,685,077 guest instructions, before the changes below:
+
+| | share of wall clock |
+| --- | --- |
+| `cpu_step` and everything it calls -- the CPU | **87%** |
+| `monitor_draw` and everything it calls -- the display | **10%** |
+
+**So the display was never the lag source.** The whole-panel repaint that
+`## The monitor` describes is real work and it is 10% of a boot; nine tenths of
+the time is the processor. Per guest instruction the machine was making these
+calls, each one a Scratch custom block:
+
+| procedure | calls per instruction |
+| --- | --- |
+| `mem_cpu_fetch` | 1.00 |
+| `cpu_fetch` | 1.00 |
+| `cpu_translate` | 1.34 |
+| `bus_read32` | 1.11 |
+| `ram_read32` | 1.11 |
+| `cpu_get_reg` | 1.36 |
+| `mem_user` | 1.34 |
+| `mem_allowed` | 1.33 |
+
+A plain instruction fetch ran `mem_cpu_fetch` -> `cpu_fetch` -> `cpu_translate`
+-> `mem_allowed` -> `mem_user` -> `bus_read32` -> `ram_read32`: **seven nested
+custom blocks**, of which `mem_cpu_fetch` was a wrapper whose entire body was the
+call below it, and two more were a permission question whose answer was already
+in the translation cache. Three changes removed the calls without changing an
+answer:
+
+* **`cpu_translate`'s hit path makes no call.** A cached permission of eight or
+  more is a manager domain, which is not checked, and that is what Linux maps
+  everything it executes through -- so the common hit is one comparison and a
+  list read. `mem_allowed`'s and `mem_permitted`'s rules are transcribed inside,
+  case by case, and a refusal still falls through to `cpu_walk`, which owns them
+  and raises the fault. A cached permission can only save work; it can never
+  permit an access the walk would have refused. This alone took `cpu_translate`
+  from 471 to 170 nanoseconds a call.
+* **`mem_cpu_fetch` is gone.** Its body was `cpu_fetch` plus a fault test
+  `cpu_fetch` already performs. `cpu_step` calls `cpu_fetch` directly.
+* **The word read and write decide SDRAM themselves**, rather than calling
+  `bus_read32`/`bus_write32` to have it decided: a fetch is every instruction and
+  a load or a store is most of what an instruction does, and the answer is a list
+  index. Anything that is not SDRAM or flash still goes to the bus, so the decode
+  stays in one place.
+
+`monitor_row16` also stopped using `% 65536` for the first pixel of a row, which
+is Scratch's slow remainder for a word above 2^31; the loop beneath it already
+read the low half as `word - high * 65536` and said why.
+
+| boot to `Run /init as init process` | seconds | guest instructions |
+| --- | --- | --- |
+| before | 486.9 | 113,685,077 |
+| after, three runs | 357.8, 364.4, 368.1 | 113,685,077 |
+
+**Between 1.32x and 1.36x, on a boot that retires the identical instruction
+count** -- the same number to the digit in every run, which is what says the
+machine's behaviour did not change, only its cost. `tools/check.mjs` passes all
+ten of its assertions either way. The seconds are the host's as well as the
+machine's -- the same check in this file has been 25.9 s on an idle machine and
+55.1 s beside a busy one -- which is why the *instructions* are the number that
+reproduces and the seconds are a range.
+
+What is left is not a call to remove. The cost is now spread thin: over a full
+boot no single procedure is more than about 10% exclusive, and the largest items
+are the field extractions and list reads that *are* the emulation --
+`cpu_data_processing` (57.7 million calls, 1755 ns each), `cpu_step`,
+`cpu_fetch`, `cpu_translate` and the monitor's `monitor_run`. Two things would
+move it further and neither is a tweak: the register file is a Scratch list read
+through a call 1.4 times per instruction, and `cpu_apply_opcode` is a sixteen-way
+comparison chain because Scratch has no computed dispatch. Both are the shape of
+the language rather than of the machine.
 
 ## The instruments
 
@@ -1095,6 +1267,36 @@ to the sprite that ran it. The second is the one that answers "where do this
 project's block executions go", because a static count cannot: `monitor_row_direct`
 is one procedure and its inner loop turns two hundred and thirty-nine times
 inside each of three hundred and sixty row calls.
+
+`tools/profile-blocks.mjs` is the instrument for the *boot's* cost rather than
+for the picture's, and it exists because `probe-blocks.mjs --profile` cannot
+answer the question: it counts interpreted block executions, and a boot does not
+run interpreted blocks. It wraps the compiled procedure factories TurboWarp keeps
+on each thread, which is what the generated call sites look up once per call, so
+it times a real boot per procedure -- inclusive *and* exclusive, since only the
+exclusive column names a lag source. `--boot` stops the run at the same
+`Run /init as init process` marker `check.mjs` waits for, which makes a boot a
+measurement rather than an acceptance run, and prints the two numbers it is
+measured in. See [what one instruction
+costs](#what-one-instruction-costs) for what it found.
+
+`tools/bench-boot.mjs` is the instrument for "how long do I have to wait", which
+none of the others answer: `slice.mjs` times a slice, `watch-rv32.mjs --boot`
+times a RISC-V boot, and neither says when a *reader* would first see something.
+It times the three moments a reader actually waits for -- the bring-up pattern,
+the guest taking the display over, and `/init` -- on either VM, and its
+`--vm vanilla` mode is where the 200,000-item finding in [Scratch's own
+VM](#scratchs-own-vm) comes from.
+
+`tools/bench-optimize.mjs` is the A/B for the raven-asm optimiser, and it is the
+one that has to be read carefully. It builds a project both ways, loads both
+archives into the *same process*, and steps them alternately so that the two
+numbers in a row share a host. Both machines are then stopped by
+`machine_limit` at the **same guest instruction count** -- the first two versions
+of it stopped on "both have printed `/init`" and reported an 8192- and then a
+16384-instruction gap that was the stopping rule rather than the optimiser. What
+it prints is the pair, and identical instruction counts in it are the evidence
+that the optimiser did not change what the project does.
 
 `tools/ref/align.S` is the same idea for a *hardware rule* rather than a whole
 boot, and it is the one to copy when a machine and a guest disagree about what
