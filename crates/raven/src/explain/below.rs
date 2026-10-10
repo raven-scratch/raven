@@ -218,9 +218,12 @@ pub fn asm_procedures() -> String {
      #\n\
      # A call may open a substack with `{ … }` when the procedure takes one. The\n\
      # compiler emits the procedures_call block with the matching mutation, including\n\
-     # the parameter types, and the definition is emitted once even when several targets\n\
-     # call it — a module's procedure is copied into each target that uses it, which is\n\
-     # what `asm-project` explains.\n\
+     # the parameter types.\n\
+     #\n\
+     # A procedure is emitted once per target that has it. One written in a module is\n\
+     # copied into EVERY target that uses the module, because a Scratch custom block\n\
+     # belongs to exactly one target and cannot be shared — the same rule raven follows,\n\
+     # and the reason `raven expand` prints the copies.\n\
      #\n\
      # `return` does not exist in raven-asm: a Scratch custom block has no return\n\
      # value. A value a procedure produces is stored in a variable or a list by the\n\
