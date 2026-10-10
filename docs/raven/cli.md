@@ -20,7 +20,7 @@ raven expand             # print the raven-asm this program becomes
 | `raven check` | Run every front-end stage and report diagnostics without writing. |
 | `raven build` | Compile to `dist/<name>.sb3` (`--debug`, `-m <manifest>`). |
 | `raven expand` | Print the raven-asm for the whole project. |
-| `raven explain [section]` | Print the language reference written for a machine reader. |
+| `raven explain [page…]` | Print the language reference written for a machine reader (`--json`, `--grep`). |
 | `raven fmt` | Canonical indentation and blank lines (`--check`, paths). |
 | `raven clean` | Remove the output directory. |
 
@@ -90,25 +90,34 @@ the directory alive — and leaves `dist/project.json` alone.
 
 ### `raven explain`
 
-The same facts the rest of this site describes, written for a machine reader —
-a model that has to emit raven source and cannot ask questions:
+The same facts the rest of this site describes, written for a machine reader — a
+model that has to emit raven source and cannot ask questions. It is a manual
+split into pages, so a reader can take the part it needs instead of all of it:
 
 ```sh
-raven explain              # every section
-raven explain rules        # the hard rules that reject code
-raven explain grammar      # EBNF, with every keyword
-raven explain costs        # blocks emitted per construct
-raven explain memory       # _vms, _stackN, and what a cell is
-raven explain stdlib       # one line per catalog block: opcode, spelling, args, result
-raven explain menus        # <MenuType>::<Variant> for every dropdown
-raven explain prelude      # crates/raven/src/prelude.rav, verbatim
-raven explain cli          # the commands and what they write
+raven explain                        # the index: every page, its group, its size, its one line
+raven explain rules                  # one page
+raven explain rules grammar stdlib   # several, in the order given
+raven explain lang                   # every page in a group
+raven explain all                    # everything
+raven explain --json                 # the index as JSON
+raven explain --grep watch           # the pages and lines that contain `watch`
 ```
 
+The index names every page and groups them. The pages up to and including `re`
+are written for a generator: `rules`, `grammar`, `syntax`, `types`, `memory`,
+`costs`, `macros`, `modules` and `errors` for the language, `stdlib`, `std`,
+`menus` and `prelude` for the library, `cli` for the tool, `asm` and `asm-*` for
+the layer below, and `re` for the decompiler. `stdlib`, `std` and `menus` are
+built from the compiler's binding and menu tables, so a block cannot be described
+here and missing from the compiler.
+
+The `docs/…` pages are this site, embedded verbatim: where a reference page is
+terse, the guide page beside it is the long version, and nothing about raven
+needs the website to be readable.
+
 It writes to standard output and needs no project, so it can be cached or pasted
-into a context window. The `stdlib` and `menus` sections are generated from the
-binding table rather than retyped, so a block cannot be described here and
-missing from the compiler. See [For LLMs](/guide/for-llms) for how to use it.
+into a context window. See [For LLMs](/guide/for-llms) for how to use it.
 
 ### `raven fmt`
 

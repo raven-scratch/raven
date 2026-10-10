@@ -350,7 +350,7 @@ cargo run -p raven-re -- "test/zhcn/A7 四万字纯画笔中文引擎.sb3" --out
 | The raven name of every block | `crates/raven/src/stdlib.rs` |
 | Dropdowns as enum types | `crates/raven/src/menu.rs` |
 | Pure/sampled/effectful per block | `crates/raven/src/purity.rs` |
-| The machine-readable language reference | `crates/raven/src/explain.rs` |
+| The machine-readable language reference | `crates/raven/src/explain/mod.rs`, and one file per group beside it |
 | The prelude, in raven | `crates/raven/src/prelude.rav` |
 
 ## Adding a block
@@ -364,8 +364,9 @@ cargo run -p raven-re -- "test/zhcn/A7 四万字纯画笔中文引擎.sb3" --out
    lowering in `lower.rs`, and say what it costs in `docs/raven/lowering.md`.
 
 The same shape holds for everything else that must not drift: the block
-reference is generated from the catalog, `explain`'s stdlib and menu sections are
-generated from the binding table, and the docs are checked against the code.
+reference is generated from the catalog, `explain`'s `stdlib`, `std` and `menus`
+pages are generated from the binding and menu tables, and the docs are checked
+against the code.
 
 ## What a change must not break
 

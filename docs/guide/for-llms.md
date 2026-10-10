@@ -4,7 +4,7 @@ A model writing raven has no REPL and cannot open the editor, so everything it
 needs has to be printable by the compiler itself. Two commands exist for that:
 
 ```sh
-raven explain all          # the language, written for a machine reader
+raven explain              # the index, then the pages you ask for
 raven-asm catalog --json   # every block of the layer below, with its arguments
 ```
 
@@ -13,25 +13,29 @@ generator needs, in the order it needs them: the rules that reject code, the
 grammar, the exact block cost of every construct, the memory model, the full
 standard library — generated from the same binding table the compiler checks
 against — the menu types with their variants, the prelude source, and the CLI.
-It is deterministic, so it is safe to cache, diff or paste into a context
-window.
+It is deterministic, so it is safe to cache, diff or paste into a context window.
+
+It is a manual split into pages, so you can take the part you need:
 
 ```sh
-raven explain rules        # the hard rules that reject code, first
-raven explain grammar      # EBNF, including all keywords
-raven explain costs        # blocks emitted per construct
-raven explain memory       # _vms, _stackN, and what a cell is
-raven explain stdlib       # one line per catalog block: opcode, spelling, args, result
-raven explain menus        # <MenuType>::<Variant> for every dropdown
-raven explain prelude      # crates/raven/src/prelude.rav, verbatim
-raven explain cli          # every command, and what it writes
+raven explain                    # the index: every page, its group, its size, its one line
+raven explain rules grammar stdlib   # the pages to start with
+raven explain lang               # a whole group: start, lang, lib, tool, below, re, guide
+raven explain all                # everything, which is a lot
+raven explain --json             # the index as data, with per-page sizes
+raven explain --grep watch       # which pages mention `watch`, and the lines that do
 ```
+
+The reference pages — `overview` through `re` — are written for a generator and
+generated from the compiler's tables where a table exists. The `docs/…` pages are
+the human documentation, embedded verbatim, so a terse reference page always has
+a long version beside it in the index.
 
 ## The loop that works
 
-1. Read `raven explain rules grammar stdlib` once and keep it in context. The
-   standard library section is what stops a model inventing a block: a name that
-   is not in it does not exist.
+1. Read `raven explain overview rules grammar stdlib` once and keep it in
+   context. The standard library page is what stops a model inventing a block: a
+   name that is not in `stdlib` and not declared in the project does not exist.
 2. Write `.rav` files.
 3. `raven check` — parse, resolve, type check and expand, without writing. Every
    diagnostic names the line and, for generated code, the macro that produced it.

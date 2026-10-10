@@ -161,7 +161,7 @@ raven fmt --check         # canonical indentation, without writing
 | `raven build` | Compile to `dist/<name>.sb3` (`--debug`, `-m <manifest>`). |
 | `raven check` | Run every front-end stage without writing. |
 | `raven expand` | Print the raven-asm the project lowers to. |
-| `raven explain [section]` | Print the language reference written for a machine reader. |
+| `raven explain [page…]` | Print the language reference written for a machine reader (`--json`, `--grep`). |
 | `raven fmt` | Canonical indentation and blank lines (`--check`). |
 | `raven clean` | Remove the output directory. |
 

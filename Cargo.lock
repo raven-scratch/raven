@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "raven"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "raven-asm",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "raven-asm"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "raven-scratch",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "raven-opt"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "raven-asm",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "raven-re"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "flate2",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "raven-scratch"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "md-5",
  "serde",

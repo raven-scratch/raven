@@ -104,13 +104,29 @@ pub enum Command {
         manifest: PathBuf,
     },
 
-    /// Print the language reference written for a machine reader (an LLM
-    /// writing raven code): grammar, costs, memory model, the full standard
-    /// library and the rules that reject code.
+    /// Print the language reference written for a machine reader: an LLM
+    /// writing raven code that has no REPL and cannot open the editor.
+    ///
+    /// It is split into pages so a caller can take the part it needs. `raven
+    /// explain` with no page prints the index, which lists every page, its
+    /// group, its size and its one-line summary.
     Explain {
-        /// Section to print: all, or one of the names `raven explain all` lists.
-        #[arg(default_value = "all")]
-        section: String,
+        /// Pages to print: a page id, a group id, or `all`. With none, the
+        /// index.
+        #[arg(value_name = "PAGE")]
+        pages: Vec<String>,
+
+        /// Print the index: every page, its group, its size and its summary.
+        #[arg(short, long)]
+        list: bool,
+
+        /// Print the index as JSON, for a caller that would rather parse.
+        #[arg(long)]
+        json: bool,
+
+        /// Print the pages and lines that contain the text.
+        #[arg(short, long, value_name = "TEXT")]
+        grep: Option<String>,
     },
 }
 
@@ -222,9 +238,18 @@ pub fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Command::Explain { section } => {
-            crate::explain::print(&section).map_err(raven_scratch::diag::Error::msg)
-        }
+        Command::Explain {
+            pages,
+            list,
+            json,
+            grep,
+        } => crate::explain::run(&crate::explain::Request {
+            pages,
+            list,
+            json,
+            grep,
+        })
+        .map_err(raven_scratch::diag::Error::msg),
     }
 }
 
